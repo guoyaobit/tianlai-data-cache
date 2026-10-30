@@ -1,0 +1,14 @@
+[Unit]
+Description=Tianlai storage receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{ tianlai_root }}/bin
+ExecStart={{ tianlai_root }}/bin/tianlai-storage --config {{ tianlai_root }}/config/storage.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

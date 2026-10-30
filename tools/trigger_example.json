@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "command": "CAPTURE",
+  "event_id": "event-000001",
+  "acquisition_id": "acq-CHANGE_ME",
+  "start": {
+    "trace_period_id": 120,
+    "integration_period_id": 45000
+  },
+  "duration_ms": 3000
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=Tianlai cache node {{ tianlai_server_id }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{ tianlai_root }}/src/{{ tianlai_profile }}
+ExecStart={{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }} {{ tianlai_root }}/config/server.yaml {{ tianlai_root }}/config/recv.yaml
+Restart=on-failure
+RestartSec=5
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

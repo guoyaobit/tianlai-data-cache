@@ -1,0 +1,317 @@
+---
+- name: Validate complete deployment inventory before modifying hosts
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Require all roles and production values
+      ansible.builtin.assert:
+        that:
+          - groups.get('cache_nodes', []) | length == 14
+          - groups.get('controller', []) | length == 1
+          - groups.get('storage', []) | length == 1
+          - groups['controller'][0] == groups['storage'][0]
+          - tianlai_acquisition_id is match('^[A-Za-z0-9_-]{1,64}$')
+          - "'CHANGE_ME' not in tianlai_acquisition_id"
+          - tianlai_controller_ip is match('^[0-9.]+$')
+          - tianlai_backend_ip is match('^[0-9.]+$')
+          - tianlai_storage_ip is match('^[0-9.]+$')
+          - tianlai_storage_directory is match('^/[^ ]+$')
+          - "'CHANGE_ME' not in tianlai_storage_directory"
+          - tianlai_root is match('^/[^ ]+$')
+          - tianlai_period_us | int > 0
+          - 1000000 % (tianlai_period_us | int) == 0
+          - tianlai_integration_per_trace | int > 0
+          - tianlai_notify_port | int >= 1
+          - tianlai_notify_port | int <= 65535
+          - tianlai_storage_port | int >= 1
+          - tianlai_storage_port | int <= 65535
+          - (tianlai_storage_port | int) + 13 <= 65535
+          - tianlai_controller_port | int >= 1
+          - tianlai_controller_port | int <= 65535
+        fail_msg: Complete inventory_example.yml with all 14 nodes and actual deployment values.
+    - name: Require complete cache-node data
+      ansible.builtin.assert:
+        that:
+          - hostvars[item].tianlai_server_id is defined
+          - hostvars[item].tianlai_server_id | int >= 0
+          - hostvars[item].tianlai_server_id | int <= 13
+          - hostvars[item].tianlai_control_ip | default('') is match('^[0-9.]+$')
+          - hostvars[item].tianlai_send_ip | default('') is match('^[0-9.]+$')
+          - hostvars[item].tianlai_send_interface | default('') is match('^[A-Za-z0-9_.:-]+$')
+          - "'CHANGE_ME' not in (hostvars[item].tianlai_send_interface | default('CHANGE_ME'))"
+          - hostvars[item].tianlai_receive_devices | default([]) | length == (8 if hostvars[item].tianlai_server_id | int < 3 else 4)
+          - "'CHANGE_ME' not in (hostvars[item].tianlai_receive_devices | default([]) | join(' '))"
+          - hostvars[item].tianlai_receive_devices | default([]) | unique | list | length == hostvars[item].tianlai_receive_devices | default([]) | length
+          - "'CHANGE_ME' not in (hostvars[item].ansible_host | default('CHANGE_ME'))"
+        fail_msg: "Complete cache node {{ item }}: id, management/data IPs, interface and receive PCI addresses."
+      loop: "{{ groups['cache_nodes'] }}"
+    - name: Require a complete unique server ID set
+      ansible.builtin.assert:
+        that:
+          - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_server_id') | map('int') | sort == range(0, 14) | list
+          - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_control_ip') | unique | list | length == 14
+          - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_send_ip') | unique | list | length == 14
+    - name: Require controller and storage SSH targets
+      ansible.builtin.assert:
+        that: "'CHANGE_ME' not in (hostvars[item].ansible_host | default('CHANGE_ME'))"
+      loop: "{{ (groups['controller'] + groups['storage']) | unique }}"
+
+- name: Generate per-server network reports
+  hosts: "cache_nodes:storage:controller"
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Collect and save network information
+      ansible.builtin.include_tasks: tasks/network_report.yml
+
+- name: Install storage receiver
+  hosts: storage
+  become: true
+  tasks:
+    - name: Require Debian-family Linux
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == 'Debian'
+    - name: Install storage build dependencies
+      ansible.builtin.apt:
+        name: [build-essential, pkg-config, libzmq3-dev, libyaml-cpp-dev, nlohmann-json3-dev, zlib1g-dev]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Create receiver directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0750'
+      loop:
+        - "{{ tianlai_root }}/src/Storage"
+        - "{{ tianlai_root }}/bin"
+        - "{{ tianlai_root }}/config"
+        - "{{ tianlai_storage_directory }}"
+    - name: Copy storage receiver sources
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../Storage/{{ item }}"
+        dest: "{{ tianlai_root }}/src/Storage/{{ item }}"
+        mode: '0644'
+      loop: [Makefile, storage_receiver.cpp]
+      notify: restart storage
+    - name: Build storage receiver
+      ansible.builtin.command:
+        argv: [make, -j2]
+        chdir: "{{ tianlai_root }}/src/Storage"
+      environment:
+        LC_ALL: C
+      register: storage_build
+      changed_when: "'Nothing to be done' not in storage_build.stdout and 'is up to date' not in storage_build.stdout"
+      notify: restart storage
+    - name: Install storage receiver binary
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ tianlai_root }}/src/Storage/tianlai-storage"
+        dest: "{{ tianlai_root }}/bin/tianlai-storage"
+        mode: '0755'
+      notify: restart storage
+    - name: Render storage receiver configuration
+      ansible.builtin.template:
+        src: templates/storage.yaml.j2
+        dest: "{{ tianlai_root }}/config/storage.yaml"
+        mode: '0640'
+      notify: restart storage
+    - name: Validate storage receiver configuration
+      ansible.builtin.command:
+        argv:
+          - "{{ tianlai_root }}/bin/tianlai-storage"
+          - --config
+          - "{{ tianlai_root }}/config/storage.yaml"
+          - --check-config
+      changed_when: false
+    - name: Install storage service
+      ansible.builtin.template:
+        src: templates/storage.service.j2
+        dest: /etc/systemd/system/tianlai-storage.service
+        mode: '0644'
+      notify: restart storage
+    - name: Apply storage changes before enabling
+      ansible.builtin.meta: flush_handlers
+    - name: Enable and start storage
+      ansible.builtin.systemd:
+        name: tianlai-storage.service
+        daemon_reload: true
+        enabled: true
+        state: started
+  handlers:
+    - name: restart storage
+      ansible.builtin.systemd:
+        name: tianlai-storage.service
+        daemon_reload: true
+        state: restarted
+
+- name: Build and install cache nodes
+  hosts: cache_nodes
+  become: true
+  tasks:
+    - name: Require Debian-family Linux
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == 'Debian'
+    - name: Set node build profile
+      ansible.builtin.set_fact:
+        tianlai_profile: "{{ 'F0-2' if tianlai_server_id | int < 3 else ('F3-10' if tianlai_server_id | int < 11 else 'F11-13') }}"
+    - name: Check installed ixcap header and library
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: ixcap_files
+      loop:
+        - "{{ tianlai_ixcap_include }}/ixcap_lib.h"
+        - "{{ tianlai_ixcap_lib }}/libixcap.a"
+        - "{{ tianlai_ixcap_lib }}/libixcap.so"
+    - name: Require ixcap to be installed separately
+      ansible.builtin.assert:
+        that:
+          - ixcap_files.results[0].stat.exists
+          - ixcap_files.results[1].stat.exists or ixcap_files.results[2].stat.exists
+    - name: Install build dependencies
+      ansible.builtin.apt:
+        name: [build-essential, pkg-config, libboost-dev, zlib1g-dev, libspdlog-dev, libyaml-cpp-dev, libzmq3-dev]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Create node directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0750'
+      loop:
+        - "{{ tianlai_root }}/src"
+        - "{{ tianlai_root }}/bin"
+        - "{{ tianlai_root }}/src/{{ tianlai_profile }}"
+        - "{{ tianlai_root }}/config"
+    - name: Copy shared sources
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../Common"
+        dest: "{{ tianlai_root }}/src/"
+        mode: preserve
+      notify: restart cache
+    - name: Install unified build entry point
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../Makefile"
+        dest: "{{ tianlai_root }}/src/Makefile"
+        mode: '0644'
+      notify: restart cache
+    - name: Copy profile entry and build file
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../{{ tianlai_profile }}/{{ item }}"
+        dest: "{{ tianlai_root }}/src/{{ tianlai_profile }}/{{ item }}"
+        mode: '0644'
+      loop: [main.cpp, Makefile]
+      notify: restart cache
+    - name: Render YAML configuration
+      ansible.builtin.template:
+        src: "templates/{{ item.source }}"
+        dest: "{{ tianlai_root }}/config/{{ item.destination }}"
+        mode: '0640'
+      loop:
+        - {source: recv.yaml.j2, destination: recv.yaml}
+        - {source: server.yaml.j2, destination: server.yaml}
+      notify: restart cache
+    - name: Build node for this profile
+      ansible.builtin.command:
+        argv: [make, -j2, production, "PROFILE={{ tianlai_profile }}", "IXCAP_INCLUDE={{ tianlai_ixcap_include }}", "IXCAP_LIB={{ tianlai_ixcap_lib }}"]
+        chdir: "{{ tianlai_root }}/src"
+      environment:
+        LC_ALL: C
+      register: node_build
+      changed_when: "'Nothing to be done' not in node_build.stdout and 'is up to date' not in node_build.stdout"
+      notify: restart cache
+    - name: Validate rendered node configuration
+      ansible.builtin.command:
+        argv:
+          - "{{ tianlai_root }}/src/{{ tianlai_profile }}/tianlai-store-{{ tianlai_profile | lower }}"
+          - "{{ tianlai_root }}/config/server.yaml"
+          - "{{ tianlai_root }}/config/recv.yaml"
+          - --check-config
+      changed_when: false
+    - name: Install built binary without overwriting the running build target
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ tianlai_root }}/src/{{ tianlai_profile }}/tianlai-store-{{ tianlai_profile | lower }}"
+        dest: "{{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }}"
+        mode: '0755'
+      notify: restart cache
+    - name: Install node service
+      ansible.builtin.template:
+        src: templates/cache.service.j2
+        dest: /etc/systemd/system/tianlai-cache.service
+        mode: '0644'
+      notify: restart cache
+    - name: Apply cache changes before enabling
+      ansible.builtin.meta: flush_handlers
+    - name: Enable and start cache
+      ansible.builtin.systemd:
+        name: tianlai-cache.service
+        daemon_reload: true
+        enabled: true
+        state: started
+  handlers:
+    - name: restart cache
+      ansible.builtin.systemd:
+        name: tianlai-cache.service
+        daemon_reload: true
+        state: restarted
+
+- name: Install trigger controller
+  hosts: controller
+  become: true
+  tasks:
+    - name: Require Debian-family Linux
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == 'Debian'
+    - name: Install Python
+      ansible.builtin.apt:
+        name: python3
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Require Python 3.10 or newer
+      ansible.builtin.command: /usr/bin/python3 -c 'import sys; assert sys.version_info >= (3, 10)'
+      changed_when: false
+    - name: Create controller directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0750'
+      loop:
+        - "{{ tianlai_root }}/tools"
+        - "{{ tianlai_root }}/config"
+        - "{{ tianlai_root }}/journal"
+    - name: Install controller tools
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/{{ item }}"
+        dest: "{{ tianlai_root }}/tools/{{ item }}"
+        mode: '0644'
+      loop: [controller.py, durable_json.py]
+      notify: restart controller
+    - name: Render controller node list
+      ansible.builtin.template:
+        src: templates/nodes.json.j2
+        dest: "{{ tianlai_root }}/config/nodes.json"
+        mode: '0640'
+      notify: restart controller
+    - name: Install controller service
+      ansible.builtin.template:
+        src: templates/controller.service.j2
+        dest: /etc/systemd/system/tianlai-controller.service
+        mode: '0644'
+      notify: restart controller
+    - name: Apply controller changes before enabling
+      ansible.builtin.meta: flush_handlers
+    - name: Enable and start controller
+      ansible.builtin.systemd:
+        name: tianlai-controller.service
+        daemon_reload: true
+        enabled: true
+        state: started
+  handlers:
+    - name: restart controller
+      ansible.builtin.systemd:
+        name: tianlai-controller.service
+        daemon_reload: true
+        state: restarted

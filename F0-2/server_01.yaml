@@ -1,0 +1,69 @@
+# Example: verify addresses, PCI IDs, and acquisition ID.
+# Cache-node network, NIC, and logging settings.
+serverCfg:
+  # Unique cache node ID (0-13).
+  SERVERID: 1
+  # Local management IP for control commands.
+  controlBindIp: "172.0.0.129"
+  # Controller IP allowed to send commands.
+  controlPeerIp: "192.168.200.250"
+  # Local management UDP control port.
+  controlPort: 19000
+  # Log path; "-" writes only to stderr.
+  logFilePath: "-"
+  # ixcap PCI address for this receive port.
+  deviceName0: "CHANGE_ME_PCI_0"
+  # Receive-thread CPU ID; -1 disables affinity.
+  cpuId0: -1
+  # Local UDP port for simulation only.
+  simulationPort0: 20010
+  # ixcap PCI address for this receive port.
+  deviceName1: "CHANGE_ME_PCI_1"
+  # Receive-thread CPU ID; -1 disables affinity.
+  cpuId1: -1
+  # Local UDP port for simulation only.
+  simulationPort1: 20011
+  # ixcap PCI address for this receive port.
+  deviceName2: "CHANGE_ME_PCI_2"
+  # Receive-thread CPU ID; -1 disables affinity.
+  cpuId2: -1
+  # Local UDP port for simulation only.
+  simulationPort2: 20012
+  # ixcap PCI address for this receive port.
+  deviceName3: "CHANGE_ME_PCI_3"
+  # Receive-thread CPU ID; -1 disables affinity.
+  cpuId3: -1
+  # Local UDP port for simulation only.
+  simulationPort3: 20013
+  # ixcap PCI address for this receive port.
+  deviceName4: "CHANGE_ME_PCI_4"
+  # Receive-thread CPU ID; -1 disables affinity.
+  cpuId4: -1
+  # Local UDP port for simulation only.
+  simulationPort4: 20014
+  # ixcap PCI address for this receive port.
+  deviceName5: "CHANGE_ME_PCI_5"
+  # Receive-thread CPU ID; -1 disables affinity.
+  cpuId5: -1
+  # Local UDP port for simulation only.
+  simulationPort5: 20015
+  # ixcap PCI address for this receive port.
+  deviceName6: "CHANGE_ME_PCI_6"
+  # Receive-thread CPU ID; -1 disables affinity.
+  cpuId6: -1
+  # Local UDP port for simulation only.
+  simulationPort6: 20016
+  # ixcap PCI address for this receive port.
+  deviceName7: "CHANGE_ME_PCI_7"
+  # Receive-thread CPU ID; -1 disables affinity.
+  cpuId7: -1
+  # Local UDP port for simulation only.
+  simulationPort7: 20017
+  # Storage-network transmit interface; must match source IP.
+  sendEthName0: "CHANGE_ME_SEND_0"
+  # Local storage-network source IP.
+  sendSourceIp0: "192.168.210.101"
+  # Storage receiver data-network IP.
+  sendDestinationIp0: "192.168.210.250"
+  # Storage receiver ZeroMQ/TCP port.
+  sendDestinationPort0: 20001

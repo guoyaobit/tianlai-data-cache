@@ -1,0 +1,29 @@
+# Example: verify addresses, PCI IDs, and acquisition ID.
+# Settings shared by all receive ports.
+recvCfg:
+  # Acquisition ID shared by backend, controller, and nodes.
+  acquisitionId: "acq-CHANGE_ME"
+  # Periods per trace; must match upstream/controller.
+  integrationPerTrace: 50000
+  # Integration period (us); match upstream/controller.
+  periodMicroseconds: 200
+  # Duration of each A/B buffer (s).
+  halfBufferSeconds: 50
+  # Maximum event duration (s); cannot exceed one buffer.
+  maxEventSeconds: 5
+  # Transition-buffer capacity during event freeze (MiB).
+  transitionMiB: 32768
+  # Memory reserved for the OS and drivers at startup (MiB).
+  reserveMemoryMiB: 49152
+  # Prefault buffers at startup: 1=yes, 0=no.
+  prefaultMemory: 1
+  # Packet reorder window in integration periods.
+  reorderPeriods: 50
+  # Tail finalization delay after input stops (ms).
+  settleMilliseconds: 20
+  # Integration periods per storage block (1-64).
+  chunkPeriods: 32
+  # Per-node ZeroMQ payload rate limit (bit/s).
+  sendRateBitsPerSecond: 2285714285
+  # Send/reply timeout (s); large messages get extra time.
+  socketTimeoutSeconds: 60

@@ -1,0 +1,82 @@
+#ifndef STORE_ETHFRMRCVPOOL_H_
+#define STORE_ETHFRMRCVPOOL_H_
+#include "protocol.h"
+#include <chrono>
+#include <memory>
+#include <mutex>
+#include <vector>
+
+struct RcvFrameHeader {
+    // Historical name: one bit per packet slot. Remote slot=(boardId-36)*2+FFT-half.
+    uint64_t absolutePeriod = INVALID_PERIOD;
+    uint64_t boardMask = 0;
+    unsigned ifTrace = 0;
+};
+struct PoolStatus {
+    uint64_t oldest = 0;
+    uint64_t settledEnd = 0; // Exclusive upper bound of finalized periods.
+    uint64_t latest = 0;
+    uint64_t received = 0;
+    uint64_t duplicate = 0;
+    uint64_t late = 0;
+    uint64_t conflicting = 0;
+    bool ready = false;
+};
+// One instance per receive port; its mutex protects the active receive state.
+// "boards"/"board" count packet slots, including both halves for the remote profile.
+//
+// Normal: A and B hold two consecutive halfPeriods of rolling data.
+// beginFreeze: redirect incoming packets to the bounded transition buffer.
+// finishFreeze: consolidate the event into one bank; use the other for live input.
+// release: after durable storage or cancellation, resume A/B rolling reception.
+// Event intervals are [start, start + count); settledEnd is also exclusive.
+class EthFrmRcvPool {
+  public:
+    EthFrmRcvPool(size_t halfPeriods, size_t transitionPeriods, size_t maxEventPeriods,
+                  unsigned boards, unsigned packetBytes, unsigned reorderPeriods,
+                  unsigned settleMilliseconds, bool prefault);
+    ~EthFrmRcvPool();
+    bool receive(uint64_t period, unsigned board, unsigned ifTrace, const unsigned char *packet);
+    PoolStatus status() const;
+    void beginFreeze(uint64_t start, uint64_t count);
+    void finishFreeze();
+    void release();
+    uint64_t missingPackets() const;
+    void appendEventFrame(uint64_t period, std::vector<unsigned char> &out) const;
+    bool isFrozen() const;
+
+  private:
+    struct Buffer;
+    enum Mode {
+        NORMAL,     // Both banks participate in the rolling history.
+        TRANSITION, // Banks are frozen while packets enter the transition buffer.
+        SINGLE      // One bank is protected; the other receives new packets.
+    };
+    uint64_t settledEndUnlocked() const;
+    uint64_t settledEndUnlocked(std::chrono::steady_clock::time_point now) const;
+    PoolStatus statusUnlocked() const;
+    const Buffer *find(uint64_t p) const;
+    void copySlot(const Buffer &src, Buffer &dst, uint64_t p);
+    const size_t half, transitionCapacity, eventLimit;
+    const unsigned boards, packetBytes, reorder, settleMs;
+    const size_t frameBytes;
+    std::unique_ptr<Buffer> bank[2], transition;
+    mutable std::mutex mutex;
+    Mode mode = NORMAL;
+    bool haveData = false, frozen = false, consolidated = false;
+    unsigned target = 0;    // Bank reserved for the event while frozen.
+    unsigned firstBank = 0; // First bank used after anchor in NORMAL mode.
+    uint64_t anchor = 0;
+    uint64_t oldest = 0;
+    uint64_t latest = 0;
+    uint64_t finalizedEnd = 0;
+    uint64_t transitionStart = 0;
+    uint64_t eventStart = 0;
+    uint64_t eventCount = 0;
+    uint64_t received = 0;
+    uint64_t duplicate = 0;
+    uint64_t late = 0;
+    uint64_t conflicting = 0;
+    std::chrono::steady_clock::time_point lastReceive;
+};
+#endif

@@ -1,0 +1,22 @@
+# Ansible-generated; edit inventory/group_vars and redeploy.
+storage:
+  # Mounted path for event files and persistence markers.
+  directory: {{ tianlai_storage_directory | to_json }}
+  # Storage high-speed data-network IP.
+  bindAddress: {{ tianlai_storage_ip | to_json }}
+  # Node ID, dedicated TCP port, and allowed source IP.
+  receivers:
+{% for server_id in range(0, 14) %}
+{% for host in groups['cache_nodes'] if (hostvars[host].tianlai_server_id | int) == server_id %}
+    - serverId: {{ server_id }}
+      port: {{ (tianlai_storage_port | int) + server_id }}
+      allowedSource: {{ hostvars[host].tianlai_send_ip | to_json }}
+{% endfor %}
+{% endfor %}
+backend:
+  # Dedispersion backend IP for completion notices.
+  address: {{ tianlai_backend_ip | to_json }}
+  # Backend UDP port for CAPTURE_RESULT.
+  port: {{ tianlai_notify_port | int }}
+  # Local management IP for storage completion notices.
+  bindAddress: {{ tianlai_controller_ip | to_json }}

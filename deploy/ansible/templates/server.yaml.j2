@@ -1,0 +1,28 @@
+# Cache-node network, NIC, and logging settings.
+serverCfg:
+  # Unique cache node ID (0-13).
+  SERVERID: {{ tianlai_server_id | int }}
+  # Local management IP for control commands.
+  controlBindIp: {{ tianlai_control_ip | to_json }}
+  # Controller IP allowed to send commands.
+  controlPeerIp: {{ tianlai_controller_ip | to_json }}
+  # Local management UDP control port.
+  controlPort: {{ tianlai_control_port | int }}
+  # Log path; "-" writes only to stderr.
+  logFilePath: "-"
+{% for device in tianlai_receive_devices %}
+  # ixcap PCI address for this receive port.
+  deviceName{{ loop.index0 }}: {{ device | to_json }}
+  # Receive-thread CPU ID; -1 disables affinity.
+  cpuId{{ loop.index0 }}: -1
+  # Local UDP port for simulation only.
+  simulationPort{{ loop.index0 }}: {{ 20000 + (tianlai_server_id | int) * 10 + loop.index0 }}
+{% endfor %}
+  # Storage-network transmit interface; must match source IP.
+  sendEthName0: {{ tianlai_send_interface | to_json }}
+  # Local storage-network source IP.
+  sendSourceIp0: {{ tianlai_send_ip | to_json }}
+  # Storage receiver data-network IP.
+  sendDestinationIp0: {{ tianlai_storage_ip | to_json }}
+  # Dedicated node port: base port + SERVERID.
+  sendDestinationPort0: {{ (tianlai_storage_port | int) + (tianlai_server_id | int) }}

@@ -1,0 +1,40 @@
+---
+- name: Prepare configured network information for this host
+  ansible.builtin.set_fact:
+    network_report_config:
+      host: "{{ inventory_hostname }}"
+      roles: "{{ group_names | intersect(['cache_nodes', 'storage', 'controller']) }}"
+      configured:
+        receive_pci_addresses: "{{ tianlai_receive_devices | default([]) }}"
+        send_interface: "{{ tianlai_send_interface | default(none) }}"
+        send_ip: "{{ tianlai_send_ip | default(none) }}"
+        control_ip: "{{ tianlai_control_ip | default(tianlai_controller_ip if 'controller' in group_names else none) }}"
+        storage_ip: "{{ tianlai_storage_ip }}"
+        storage_port_base: "{{ tianlai_storage_port | int }}"
+        storage_receiver_count: 14
+        assigned_storage_port: "{{ ((tianlai_storage_port | int) + (tianlai_server_id | int)) if 'cache_nodes' in group_names else none }}"
+  changed_when: false
+
+- name: Collect configured and discovered network information
+  ansible.builtin.script:
+    cmd: "files/network_inventory.py --report {{ network_report_config | to_json | quote }}"
+    executable: /usr/bin/python3
+  register: network_report_raw
+  changed_when: false
+  check_mode: false
+
+- name: Create network report directory
+  ansible.builtin.file:
+    path: "{{ tianlai_root }}/config"
+    state: directory
+    mode: '0750'
+
+- name: Save this server's network report
+  ansible.builtin.copy:
+    content: "{{ network_report_raw.stdout | from_json | to_nice_yaml(indent=2, sort_keys=false) }}"
+    dest: "{{ tianlai_root }}/config/network-report.yaml"
+    mode: '0640'
+
+- name: Show network report location
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: {{ tianlai_root }}/config/network-report.yaml"

@@ -1,0 +1,38 @@
+#define STORAGE_RECEIVER_NO_MAIN
+#include "../Storage/storage_receiver.cpp"
+
+// Windows loopback wrapper: exercises the production receiver without requiring
+// yaml-cpp on the development host. Linux production tests use storage.yaml.
+int main(int argc, char **argv) {
+    try {
+        std::string directory, bind, notify_address, notify_bind;
+        unsigned port = 0, receiver_count = 0, notify_port = 0;
+        for (int i = 1; i + 1 < argc; i += 2) {
+            const std::string name = argv[i], value = argv[i + 1];
+            if (name == "--directory") directory = value;
+            else if (name == "--bind") bind = value;
+            else if (name == "--port") port = std::stoul(value);
+            else if (name == "--receiver-count") receiver_count = std::stoul(value);
+            else if (name == "--notify-address") notify_address = value;
+            else if (name == "--notify-port") notify_port = std::stoul(value);
+            else if (name == "--notify-bind") notify_bind = value;
+            else throw std::runtime_error("unknown test argument");
+        }
+        require(!directory.empty() && receiver_count == STORAGE_PORT_COUNT,
+                "invalid storage test arguments");
+        std::vector<unsigned> ports;
+        std::vector<std::string> sources;
+        for (unsigned server = 0; server < STORAGE_PORT_COUNT; ++server) {
+            ports.push_back(port + server);
+            sources.push_back("127.0.0." + std::to_string(server + 1));
+        }
+        fs::create_directories(directory);
+        std::signal(SIGINT, stop_handler);
+        std::signal(SIGTERM, stop_handler);
+        serve(directory, bind, ports, sources, notify_address, notify_port, notify_bind);
+        return 0;
+    } catch (const std::exception &error) {
+        std::cerr << "[FATAL] " << error.what() << '\n';
+        return 1;
+    }
+}

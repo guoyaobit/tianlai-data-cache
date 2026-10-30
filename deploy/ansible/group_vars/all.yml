@@ -1,0 +1,30 @@
+---
+# Replace all CHANGE_ME values before deployment.
+# Install root on target servers.
+tianlai_root: /opt/tianlai-store
+# Acquisition ID shared by all components.
+tianlai_acquisition_id: CHANGE_ME
+# Controller management IP on the storage server.
+tianlai_controller_ip: CHANGE_ME
+# Backend IP for triggers and completion notices.
+tianlai_backend_ip: CHANGE_ME
+# Storage ZeroMQ listen IP; verify on site.
+tianlai_storage_ip: CHANGE_ME
+# Event path under the mounted storage directory.
+tianlai_storage_directory: CHANGE_ME
+# Integration period (us); must match acquisition.
+tianlai_period_us: 200
+# Integration periods per trace; must match acquisition.
+tianlai_integration_per_trace: 50000
+# Cache-node UDP control port.
+tianlai_control_port: 19000
+# Controller UDP port for backend requests.
+tianlai_controller_port: 18999
+# Backend result UDP port; replies go to the packet source.
+tianlai_notify_port: 19001
+# First ZeroMQ/TCP storage data port.
+tianlai_storage_port: 20000
+# Directory containing ixcap_lib.h.
+tianlai_ixcap_include: /usr/local/include
+# Directory containing libixcap.a or libixcap.so.
+tianlai_ixcap_lib: /usr/local/lib

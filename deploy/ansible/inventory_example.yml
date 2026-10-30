@@ -1,0 +1,212 @@
+---
+# Verify deployment-guide IPs. Do not use HDM IPs for SSH.
+all:
+  vars:
+    # OS account used by Ansible over SSH.
+    ansible_user: CHANGE_ME
+    # Acquisition ID shared by all components.
+    tianlai_acquisition_id: CHANGE_ME
+    # Controller management IP on the storage server.
+    tianlai_controller_ip: CHANGE_ME
+    # Backend IP for triggers and completion notices.
+    tianlai_backend_ip: CHANGE_ME
+    # Storage ZeroMQ listen IP; verify on site.
+    tianlai_storage_ip: CHANGE_ME  # Storage 10 GbE IP (not documented)
+    # Event path under the mounted storage directory.
+    tianlai_storage_directory: CHANGE_ME
+    # First TCP port for storage data listeners.
+    tianlai_storage_port: 20000
+  children:
+    cache_nodes:
+      hosts:
+        tianlaistore1:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.128"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 0
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.128"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore2:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.129"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 1
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.129"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore3:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.130"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 2
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.130"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore4:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.131"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 3
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.131"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore5:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.132"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 4
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.132"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore6:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.133"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 5
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.133"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore7:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.134"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 6
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.134"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore8:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.135"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 7
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.135"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore9:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.136"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 8
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.136"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore10:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.137"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 9
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.137"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore11:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.138"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 10
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.138"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore12:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.139"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 11
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.139"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore13:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.140"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 12
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.140"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+        tianlaistore14:
+          # Host IP used by Ansible over SSH.
+          ansible_host: "172.0.0.141"
+          # Cache node ID (0-13); must match server config.
+          tianlai_server_id: 13
+          # Cache-node management IP for control commands.
+          tianlai_control_ip: "172.0.0.141"
+          # Cache-node interface for the storage network.
+          tianlai_send_interface: CHANGE_ME
+          # Cache-node source IP for storage traffic.
+          tianlai_send_ip: CHANGE_ME
+          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
+          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+    controller:
+      hosts:
+        # Controller and storage run on the same storage host.
+        tianlairaid: {}
+    storage:
+      hosts:
+        tianlairaid:
+          # Runs tianlai-storage and tianlai-controller.
+          ansible_host: "172.0.0.142"

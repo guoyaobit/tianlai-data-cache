@@ -1,0 +1,11 @@
+**/build/
+**/build-simulation/
+**/__pycache__/
+F0-2/tianlai-store-f0-2
+F3-10/tianlai-store-f3-10
+F0-2/tianlai-store-f0-2-simulation
+F3-10/tianlai-store-f3-10-simulation
+F11-13/tianlai-store-f11-13
+F11-13/tianlai-store-f11-13-simulation
+deploy/ansible/inventory.yml
+deploy/ansible/inventory.ini

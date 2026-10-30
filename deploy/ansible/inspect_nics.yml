@@ -1,0 +1,31 @@
+---
+# Read-only; usable before deployment.
+- name: Inspect server network interfaces and PCI network devices
+  hosts: "cache_nodes:storage:controller"
+  gather_facts: false
+  tasks:
+    - name: Collect Linux network inventory without changing configuration
+      ansible.builtin.script:
+        cmd: files/network_inventory.py
+        executable: /usr/bin/python3
+      register: network_inventory_raw
+      changed_when: false
+      check_mode: false
+    - name: Decode server network inventory
+      ansible.builtin.set_fact:
+        network_inventory: "{{ network_inventory_raw.stdout | from_json }}"
+      changed_when: false
+    - name: Display requirements and discovered interfaces
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          role: "{{ group_names | intersect(['cache_nodes', 'storage', 'controller']) }}"
+          expected_cache_receive_ports: "{{ (8 if tianlai_server_id | int < 3 else 4) if 'cache_nodes' in group_names and tianlai_server_id is defined and (tianlai_server_id | string) is match('^(?:[0-9]|1[0-3])$') else 'not specified' }}"
+          expected_cache_send_interfaces: "{{ 1 if 'cache_nodes' in group_names else 'not specified' }}"
+          configured_receive_devices: "{{ tianlai_receive_devices | default([]) }}"
+          configured_send_interface: "{{ tianlai_send_interface | default('not specified') }}"
+          configured_send_ip: "{{ tianlai_send_ip | default('not specified') }}"
+          configured_control_ip: "{{ tianlai_control_ip | default('not specified') }}"
+          interfaces: "{{ network_inventory.interfaces }}"
+          pci_network_devices: "{{ network_inventory.pci_network_devices }}"
+          warnings: "{{ network_inventory.warnings }}"

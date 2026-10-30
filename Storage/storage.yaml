@@ -1,0 +1,57 @@
+# Storage example; verify addresses before deployment.
+storage:
+  # Use a mounted array path validated for capacity/throughput.
+  directory: "/data/raw-store"
+  # Storage high-speed data-network IP.
+  bindAddress: "192.168.210.250"
+  # Node ID, dedicated TCP port, and allowed source IP.
+  receivers:
+    - serverId: 0
+      port: 20000
+      allowedSource: "192.168.210.100"
+    - serverId: 1
+      port: 20001
+      allowedSource: "192.168.210.101"
+    - serverId: 2
+      port: 20002
+      allowedSource: "192.168.210.102"
+    - serverId: 3
+      port: 20003
+      allowedSource: "192.168.210.103"
+    - serverId: 4
+      port: 20004
+      allowedSource: "192.168.210.104"
+    - serverId: 5
+      port: 20005
+      allowedSource: "192.168.210.105"
+    - serverId: 6
+      port: 20006
+      allowedSource: "192.168.210.106"
+    - serverId: 7
+      port: 20007
+      allowedSource: "192.168.210.107"
+    - serverId: 8
+      port: 20008
+      allowedSource: "192.168.210.108"
+    - serverId: 9
+      port: 20009
+      allowedSource: "192.168.210.109"
+    - serverId: 10
+      port: 20010
+      allowedSource: "192.168.210.110"
+    - serverId: 11
+      port: 20011
+      allowedSource: "192.168.210.111"
+    - serverId: 12
+      port: 20012
+      allowedSource: "192.168.210.112"
+    - serverId: 13
+      port: 20013
+      allowedSource: "192.168.210.113"
+backend:
+  # Dedispersion backend IP for completion notices.
+  address: "192.168.200.10"
+  # UDP port for CAPTURE_RESULT/ACK_RESULT.
+  port: 19001
+  # Storage management IP for UDP completion notices.
+  bindAddress: "192.168.200.250"

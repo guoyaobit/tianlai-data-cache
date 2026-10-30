@@ -1,0 +1,5 @@
+[
+{% for host in groups['cache_nodes'] | sort %}
+  {"server_id": {{ hostvars[host].tianlai_server_id | int }}, "host": {{ hostvars[host].tianlai_control_ip | to_json }}, "port": {{ tianlai_control_port | int }}}{% if not loop.last %},{% endif %}
+{% endfor %}
+]
