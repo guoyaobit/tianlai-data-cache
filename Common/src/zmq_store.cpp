@@ -49,7 +49,7 @@ void validateSource(const SendPortConfig &config) {
         throw std::runtime_error("ZeroMQ source IP is not assigned to the configured interface");
 }
 
-void waitSocket(void *socket, short events, PARAMETERS &para,
+void waitSocket(void *socket, short events, CacheRuntime &para,
                 std::chrono::steady_clock::time_point deadline) {
     while (para.flags->ifControl) {
         const auto now = std::chrono::steady_clock::now();
@@ -100,7 +100,7 @@ void StorePacer::wait(size_t bytes, const ThreadFlags *flags) {
 }
 
 // Validate the source interface and address, then create a bounded, timeout-enabled ZeroMQ request connection.
-StoreConnection::StoreConnection(PARAMETERS &p, unsigned lane, StorePacer &limit)
+StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane, StorePacer &limit)
     : para(p), pacer(limit) {
     const auto &config = para.config->sendPorts[lane];
     validateSource(config);

@@ -21,8 +21,10 @@ recvCfg:
   reorderPeriods: 50
   # Tail finalization delay after input stops (ms).
   settleMilliseconds: 20
+  # Warn when transition-buffer use reaches this percentage.
+  transitionWarnPercent: 80
   # Integration periods per storage block (1-64).
-  chunkPeriods: 32
+  chunkPeriods: 64
   # Per-node ZeroMQ payload rate limit (bit/s).
   sendRateBitsPerSecond: 2285714285
   # Send/reply timeout (s); large messages get extra time.

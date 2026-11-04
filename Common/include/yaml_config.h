@@ -45,7 +45,8 @@ class YamlConfig {
     StoreMode mode;
     unsigned serverId = 0, inputDataBytes = 0, integrationPerTrace = 50000;
     unsigned periodMicroseconds = 200, halfBufferSeconds = 50, maxEventSeconds = 5;
-    unsigned reorderPeriods = 50, settleMilliseconds = 20, chunkPeriods = 32;
+    unsigned reorderPeriods = 50, settleMilliseconds = 20, transitionWarnPercent = 80;
+    unsigned chunkPeriods = 64;
     unsigned controlPort = 19000, socketTimeoutSeconds = 15;
     // ZeroMQ application-byte rate limit; excludes network overhead and retransmissions.
     uint64_t sendRateBitsPerSecond = 32000000000ULL / 14;

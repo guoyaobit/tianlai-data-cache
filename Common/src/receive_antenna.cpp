@@ -15,7 +15,7 @@
 
 static const unsigned BATCH_SIZE = 512;
 // Validate a raw payload packet and write it to the matching receive-port buffer by absolute integration period and board position.
-static void receivePacket(PARAMETERS *para, unsigned p, const unsigned char *data, size_t bytes) {
+static void receivePacket(CacheRuntime *para, unsigned p, const unsigned char *data, size_t bytes) {
     const auto &cfg = *para->config;
     const auto &port = cfg.receivePorts[p];
     if (bytes != INPUT_HEADER_BYTES + cfg.inputDataBytes) {
@@ -31,9 +31,9 @@ static void receivePacket(PARAMETERS *para, unsigned p, const unsigned char *dat
     }
     const unsigned slot =
         (h.board - port.boardBegin) * port.packetsPerBoard + h.packetId - port.packetId;
-    para->pEthRcvPool[p]->receive(h.absolute(cfg.integrationPerTrace), slot, h.ifTrace, data);
+    para->receiveBuffers[p]->receive(h.absolute(cfg.integrationPerTrace), slot, h.ifTrace, data);
 }
-static void simulationReceive(PARAMETERS *para, unsigned p) {
+static void simulationReceive(CacheRuntime *para, unsigned p) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0)
         throw std::runtime_error("simulation socket failed");
@@ -63,7 +63,7 @@ static void simulationReceive(PARAMETERS *para, unsigned p) {
     }
 }
 // Run each receive port independently, receive packets in batches after NIC initialization, and stop all threads on error.
-void InitRecvAntennaThread(PARAMETERS *para, unsigned p) {
+void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
     try {
         int cpu = para->config->receivePorts[p].cpuId;
         if (cpu >= 0) {

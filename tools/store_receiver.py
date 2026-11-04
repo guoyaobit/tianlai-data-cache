@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import struct
 import threading
+import time
 import zlib
 
 CHUNK = struct.Struct('!IIIIQQII')
@@ -14,6 +15,13 @@ FRAME = struct.Struct('!QQII')
 INPUT_HEADER = struct.Struct('!Q')
 IF_TRACE_BIT = 1 << 39
 ID = re.compile(r'[A-Za-z0-9_-]{1,64}\Z')
+DATA_SYNC_BYTES = 256 * 1024 * 1024
+DATA_SYNC_SECONDS = 1.0
+
+
+def sync_data(fd):
+    """Flush file data, using fsync where fdatasync is unavailable."""
+    getattr(os, 'fdatasync', os.fsync)(fd)
 
 
 def exact(sock, count):
@@ -160,9 +168,11 @@ class StoreReceiver:
                 fd = os.open(filename, os.O_CREAT | os.O_RDWR, 0o640)
                 files[p] = fd
                 os.ftruncate(fd, count * stride)
+            unsynced_bytes = 0
+            last_sync = time.monotonic()
             while True:
-                # A new message grants credit for the preceding validated,
-                # durable message. ZeroMQ message boundaries must be exact.
+                # A new message grants credit for the preceding validated write.
+                # Only the final STORED reply confirms durability.
                 sock.start_message()
                 kind, port, packet_id, board_begin, first, n, size, crc = CHUNK.unpack(exact(sock, CHUNK.size))
                 if kind == 2:
@@ -194,13 +204,18 @@ class StoreReceiver:
                     offset += written
                 checksums[port] = zlib.crc32(body, checksums[port])
                 progress[port] += n
-                # Each validated block is durable before the receiver reads the next one.
-                os.fsync(files[port])
+                unsynced_bytes += size
+                now = time.monotonic()
+                if unsynced_bytes >= DATA_SYNC_BYTES or now - last_sync >= DATA_SYNC_SECONDS:
+                    for fd in files.values():
+                        sync_data(fd)
+                    unsynced_bytes = 0
+                    last_sync = now
                 del view, body
             if any(position != start + count for position in progress.values()):
                 raise ValueError('incomplete lane transfer')
             for fd in files.values():
-                os.fsync(fd)
+                sync_data(fd)
             ack = {'version': 1, 'status': 'STORED', 'event_id': event,
                    'acquisition_id': acquisition, 'server_id': server, 'lane': lane}
             atomic_json(stored_path,

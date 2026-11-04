@@ -107,7 +107,8 @@ def run(server, directory):
     for key, value in dict(acquisitionId='test-acq', integrationPerTrace=100, periodMicroseconds=10000,
                            halfBufferSeconds=1, maxEventSeconds=1, transitionMiB=8,
                            reserveMemoryMiB=0, prefaultMemory=0, reorderPeriods=1,
-                           settleMilliseconds=20, socketTimeoutSeconds=2, chunkPeriods=4).items():
+                           settleMilliseconds=20, transitionWarnPercent=80,
+                           socketTimeoutSeconds=2, chunkPeriods=4).items():
         cfg['recvCfg'][key] = value
     write_config(directory / 'recv.yaml', cfg)
     node_config = read_config(ROOT / variant / f'server_{server:02d}.yaml')
@@ -134,6 +135,10 @@ def run(server, directory):
 
     def request(command, **fields):
         return rpc(node, 'test-acq', command, **fields)
+
+    def ready_status():
+        status = request('QUERY_STATUS')
+        return status if status['accept_trigger'] else None
 
     def make_packet(period, port, local_board):
         trace, integration = divmod(period, 100)
@@ -178,7 +183,9 @@ def run(server, directory):
     try:
         wait_for(lambda: request('QUERY_STATUS')['initialized_ports'] == ports)
         feed(0, 200)
-        wait_for(lambda: request('QUERY_STATUS')['accept_trigger'])
+        status = wait_for(ready_status)
+        assert status['transition_capacity_periods'] > 0
+        assert status['transition_used_periods'] == 0 and not status['transition_warning']
         if not remote:
             for port in range(ports):
                 info = request('QUERY_PORT', port=port)
@@ -200,8 +207,10 @@ def run(server, directory):
         trigger = dict(event_id='crossing', start=dict(trace_period_id=0, integration_period_id=95), period_count=10)
         assert request('PREPARE', **trigger)['status'] == 'PREPARING'
         wait_for(lambda: request('QUERY_EVENT', event_id='crossing')['status'] == 'PREPARED')
-        assert request('QUERY_EVENT', event_id='crossing')['missing_packets'] == sum(
+        event = request('QUERY_EVENT', event_id='crossing')
+        assert event['missing_packets'] == sum(
             boards - len(expected_slots(period, port)) for port in range(ports) for period in range(95, 105))
+        assert event['freeze_ms'] >= 0 and event['transition_capacity_periods'] > 0
         assert request('PREPARE', **trigger)['status'] == 'PREPARED'
         try:
             request('PREPARE', **dict(trigger, period_count=9))

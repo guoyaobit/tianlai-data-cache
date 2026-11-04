@@ -6,8 +6,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
-static void Prepare(PARAMETERS &para);
-static void Finish(PARAMETERS &para);
+static void Prepare(CacheRuntime &para);
+static void Finish(CacheRuntime &para);
 static volatile std::sig_atomic_t stopped = 0;
 static void stopHandler(int) {
     stopped = 1;
@@ -15,7 +15,7 @@ static void stopHandler(int) {
 // Load and validate the configuration, allocate buffers, and start the receive threads and control loop.
 int StoreMain(int argc, char **argv, StoreMode mode) {
     ThreadFlags flags;
-    PARAMETERS para;
+    CacheRuntime para;
     para.flags = &flags;
     std::thread signalThread;
     try {
@@ -69,6 +69,8 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
                     throw std::runtime_error("configure dedicated send interfaces before running");
         }
         initLogOut(config.logFilePath);
+        LOG("Cache data is memory-only; a process or host restart discards all buffered events.",
+            WARN);
         std::signal(SIGINT, stopHandler);
         std::signal(SIGTERM, stopHandler);
         Prepare(para);
@@ -116,20 +118,24 @@ static uint64_t availableMemory() {
 }
 
 // Check available memory and create double buffers plus a transition area for each receive port.
-static void Prepare(PARAMETERS &para) {
+static void Prepare(CacheRuntime &para) {
     const auto &c = *para.config;
     if (c.allocationBytes() + c.reserveMemoryBytes > availableMemory())
         throw std::runtime_error(
             "insufficient available RAM for A/B/transition and system reserve");
     LOG("Allocating " + std::to_string(c.allocationBytes()) + " bytes, no CUDA dependency.", START);
-    for (const auto &port : c.receivePorts)
-        para.pEthRcvPool.emplace_back(
-            new EthFrmRcvPool(c.halfPeriods(), c.transitionPeriods(), c.maxEventPeriods(),
-                              port.packetSlots(), c.inputDataBytes + INPUT_HEADER_BYTES,
-                              c.reorderPeriods, c.settleMilliseconds, c.prefaultMemory));
+    for (unsigned index = 0; index < c.receivePorts.size(); ++index) {
+        const auto &port = c.receivePorts[index];
+        para.receiveBuffers.emplace_back(
+            new ReceiveRingBuffer(index, c.halfPeriods(), c.transitionPeriods(),
+                                  c.maxEventPeriods(), port.packetSlots(),
+                                  c.inputDataBytes + INPUT_HEADER_BYTES, c.reorderPeriods,
+                                  c.settleMilliseconds, c.transitionWarnPercent,
+                                  c.prefaultMemory));
+    }
 }
 
-static void Finish(PARAMETERS &para) {
+static void Finish(CacheRuntime &para) {
     para.flags->threadStop();
     for (auto &thread : para.receiveThreads)
         if (thread.joinable())

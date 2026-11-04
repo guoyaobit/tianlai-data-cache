@@ -1,5 +1,5 @@
-#ifndef STORE_ETHFRMRCVPOOL_H_
-#define STORE_ETHFRMRCVPOOL_H_
+#ifndef STORE_RECEIVE_RING_BUFFER_H_
+#define STORE_RECEIVE_RING_BUFFER_H_
 #include "protocol.h"
 #include <chrono>
 #include <memory>
@@ -20,6 +20,12 @@ struct PoolStatus {
     uint64_t duplicate = 0;
     uint64_t late = 0;
     uint64_t conflicting = 0;
+    uint64_t transitionCapacity = 0;
+    uint64_t transitionUsed = 0;
+    uint64_t transitionPeak = 0;
+    uint64_t lastFreezeMilliseconds = 0;
+    uint64_t freezeCount = 0;
+    bool transitionWarning = false;
     bool ready = false;
 };
 // One instance per receive port; its mutex protects the active receive state.
@@ -30,12 +36,13 @@ struct PoolStatus {
 // finishFreeze: consolidate the event into one bank; use the other for live input.
 // release: after durable storage or cancellation, resume A/B rolling reception.
 // Event intervals are [start, start + count); settledEnd is also exclusive.
-class EthFrmRcvPool {
+class ReceiveRingBuffer {
   public:
-    EthFrmRcvPool(size_t halfPeriods, size_t transitionPeriods, size_t maxEventPeriods,
-                  unsigned boards, unsigned packetBytes, unsigned reorderPeriods,
-                  unsigned settleMilliseconds, bool prefault);
-    ~EthFrmRcvPool();
+    ReceiveRingBuffer(unsigned portIndex, size_t halfPeriods, size_t transitionPeriods,
+                      size_t maxEventPeriods, unsigned boards, unsigned packetBytes,
+                      unsigned reorderPeriods, unsigned settleMilliseconds,
+                      unsigned transitionWarnPercent, bool prefault);
+    ~ReceiveRingBuffer();
     bool receive(uint64_t period, unsigned board, unsigned ifTrace, const unsigned char *packet);
     PoolStatus status() const;
     void beginFreeze(uint64_t start, uint64_t count);
@@ -57,8 +64,9 @@ class EthFrmRcvPool {
     PoolStatus statusUnlocked() const;
     const Buffer *find(uint64_t p) const;
     void copySlot(const Buffer &src, Buffer &dst, uint64_t p);
+    const unsigned portIndex;
     const size_t half, transitionCapacity, eventLimit;
-    const unsigned boards, packetBytes, reorder, settleMs;
+    const unsigned boards, packetBytes, reorder, settleMs, transitionWarnPercent;
     const size_t frameBytes;
     std::unique_ptr<Buffer> bank[2], transition;
     mutable std::mutex mutex;
@@ -77,6 +85,11 @@ class EthFrmRcvPool {
     uint64_t duplicate = 0;
     uint64_t late = 0;
     uint64_t conflicting = 0;
+    uint64_t transitionPeak = 0;
+    uint64_t lastFreezeMilliseconds = 0;
+    uint64_t freezeCount = 0;
+    bool transitionWarningLogged = false;
+    std::chrono::steady_clock::time_point freezeStarted;
     std::chrono::steady_clock::time_point lastReceive;
 };
 #endif

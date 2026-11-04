@@ -2,6 +2,7 @@
 #include "zmq_store.h"
 #include "log_output.h"
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 #include <zlib.h>
 
@@ -20,7 +21,7 @@ static void set32(std::vector<unsigned char> &buffer, size_t offset, uint32_t va
 }
 
 // Assemble event data blocks by receive port and period, send each block, and validate the final persistence acknowledgement.
-static void sendLane(PARAMETERS &para, unsigned lane, const EventInfo &event, StorePacer &pacer) {
+static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event, StorePacer &pacer) {
     StoreConnection socket(para, lane, pacer);
     const auto &c = *para.config;
     // Remote input has two FFT halves per board. Require explicit metadata at the receiver;
@@ -70,7 +71,7 @@ static void sendLane(PARAMETERS &para, unsigned lane, const EventInfo &event, St
             put32(message, 0); // Body length, filled after the event frames are appended.
             put32(message, 0); // Body CRC32.
             for (uint64_t i = 0; i < count; ++i)
-                para.pEthRcvPool[p]->appendEventFrame(start + i, message);
+                para.receiveBuffers[p]->appendEventFrame(start + i, message);
             const size_t bodyBytes = message.size() - 40;
             const uint32_t checksum = crc32(0, message.data() + 40, bodyBytes);
             set32(message, 32, static_cast<uint32_t>(bodyBytes));
@@ -92,13 +93,14 @@ static void sendLane(PARAMETERS &para, unsigned lane, const EventInfo &event, St
     validateStored();
 }
 // Send frozen data from the event thread; retain the buffer and record SEND_FAILED on failure.
-void InitSendStoreThread(PARAMETERS *para) {
+void InitSendStoreThread(CacheRuntime *para) {
     EventInfo event;
     {
         std::lock_guard<std::mutex> lock(para->eventMutex);
         event = para->event;
     }
     StorePacer pacer(para->config->sendRateBitsPerSecond);
+    const auto started = std::chrono::steady_clock::now();
     std::string error;
     try {
         sendLane(*para, 0, event, pacer);
@@ -108,14 +110,24 @@ void InitSendStoreThread(PARAMETERS *para) {
     std::string logMessage;
     {
         std::lock_guard<std::mutex> lock(para->eventMutex);
+        para->event.sendMilliseconds = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started)
+                .count());
+        if (para->event.sendMilliseconds)
+            para->event.sendRateBitsPerSecond =
+                para->event.sentBytes * 8000ULL / para->event.sendMilliseconds;
         if (error.empty()) {
-            para->event.state = "STORED";
+            para->event.state = EventState::Stored;
             para->event.error.clear();
         } else {
-            para->event.state = "SEND_FAILED";
+            para->event.state = EventState::SendFailed;
             para->event.error = error.substr(0, 300);
         }
-        logMessage = "Event " + event.id + " " + para->event.state + " " + para->event.error;
+        logMessage = "Event " + event.id + " " + eventStateName(para->event.state) +
+                     " send_ms=" + std::to_string(para->event.sendMilliseconds) +
+                     " rate_bps=" + std::to_string(para->event.sendRateBitsPerSecond) + " " +
+                     para->event.error;
     }
     LOG(logMessage, INFO);
 }

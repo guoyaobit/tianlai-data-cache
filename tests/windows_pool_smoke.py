@@ -85,6 +85,9 @@ inline unsigned long crc32(unsigned long value, const unsigned char* data, unsig
         subprocess.run([args.cxx, '-std=c++14', '-pthread', '-fsyntax-only', '-I' + str(tmp),
                         '-I' + str(ROOT / 'Common/include'),
                         str(ROOT / 'Common/src/send_store.cpp')], check=True, timeout=90)
+        subprocess.run([args.cxx, '-std=c++14', '-pthread', '-fsyntax-only', '-I' + str(tmp),
+                        '-I' + str(ROOT / 'Common/include'),
+                        str(ROOT / 'Common/src/event_state.cpp')], check=True, timeout=90)
         block_binary = tmp / 'send_block_test.exe'
         subprocess.run([args.cxx, '-std=c++14', '-O2', '-pthread', '-I' + str(tmp),
                         '-I' + str(ROOT / 'Common/include'), str(ROOT / 'tests/send_block_regression.cpp'),

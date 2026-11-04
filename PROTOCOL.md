@@ -113,11 +113,11 @@ PREPARE 字段与 CAPTURE 相同，仅 command 不同。
 | PREPARE | event_id、start、period_count | 检查历史区间并异步保护，返回 PREPARING/PREPARED |
 | COMMIT | event_id | 全部节点准备后，由控制器转为 QUEUED |
 | SEND | event_id | QUEUED 或 SEND_FAILED 开始单口限速 ZeroMQ 传输；忙时不重复启动 |
-| QUERY_EVENT | event_id | 查询包括 missing_packets、sent_bytes、error 的事件状态 |
+| QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、过渡区峰值和 error |
 | RELEASE | event_id | 只有该节点全部接收口数据可靠落盘后，即 STORED 状态，才允许释放冻结区 |
 | CANCEL | event_id | 未发送或发送失败时放弃事件；PREPARING 时延后安全释放 |
-| QUERY_STATUS | 无 | READY/BUSY/WARMING、oldest_period、settled_end 等 |
-| QUERY_PORT | port | 单口周期范围、接收/重复/迟到/冲突计数 |
+| QUERY_STATUS | 无 | READY/BUSY/WARMING、共同周期范围、最繁忙口过渡区占用/容量/警告、最近冻结耗时等 |
+| QUERY_PORT | port | 单口周期范围、收包计数、过渡区占用/容量/峰值/警告、最近冻结耗时和冻结次数 |
 
 节点主要状态：PREPARING → PREPARED → QUEUED → SENDING → STORED → RELEASED。
 发送失败为 SEND_FAILED，仍保护数据；准备失败为 REJECTED；明确取消为 CANCELLED。
@@ -131,7 +131,7 @@ PREPARE 字段与 CAPTURE 相同，仅 command 不同。
 
 数据通道和管理网 UDP 控制通道独立。每台缓存服务器通过独立的 ZeroMQ REQ socket 以 TCP 连接存储端。YAML 的 `storage.receivers` 必须显式列出 0～13 号节点各自的 `serverId`、`port` 和 `allowedSource`；存储端据此启动 14 个 ROUTER socket 和 14 个网络接收线程。默认端口为 TCP 20000～20013。来源 IP、监听端口和元数据 server_id 任一不匹配都会拒绝会话。每个节点会话另由独立工作线程完成校验和写盘，lane 固定为 0，覆盖本机所有接收口。TLSTORE1 元数据中的 `port_count` 表示缓存节点的 FPGA 接收口数量，与存储监听线程数无关。
 
-每个 ZeroMQ 请求是一条消息：先发送带 4 字节长度的 JSON 元数据，然后逐条发送 40 字节块头和正文，最后发送 40 字节 END。通常除 END 外每条消息由存储端成功处理后回复 ASCII OK，数据块在通过检查、写入并 fsync 后才回复；END 在全部文件及完成标记持久化后回复 4 字节长度前缀的 STORED JSON。若相同元数据对应的持久化标记已经存在，首条元数据消息直接返回 STORED，发送端不再重传数据。发送端验证事件、采集编号、节点和 lane 后才进入 STORED。消息排队、TCP ACK 或 ZeroMQ send 成功均不代表已写盘。
+每个 ZeroMQ 请求是一条消息：先发送带 4 字节长度的 JSON 元数据，然后逐条发送 40 字节块头和正文，最后发送 40 字节 END。通常除 END 外每条消息由存储端成功校验并写入后回复 ASCII OK；该 OK 不是持久化确认。存储端累计 256 MiB 或经过 1 秒后批量 `fdatasync`，END 在全部文件及完成标记持久化后回复 4 字节长度前缀的 STORED JSON。若相同元数据对应的持久化标记已经存在，首条元数据消息直接返回 STORED，发送端不再重传数据。发送端验证事件、采集编号、节点和 lane 后才进入 STORED。消息排队、块级 OK、TCP ACK 或 ZeroMQ send 成功均不代表完整落盘。
 
 每次 SEND 使用新的 ZeroMQ socket 会话。超时、断线、校验错误或回执错误进入 SEND_FAILED，事件仍受保护。未形成持久化标记时，重试从该节点事件开头发送并按固定偏移重写；标记已存在时直接返回 STORED。同节点不可并发写，同事件元数据冲突时拒绝。旧会话超时清理前重试可能返回忙，需等待并重试。HWM 限制消息数量而非字节，操作系统缓存与 libzmq 缓冲仍占用额外内存。
 
@@ -158,7 +158,7 @@ sendRateBitsPerSecond 控制应用消息平均字节速率，默认每节点 2,2
 }
 ```
 
-随后逐接收口发送数据块，每块默认 32 个积分周期，最后一块可以不足 32 个。
+随后逐接收口发送数据块，每块默认 64 个积分周期，最后一块可以不足 64 个。
 块头共 40 B，所有整数大端，禁止直接发送带本机填充的 C++ struct：
 
 | 偏移 | 类型 | 字段 |

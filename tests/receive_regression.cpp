@@ -1,10 +1,13 @@
 #include "receive_pool.h"
 #include "protocol.h"
+#include "log_output.h"
 #include <cassert>
 #include <cstring>
 #include <functional>
 #include <iostream>
 #include <thread>
+
+void logOut(const std::string &, LogLevel) {}
 
 static void rejects(const std::function<void()> &f) {
     bool caught = false;
@@ -21,7 +24,7 @@ static std::vector<unsigned char> packet(uint64_t p, unsigned b) {
     for (unsigned i = 8; i < v.size(); ++i) v[i] = p + b + i;
     return v;
 }
-static void feed(EthFrmRcvPool &pool, uint64_t p, unsigned mask = 3) {
+static void feed(ReceiveRingBuffer &pool, uint64_t p, unsigned mask = 3) {
     for (unsigned b = 0; b < 2; ++b) {
         auto v = packet(p, b);
         if (mask & (1 << b)) assert(pool.receive(p, b, 0, v.data()));
@@ -32,7 +35,7 @@ static uint64_t number(const std::vector<unsigned char> &v, size_t at, size_t n)
     for (size_t i = 0; i < n; ++i) value = (value << 8) | v[at + i];
     return value;
 }
-static void check(EthFrmRcvPool &pool, uint64_t p, unsigned mask = 3) {
+static void check(ReceiveRingBuffer &pool, uint64_t p, unsigned mask = 3) {
     std::vector<unsigned char> out;
     pool.appendEventFrame(p, out);
     assert(out.size() == 24 + 64 && number(out, 0, 8) == p && number(out, 8, 8) == mask);
@@ -43,13 +46,17 @@ static void check(EthFrmRcvPool &pool, uint64_t p, unsigned mask = 3) {
 }
 int main() {
     for (unsigned shift : {0U, 3U, 9U}) {
-        EthFrmRcvPool pool(10, 20, 5, 2, 32, 2, 100000, false);
+        ReceiveRingBuffer pool(0, 10, 20, 5, 2, 32, 2, 100000, 25, false);
         for (unsigned p = shift; p < shift + 20; ++p) feed(pool, p);
         assert(pool.status().ready);
         rejects([&] { pool.beginFreeze(shift + 19, 1); });
         pool.beginFreeze(shift + 8, 4);
         for (unsigned p = shift + 20; p < shift + 26; ++p) feed(pool, p);
+        auto transition = pool.status();
+        assert(transition.transitionUsed == 8 && transition.transitionPeak == 8);
+        assert(transition.transitionWarning && transition.transitionCapacity == 20);
         pool.finishFreeze();
+        assert(pool.status().freezeCount == 1);
         for (unsigned p = shift + 8; p < shift + 12; ++p) check(pool, p);
         for (unsigned p = shift + 26; p < shift + 81; ++p) feed(pool, p);
         for (unsigned p = shift + 8; p < shift + 12; ++p) check(pool, p);
@@ -64,7 +71,7 @@ int main() {
         pool.release();
     }
     // Missing whole periods, missing boards, duplicates, out-of-order and conflicting flags.
-    EthFrmRcvPool pool(10, 20, 5, 2, 32, 2, 100000, false);
+    ReceiveRingBuffer pool(0, 10, 20, 5, 2, 32, 2, 100000, 80, false);
     for (unsigned p = 0; p < 20; ++p) {
         if (p != 9) feed(pool, p, p == 10 ? 1 : 3);
     }
@@ -91,14 +98,19 @@ int main() {
     assert(pool.missingPackets() == 3);
     pool.release();
     // A reused slot may contain bytes from an old cycle: missing packets still export zeros.
-    EthFrmRcvPool reused(10, 20, 5, 2, 32, 2, 100000, false);
+    ReceiveRingBuffer reused(0, 10, 20, 5, 2, 32, 2, 100000, 80, false);
     for (unsigned p = 0; p < 40; ++p) feed(reused, p, p == 20 ? 1 : 3);
     reused.beginFreeze(20, 1);
     reused.finishFreeze();
     check(reused, 20, 1);
     reused.release();
+    // Reject a transition area that cannot hold the current unsettled tail.
+    ReceiveRingBuffer undersized(0, 10, 1, 5, 2, 32, 2, 100000, 80, false);
+    for (unsigned p = 0; p < 20; ++p) feed(undersized, p);
+    rejects([&] { undersized.beginFreeze(8, 4); });
+    assert(!undersized.isFrozen());
     // Exercise concurrent ingress during the transition and while exporting the frozen bank.
-    EthFrmRcvPool concurrent(1000, 4000, 500, 2, 32, 2, 100000, false);
+    ReceiveRingBuffer concurrent(0, 1000, 4000, 500, 2, 32, 2, 100000, 80, false);
     for (unsigned p = 0; p < 2000; ++p) feed(concurrent, p);
     concurrent.beginFreeze(900, 300);
     std::thread producer([&] { for (unsigned p = 2000; p < 5000; ++p) feed(concurrent, p); });

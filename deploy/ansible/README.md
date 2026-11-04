@@ -61,7 +61,7 @@ sudo cat /opt/tianlai-store/config/network-report.yaml
 
 报告仅记录配置和观察结果，不会自动选择物理端口、设置系统 IP 或修改驱动。部署前仍需按上一节完成端口对应关系和清单填写；如果完整清单校验未通过，部署及自动报告生成均不会开始，可先单独运行 `inspect_nics.yml` 盘点。
 
-若使用免密 sudo 或其他标准 Ansible 提权方式，可省略 `--ask-become-pass`。部署会安装 apt 软件包、复制源码及工具，通过项目统一的 `make production PROFILE=...` 入口编译缓存节点、生成 YAML 和控制器节点清单；缓存节点运行 `tianlai-cache`，存储服务器同时运行 `tianlai-storage` 和 `tianlai-controller`。重跑时，源码、配置或服务变化会触发对应服务重启。**缓存服务重启会丢失内存中尚未写盘的数据**；应先确认没有活动或暂停事件，并安排维护窗口。
+若使用免密 sudo 或其他标准 Ansible 提权方式，可省略 `--ask-become-pass`。部署会安装 apt 软件包、复制源码及工具，通过项目统一的 `make production PROFILE=...` 入口编译缓存节点、生成 YAML 和控制器节点清单；缓存节点运行 `tianlai-cache`，存储服务器同时运行 `tianlai-storage` 和 `tianlai-controller`。重跑时，源码、配置或服务变化会触发对应服务重启。**缓存服务重启会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。重启后必须等待约100秒重新预热，若控制器仍记录旧的未完成事件，应查询全部节点并取消无法恢复的事件，使用新的 `event_id` 重新触发。
 
 服务默认使用 root，节点通过 ixcap 收包；脚本没有配置防火墙或服务用户隔离，需结合现场权限和网络策略审查。软件包安装、服务重启和数据保存路径均由执行 playbook 的操作者负责确认。首次部署或配置变更会重启服务，完成后检查：
 

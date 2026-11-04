@@ -46,6 +46,8 @@ using json = nlohmann::json;
 using Bytes = std::vector<unsigned char>;
 constexpr size_t MAX_MESSAGE = 13 * 1024 * 1024;
 constexpr size_t MAX_SESSIONS_PER_PORT = 1;
+constexpr uint64_t DATA_SYNC_BYTES = 256ULL * 1024 * 1024;
+constexpr auto DATA_SYNC_INTERVAL = std::chrono::seconds(1);
 constexpr unsigned STORAGE_PORT_COUNT = 14;
 constexpr size_t CHUNK_HEADER = 40, FRAME_HEADER = 24;
 static volatile std::sig_atomic_t stopping = 0;
@@ -143,6 +145,19 @@ class EventWriter {
     std::vector<int> files;
     std::vector<uint64_t> progress, missing;
     std::vector<uint32_t> checksums;
+    uint64_t unsynced_bytes = 0;
+    std::chrono::steady_clock::time_point last_data_sync;
+
+    void sync_data(bool force) {
+        const auto now = std::chrono::steady_clock::now();
+        if (!force && unsynced_bytes < DATA_SYNC_BYTES && now - last_data_sync < DATA_SYNC_INTERVAL)
+            return;
+        for (int fd : files)
+            if (fd >= 0 && ::fdatasync(fd))
+                throw system_error("fdatasync event file");
+        unsynced_bytes = 0;
+        last_data_sync = now;
+    }
 
   public:
     EventWriter(fs::path base, Shared &state, unsigned shard_index = 0, unsigned shards = 1)
@@ -221,9 +236,10 @@ class EventWriter {
             if (files[p] < 0) throw system_error("open event file");
             if (::ftruncate(files[p], static_cast<off_t>(count * stride))) throw system_error("resize event file");
         }
+        last_data_sync = std::chrono::steady_clock::now();
         return {};
     }
-    // A block is acknowledged only after all checks, pwrite and fsync succeed.
+    // A block acknowledgment means validated and written. Only STORED is durable.
     void block(const Bytes &message) {
         require(message.size() >= CHUNK_HEADER, "truncated chunk header");
         const auto *p = message.data();
@@ -262,16 +278,16 @@ class EventWriter {
         }
         write_all(files[port], body, size, (first - start) * stride);
         checksums[port] = ::crc32(checksums[port], body, size);
-        if (::fsync(files[port])) throw system_error("fsync event file");
+        unsynced_bytes += size;
+        sync_data(false);
         progress[port] += n; missing[port] += absent;
     }
     Bytes finish(const Bytes &message) {
         require(message.size() == CHUNK_HEADER && read32(message.data()) == 2 &&
                 std::all_of(message.begin() + 4, message.end(), [](unsigned char c) { return c == 0; }), "invalid END record");
-        for (unsigned p = 0; p < ports; ++p) {
+        for (unsigned p = 0; p < ports; ++p)
             require(progress[p] == start + count, "incomplete lane transfer");
-            if (::fsync(files[p])) throw system_error("fsync event file");
-        }
+        sync_data(true);
         json ack = {{"version", 1}, {"status", "STORED"}, {"event_id", event},
                     {"acquisition_id", acquisition}, {"server_id", server}, {"lane", 0}};
         json marker = ack; marker["missing_packets"] = json::object(); marker["file_crc32"] = json::object();

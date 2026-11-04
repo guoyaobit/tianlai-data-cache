@@ -21,7 +21,7 @@ else
 CPPFLAGS += -I$(IXCAP_INCLUDE)
 LDLIBS += -L$(IXCAP_LIB) -lixcap -lrt -ldl
 endif
-COMMON = yaml_config protocol receive_pool log_output receive_antenna trigger_control zmq_store send_store application
+COMMON = yaml_config protocol receive_pool log_output receive_antenna event_state control_udp zmq_store send_store application
 BUILD = build$(if $(filter 1,$(NO_IXCAP)),-simulation,)
 OBJECTS = $(COMMON:%=$(BUILD)/%.o) $(BUILD)/entry.o
 BIN = $(TARGET)$(if $(filter 1,$(NO_IXCAP)),-simulation,)

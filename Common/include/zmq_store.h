@@ -18,7 +18,7 @@ class StorePacer {
 // A metadata retry may receive the final durable result immediately.
 class StoreConnection {
   public:
-    StoreConnection(PARAMETERS &para, unsigned lane, StorePacer &pacer);
+    StoreConnection(CacheRuntime &para, unsigned lane, StorePacer &pacer);
     ~StoreConnection();
     StoreConnection(const StoreConnection &) = delete;
     StoreConnection &operator=(const StoreConnection &) = delete;
@@ -28,7 +28,7 @@ class StoreConnection {
     std::string resultJson() const;
 
   private:
-    PARAMETERS &para;
+    CacheRuntime &para;
     StorePacer &pacer;
     void *context = nullptr;
     void *socket = nullptr;

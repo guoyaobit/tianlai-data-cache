@@ -1,25 +1,25 @@
 #include "functions.h"
 #include "log_output.h"
 #include <algorithm>
-#include <arpa/inet.h>
-#include <poll.h>
+#include <chrono>
 #include <sstream>
 #include <stdexcept>
-#include <sys/socket.h>
-#include <unistd.h>
 
-static bool active(const EventInfo &e) {
-    return e.state == "PREPARING" || e.state == "PREPARED" || e.state == "QUEUED" ||
-           e.state == "SENDING" || e.state == "SEND_FAILED" || e.state == "STORED";
-}
 static std::string eventJson(const EventInfo &e) {
-    return "\"event_id\":" + quoteJson(e.id) + ",\"status\":" + quoteJson(e.state) +
+    return "\"event_id\":" + quoteJson(e.id) + ",\"status\":" +
+           quoteJson(eventStateName(e.state)) +
            ",\"start_period\":" + std::to_string(e.start) +
            ",\"period_count\":" + std::to_string(e.count) +
            ",\"missing_packets\":" + std::to_string(e.missing) +
-           ",\"sent_bytes\":" + std::to_string(e.sentBytes) + ",\"error\":" + quoteJson(e.error);
+           ",\"sent_bytes\":" + std::to_string(e.sentBytes) +
+           ",\"freeze_ms\":" + std::to_string(e.freezeMilliseconds) +
+           ",\"send_ms\":" + std::to_string(e.sendMilliseconds) +
+           ",\"send_rate_bps\":" + std::to_string(e.sendRateBitsPerSecond) +
+           ",\"transition_peak_periods\":" + std::to_string(e.transitionPeakPeriods) +
+           ",\"transition_capacity_periods\":" +
+           std::to_string(e.transitionCapacityPeriods) + ",\"error\":" + quoteJson(e.error);
 }
-static void rememberEvent(PARAMETERS &para, const EventInfo &event) {
+static void rememberEvent(CacheRuntime &para, const EventInfo &event) {
     if (!para.history.count(event.id))
         para.historyOrder.push_back(event.id);
     para.history[event.id] = event;
@@ -28,49 +28,63 @@ static void rememberEvent(PARAMETERS &para, const EventInfo &event) {
         para.historyOrder.pop_front();
     }
 }
-static void remember(PARAMETERS &para) {
+static void remember(CacheRuntime &para) {
     rememberEvent(para, para.event);
 }
 // Protect all receive ports before collating the event; clean up any started freeze operations on failure.
-static void prepareEvent(PARAMETERS *para) {
+static void prepareEvent(CacheRuntime *para) {
     size_t begun = 0;
     size_t finished = 0;
+    const auto started = std::chrono::steady_clock::now();
     try {
         // Redirect every port first, so no port overwrites its event while
         // another port is being consolidated.
-        for (auto &pool : para->pEthRcvPool) {
+        for (auto &pool : para->receiveBuffers) {
             pool->beginFreeze(para->event.start, para->event.count);
             ++begun;
         }
-        for (auto &pool : para->pEthRcvPool) {
+        for (auto &pool : para->receiveBuffers) {
             pool->finishFreeze();
             ++finished;
         }
         uint64_t missing = 0;
-        for (auto &pool : para->pEthRcvPool)
+        uint64_t transitionPeak = 0;
+        uint64_t transitionCapacity = 0;
+        for (auto &pool : para->receiveBuffers) {
             missing += pool->missingPackets();
+            const auto status = pool->status();
+            transitionPeak = std::max(transitionPeak, status.transitionPeak);
+            transitionCapacity = std::max(transitionCapacity, status.transitionCapacity);
+        }
         std::string message;
         {
             std::lock_guard<std::mutex> lock(para->eventMutex);
             para->event.missing = missing;
+            para->event.freezeMilliseconds = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started)
+                    .count());
+            para->event.transitionPeakPeriods = transitionPeak;
+            para->event.transitionCapacityPeriods = transitionCapacity;
             if (para->event.cancelRequested) {
-                for (auto &pool : para->pEthRcvPool)
+                for (auto &pool : para->receiveBuffers)
                     pool->release();
-                para->event.state = "CANCELLED";
+                para->event.state = EventState::Cancelled;
                 remember(*para);
             } else {
-                para->event.state = "PREPARED";
+                para->event.state = EventState::Prepared;
             }
-            message = "Event " + para->event.id + " " + para->event.state;
+            message = "Event " + para->event.id + " " + eventStateName(para->event.state) +
+                      " freeze_ms=" + std::to_string(para->event.freezeMilliseconds);
         }
         LOG(message, INFO);
     } catch (const std::exception &error) {
         // Finish any partially started freezes before releasing their banks.
         try {
             for (size_t i = finished; i < begun; ++i)
-                para->pEthRcvPool[i]->finishFreeze();
+                para->receiveBuffers[i]->finishFreeze();
             for (size_t i = 0; i < begun; ++i)
-                para->pEthRcvPool[i]->release();
+                para->receiveBuffers[i]->release();
         } catch (const std::exception &cleanup) {
             LOG(cleanup.what(), FATAL);
             para->failed = true;
@@ -79,7 +93,7 @@ static void prepareEvent(PARAMETERS *para) {
         std::string message;
         {
             std::lock_guard<std::mutex> lock(para->eventMutex);
-            para->event.state = "REJECTED";
+            para->event.state = EventState::Rejected;
             para->event.error = error.what();
             remember(*para);
             message = "Event rejected: " + para->event.error;
@@ -88,7 +102,7 @@ static void prepareEvent(PARAMETERS *para) {
     }
 }
 // Validate control requests and advance node event state; allow RELEASE only after persistence is confirmed.
-std::string ProcessControl(PARAMETERS &para, const std::string &request) {
+std::string ProcessControl(CacheRuntime &para, const std::string &request) {
     std::string requestId;
     try {
         auto msg = parseControl(request);
@@ -104,31 +118,51 @@ std::string ProcessControl(PARAMETERS &para, const std::string &request) {
         if (command == "QUERY_STATUS") {
             uint64_t oldest = 0;
             uint64_t end = UINT64_MAX;
-            bool ready = !active(para.event) && !para.failed;
-            for (const auto &pool : para.pEthRcvPool) {
+            uint64_t transitionUsed = 0;
+            uint64_t transitionCapacity = 0;
+            uint64_t lastFreezeMilliseconds = 0;
+            bool transitionWarning = false;
+            bool ready = !isActiveEventState(para.event.state) && !para.failed;
+            for (const auto &pool : para.receiveBuffers) {
                 auto s = pool->status();
                 oldest = std::max(oldest, s.oldest);
                 end = std::min(end, s.settledEnd);
+                transitionUsed = std::max(transitionUsed, s.transitionUsed);
+                transitionCapacity = std::max(transitionCapacity, s.transitionCapacity);
+                lastFreezeMilliseconds =
+                    std::max(lastFreezeMilliseconds, s.lastFreezeMilliseconds);
+                transitionWarning = transitionWarning || s.transitionWarning;
                 ready = ready && s.ready;
             }
-            ready = ready && para.initializedPorts == para.pEthRcvPool.size();
-            return reply("\"status\":" +
-                         quoteJson(para.failed          ? "ERROR"
-                                   : ready              ? "READY"
-                                   : active(para.event) ? "BUSY"
-                                                        : "WARMING") +
+            ready = ready && para.initializedPorts == para.receiveBuffers.size();
+            const char *status = "WARMING";
+            if (para.failed)
+                status = "ERROR";
+            else if (ready)
+                status = "READY";
+            else if (isActiveEventState(para.event.state))
+                status = "BUSY";
+            return reply("\"status\":" + quoteJson(status) +
                          ",\"accept_trigger\":" + (ready ? "true" : "false") +
                          ",\"oldest_period\":" + std::to_string(oldest) + ",\"settled_end\":" +
                          std::to_string(end) + ",\"event_id\":" + quoteJson(para.event.id) +
-                         ",\"event_state\":" + quoteJson(para.event.state) +
+                         ",\"event_state\":" + quoteJson(eventStateName(para.event.state)) +
                          ",\"initialized_ports\":" + std::to_string(para.initializedPorts.load()) +
-                         ",\"ignored_packets\":" + std::to_string(para.ignoredPackets.load()));
+                         ",\"ignored_packets\":" + std::to_string(para.ignoredPackets.load()) +
+                         ",\"transition_used_periods\":" +
+                         std::to_string(transitionUsed) +
+                         ",\"transition_capacity_periods\":" +
+                         std::to_string(transitionCapacity) +
+                         ",\"transition_warning\":" +
+                         (transitionWarning ? "true" : "false") +
+                         ",\"last_freeze_ms\":" +
+                         std::to_string(lastFreezeMilliseconds));
         }
         if (command == "QUERY_PORT") {
             uint64_t p = getNumber(msg, "port");
-            if (p >= para.pEthRcvPool.size())
+            if (p >= para.receiveBuffers.size())
                 throw std::runtime_error("INVALID_PORT");
-            auto s = para.pEthRcvPool[p]->status();
+            auto s = para.receiveBuffers[p]->status();
             const auto &port = para.config->receivePorts[p];
             return reply("\"status\":\"OK\",\"port\":" + std::to_string(p) +
                          ",\"packet_id\":" + std::to_string(port.packetId) +
@@ -146,7 +180,18 @@ std::string ProcessControl(PARAMETERS &para, const std::string &request) {
                          ",\"received_packets\":" + std::to_string(s.received) +
                          ",\"duplicate_packets\":" + std::to_string(s.duplicate) +
                          ",\"late_packets\":" + std::to_string(s.late) +
-                         ",\"conflicting_packets\":" + std::to_string(s.conflicting));
+                         ",\"conflicting_packets\":" + std::to_string(s.conflicting) +
+                         ",\"transition_capacity_periods\":" +
+                         std::to_string(s.transitionCapacity) +
+                         ",\"transition_used_periods\":" +
+                         std::to_string(s.transitionUsed) +
+                         ",\"transition_peak_periods\":" +
+                         std::to_string(s.transitionPeak) +
+                         ",\"transition_warning\":" +
+                         (s.transitionWarning ? "true" : "false") +
+                         ",\"last_freeze_ms\":" +
+                         std::to_string(s.lastFreezeMilliseconds) +
+                         ",\"freeze_count\":" + std::to_string(s.freezeCount));
         }
         auto id = getId(msg, "event_id");
         if (command == "PREPARE" || command == "CAPTURE") {
@@ -172,11 +217,11 @@ std::string ProcessControl(PARAMETERS &para, const std::string &request) {
                     throw std::runtime_error("EVENT_ID_CONFLICT");
                 return reply(eventJson(*existing));
             }
-            if (para.failed || active(para.event))
+            if (para.failed || isActiveEventState(para.event.state))
                 throw std::runtime_error("BUSY");
-            if (para.initializedPorts != para.pEthRcvPool.size())
+            if (para.initializedPorts != para.receiveBuffers.size())
                 throw std::runtime_error("NOT_READY");
-            for (const auto &pool : para.pEthRcvPool) {
+            for (const auto &pool : para.receiveBuffers) {
                 auto s = pool->status();
                 if (!s.ready)
                     throw std::runtime_error("WARMING");
@@ -191,11 +236,11 @@ std::string ProcessControl(PARAMETERS &para, const std::string &request) {
             para.event.id = id;
             para.event.start = start;
             para.event.count = count;
-            para.event.state = "PREPARING";
+            para.event.state = EventState::Preparing;
             try {
                 para.eventThread = std::thread(prepareEvent, &para);
             } catch (...) {
-                para.event.state = "REJECTED";
+                para.event.state = EventState::Rejected;
                 para.event.error = "prepare thread creation failed";
                 remember(para);
                 throw;
@@ -210,7 +255,7 @@ std::string ProcessControl(PARAMETERS &para, const std::string &request) {
                 // Tombstone prevents a delayed PREPARE from resurrecting a cancelled event.
                 EventInfo cancelled;
                 cancelled.id = id;
-                cancelled.state = "CANCELLED";
+                cancelled.state = EventState::Cancelled;
                 rememberEvent(para, cancelled);
                 return reply(eventJson(cancelled));
             }
@@ -220,44 +265,47 @@ std::string ProcessControl(PARAMETERS &para, const std::string &request) {
         if (command == "QUERY_EVENT")
             return reply(eventJson(e));
         if (command == "COMMIT") {
-            if (e.state == "PREPARED") {
+            if (e.state == EventState::Prepared) {
                 e.committed = true;
-                e.state = "QUEUED";
+                e.state = EventState::Queued;
             } else if (!e.committed)
                 throw std::runtime_error("NOT_PREPARED");
         } else if (command == "SEND") {
-            if (e.state == "QUEUED" || e.state == "SEND_FAILED") {
+            if (e.state == EventState::Queued || e.state == EventState::SendFailed) {
                 if (para.eventThread.joinable())
                     para.eventThread.join();
-                e.state = "SENDING";
+                e.state = EventState::Sending;
                 e.sentBytes = 0;
+                e.sendMilliseconds = 0;
+                e.sendRateBitsPerSecond = 0;
                 e.error.clear();
                 try {
                     para.eventThread = std::thread(InitSendStoreThread, &para);
                 } catch (...) {
-                    e.state = "SEND_FAILED";
+                    e.state = EventState::SendFailed;
                     e.error = "send thread creation failed";
                     throw;
                 }
-            } else if (e.state != "SENDING" && e.state != "STORED")
+            } else if (e.state != EventState::Sending && e.state != EventState::Stored)
                 throw std::runtime_error("NOT_COMMITTED");
         } else if (command == "RELEASE") {
-            if (e.state == "STORED") {
-                for (auto &pool : para.pEthRcvPool)
+            if (e.state == EventState::Stored) {
+                for (auto &pool : para.receiveBuffers)
                     pool->release();
-                e.state = "RELEASED";
+                e.state = EventState::Released;
                 remember(para);
-            } else if (e.state != "RELEASED")
+            } else if (e.state != EventState::Released)
                 throw std::runtime_error("NOT_DURABLY_STORED");
         } else if (command == "CANCEL") {
-            if (e.state == "PREPARING")
+            if (e.state == EventState::Preparing)
                 e.cancelRequested = true;
-            else if (e.state == "PREPARED" || e.state == "QUEUED" || e.state == "SEND_FAILED") {
-                for (auto &pool : para.pEthRcvPool)
+            else if (e.state == EventState::Prepared || e.state == EventState::Queued ||
+                     e.state == EventState::SendFailed) {
+                for (auto &pool : para.receiveBuffers)
                     pool->release();
-                e.state = "CANCELLED";
+                e.state = EventState::Cancelled;
                 remember(para);
-            } else if (e.state != "CANCELLED" && e.state != "REJECTED")
+            } else if (e.state != EventState::Cancelled && e.state != EventState::Rejected)
                 throw std::runtime_error("CANNOT_CANCEL_CURRENT_STATE");
         } else
             throw std::runtime_error("UNKNOWN_COMMAND");
@@ -266,41 +314,5 @@ std::string ProcessControl(PARAMETERS &para, const std::string &request) {
         return "{\"version\":1,\"request_id\":" + quoteJson(requestId) +
                ",\"server_id\":" + std::to_string(para.config->serverId) +
                ",\"status\":\"ERROR\",\"error\":" + quoteJson(e.what()) + "}";
-    }
-}
-void InitControlThread(PARAMETERS *para) {
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0)
-        throw std::runtime_error("control socket failed");
-    struct Close {
-        int fd;
-        ~Close() {
-            close(fd);
-        }
-    } closeFd{fd};
-    sockaddr_in addr{}, allowed{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(para->config->controlPort);
-    inet_pton(AF_INET, para->config->controlBindIp.c_str(), &addr.sin_addr);
-    inet_pton(AF_INET, para->config->controlPeerIp.c_str(), &allowed.sin_addr);
-    if (bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)))
-        throw std::runtime_error("control bind failed");
-    LOG("UDP control ready, acquisition=" + para->config->acquisitionId, START);
-    while (para->flags->ifControl) {
-        pollfd p{fd, POLLIN, 0};
-        if (poll(&p, 1, 100) <= 0)
-            continue;
-        char buffer[MAX_CONTROL_BYTES + 1];
-        sockaddr_in peer{};
-        socklen_t size = sizeof(peer);
-        auto n = recvfrom(fd, buffer, sizeof(buffer), MSG_TRUNC,
-                          reinterpret_cast<sockaddr *>(&peer), &size);
-        if (n < 0 || n > ssize_t(MAX_CONTROL_BYTES) ||
-            peer.sin_addr.s_addr != allowed.sin_addr.s_addr)
-            continue;
-        auto response = ProcessControl(*para, std::string(buffer, size_t(n)));
-        if (response.size() <= MAX_CONTROL_BYTES)
-            sendto(fd, response.data(), response.size(), 0, reinterpret_cast<sockaddr *>(&peer),
-                   size);
     }
 }

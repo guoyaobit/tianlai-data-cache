@@ -57,6 +57,7 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     reserveMemoryBytes = number(cfg, "reserveMemoryMiB", 0, 1048576) << 20;
     reorderPeriods = number(cfg, "reorderPeriods", 1, 10000);
     settleMilliseconds = number(cfg, "settleMilliseconds", 1, 10000);
+    transitionWarnPercent = number(cfg, "transitionWarnPercent", 1, 99);
     chunkPeriods = number(cfg, "chunkPeriods", 1, 64);
     socketTimeoutSeconds = number(cfg, "socketTimeoutSeconds", 1, 300);
     if (cfg["sendRateBitsPerSecond"])

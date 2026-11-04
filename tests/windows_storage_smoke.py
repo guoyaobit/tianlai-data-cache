@@ -48,6 +48,7 @@ inline int storage_test_rename(const char* from, const char* to) {
 #include <io.h>
 #include <sys/types.h>
 inline int fsync(int) { return 0; }
+inline int fdatasync(int) { return 0; }
 inline int ftruncate(int fd, off_t n) { return _chsize_s(fd, n) ? -1 : 0; }
 inline int pwrite(int fd, const void* data, size_t n, off_t offset) {
     if (_lseeki64(fd, offset, SEEK_SET) < 0) return -1;
