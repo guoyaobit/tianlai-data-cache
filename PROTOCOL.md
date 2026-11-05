@@ -16,7 +16,7 @@
 
 内部使用 `uint64_t absolutePeriod = trace * integrationPerTrace + integration`。
 区间统一为 `[start, start + count)`。默认 200 us/周期、最大 25000 周期（5 秒）。
-触发以信号采集编号为准，UDP 到达时间和服务器系统时间不参与选取数据。
+触发以信号采集编号为准，TCP控制请求到达时间和服务器系统时间不参与选取数据。
 仅接受已经定稿的历史区间；不等待未来未到的数据。
 
 所有节点启动时使用同一 acquisition_id。控制器 `--integration-per-trace` 和 `--period-us` 必须分别与所有节点 `receive_config.yaml` 中的 `integrationPerTrace`、`periodMicroseconds` 一致，默认 50000 和 200；控制器不会自动验证节点配置的一致性。原始包没有 acquisition_id，它由采集管理约定。
@@ -24,10 +24,9 @@
 前端清零、重启或 trace 20 位回绕时，需协调停止旧任务，并以新 acquisition_id 重启缓存
 程序重新积累。禁止跨任务/跨计数回绕触发，不能靠收到一个倒退的包推断新任务。
 
-## 千兆内网 UDP 控制
+## 千兆内网 TCP + JSON 控制
 
-一个 UDP 数据报一条 UTF-8 JSON 对象，最长 1200 B，不加 TCP 长度前缀。
-节点只接受配置 controlPeerIp 的报文。控制器入口只接受 --allow-source 的地址。
+每次TCP连接只处理一个请求和一个回复，随后主动关闭。每条消息为4字节网络序JSON长度，后接UTF-8 JSON对象；JSON最长1200 B。节点只接受配置controlPeerIp的连接，控制器入口只接受--allow-source的地址。
 
 所有请求携带：
 
@@ -51,7 +50,7 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
 节点状态不会因为重复 STORE/RELEASE 而倒退。先收到 CANCEL 的未知事件会留下
 取消记录，防止迟到 PREPARE 再次启动该事件。
 
-### 外部 → 控制器（默认 UDP 18999）
+### 外部 → 控制器（默认 TCP 18999）
 
 ```json
 {
@@ -90,7 +89,7 @@ COMPLETED 只表示事件保存完成，不代表已经恢复完整 100 秒历�
 
 ### 写盘完成主动通知
 
-C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～13（384路）各自两个lane全部持久化且元数据一致后，先写入事件级`storage-complete.json`，再通过UDP通知消色散后端：
+C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～13（384路）各自两个lane全部持久化且元数据一致后，先写入事件级`storage-complete.json`，再通过TCP/JSON通知消色散后端：
 
 ```json
 {"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"acq-20260918-001","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0}}
@@ -104,9 +103,9 @@ C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～1
 {"version":1,"command":"ACK_RESULT","status":"ACKNOWLEDGED","acquisition_id":"acq-20260918-001","event_id":"event-000001"}
 ```
 
-存储服务校验确认报文的来源 IP、来源端口、命令、状态、采集编号和事件编号，全部匹配后才写入 `backend-acknowledged.json`。每次发送从 `backend.bindAddress` 分配一个临时源端口；后端固定监听默认 UDP 19001，并向实际来源地址回复。超时或重启后，存储服务会从 `storage-complete.json` 继续重试，因此后端必须处理重复通知。`tools/result_listener.py` 是演示接收器，打印后立即确认，不提供业务侧持久化。控制器不再转发完成通知，也不处理 `ACK_RESULT`。若事件暂停，仍通过控制器的 `QUERY_EVENT` 查询并按 `RESUME` 或 `CANCEL` 处理。
+存储服务连接后端默认TCP 19001，在同一连接发送长度前缀JSON并等待ACK_RESULT。确认报文的命令、状态、采集编号和事件编号全部匹配后才写入`backend-acknowledged.json`。超时、断线或重启后，存储服务会从`storage-complete.json`继续建立新连接重试，因此后端必须按事件编号处理重复通知。`tools/result_listener.py`是演示接收器，打印后立即确认，不提供业务侧持久化。控制器不再转发完成通知，也不处理`ACK_RESULT`。若事件暂停，仍通过控制器的`QUERY_EVENT`查询并按`RESUME`或`CANCEL`处理。
 
-### 控制器 → 节点（默认 UDP 19000）
+### 控制器 → 节点（默认 TCP 19000）
 
 PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式包含的节点发送。
 
@@ -125,12 +124,12 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
 释放后历史不足时节点 QUERY_STATUS 返回 WARMING，而不是 READY。
 
 控制器只有在所选模式全部节点PREPARED后才并行发出STORE；全部节点STORED后才并行发出RELEASE。288路使用11个节点，384路使用14个节点；每节点使用两个ZeroMQ连接，任一lane失败都会使节点进入SEND_FAILED，其他已落盘节点也暂不释放缓存。
-节点RPC使用同一request_id进行6次指数退避重试；准备和写盘长任务通过QUERY_EVENT等待。
+节点RPC断线或超时时使用同一request_id重新建立TCP连接，最多进行6次指数退避重试；准备和写盘长任务通过QUERY_EVENT等待。
 调度器重启时读取日志，未完成事件先PAUSED；RESUME根据节点实际状态继续，STORE和RELEASE均可安全重复。
 
 ## ZeroMQ 数据协议 TLSTORE1
 
-数据通道和管理网UDP控制通道独立。每台缓存服务器建立lane 0和lane 1两个ZeroMQ REQ连接，两个连接绑定同一个物理网口和源IP。lane 0只发送偶数接收口，lane 1只发送奇数接收口。`storage.receivers`必须显式列出28个`serverId/lane/bindAddress/port/allowedSource`组合；存储端据此启动28个ROUTER监听线程。默认端口为20000～20013和20100～20113。任一端点不匹配都会拒绝会话。
+数据通道和管理网TCP/JSON控制通道独立。每台缓存服务器建立lane 0和lane 1两个ZeroMQ REQ连接，两个连接绑定同一个物理网口和源IP。lane 0只发送偶数接收口，lane 1只发送奇数接收口。`storage.receivers`必须显式列出28个`serverId/lane/bindAddress/port/allowedSource`组合；存储端据此启动28个ROUTER监听线程。默认端口为20000～20013和20100～20113。任一端点不匹配都会拒绝会话。
 
 每个 ZeroMQ 请求是一条消息：先发送带 4 字节长度的 JSON 元数据，然后逐条发送 40 字节块头和正文，最后发送 40 字节 END。通常除 END 外每条消息由存储端成功校验并写入后回复 ASCII OK；该 OK 不是持久化确认。存储端累计 256 MiB 或经过 1 秒后批量 `fdatasync`，END 在全部文件及完成标记持久化后回复 4 字节长度前缀的 STORED JSON。若相同元数据对应的持久化标记已经存在，首条元数据消息直接返回 STORED，发送端不再重传数据。发送端验证事件、采集编号、节点和 lane 后才进入 STORED。消息排队、块级 OK、TCP ACK 或 ZeroMQ send 成功均不代表完整落盘。
 

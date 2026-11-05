@@ -294,7 +294,7 @@
         src: "{{ playbook_dir }}/../../tools/{{ item }}"
         dest: "{{ tianlai_root }}/tools/{{ item }}"
         mode: '0644'
-      loop: [controller.py, durable_json.py]
+      loop: [controller.py, durable_json.py, tcp_json.py]
       notify: restart controller
     - name: Render controller node list
       ansible.builtin.template:

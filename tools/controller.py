@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UDP controller: protect every node selected by the channel mode, then export concurrently."""
+"""TCP/JSON controller: protect selected nodes, store durably, then release."""
 import argparse
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -11,9 +11,10 @@ import time
 import uuid
 from pathlib import Path
 from durable_json import atomic_json, ID
+from tcp_json import MAX_JSON_BYTES, receive_frame, send_frame
 
 
-MAX_CONTROL_BYTES = 1200
+MAX_CONTROL_BYTES = MAX_JSON_BYTES
 RPC_ATTEMPTS = 6
 REPLAY_TTL_SECONDS = 300
 REPLAY_MAX_ENTRIES = 1024
@@ -43,34 +44,26 @@ def rpc(node, acquisition, command, *, timeout=.25, retries=RPC_ATTEMPTS, **fiel
     if len(body) > MAX_CONTROL_BYTES:
         raise ValueError('control message too long')
     peer = (socket.gethostbyname(node['host']), node.get('port', 19000))
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        for attempt in range(retries):
-            attempt_timeout = timeout * min(8, 1 << attempt)
-            sock.sendto(body, peer)
-            deadline = time.monotonic() + attempt_timeout
-            while time.monotonic() < deadline:
-                sock.settimeout(max(.001, deadline - time.monotonic()))
-                try:
-                    data, address = sock.recvfrom(MAX_CONTROL_BYTES + 1)
-                except socket.timeout:
-                    break
-                if address != peer or len(data) > MAX_CONTROL_BYTES:
-                    continue
-                try:
-                    reply = parse_request(data)
-                except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
-                    continue
-                if (reply.get('version') == 1 and
-                        reply.get('request_id') == request['request_id'] and
-                        reply.get('server_id') == node['server_id']):
-                    if reply.get('status') == 'ERROR':
-                        raise RuntimeError(f"server {node['server_id']}: {reply.get('error')}")
-                    return reply
-    raise TimeoutError(f"server {node['server_id']}: UDP acknowledgment timeout")
+    for attempt in range(retries):
+        attempt_timeout = timeout * min(8, 1 << attempt)
+        try:
+            with socket.create_connection(peer, timeout=attempt_timeout) as sock:
+                sock.settimeout(attempt_timeout)
+                send_frame(sock, body)
+                reply = parse_request(receive_frame(sock))
+            if (reply.get('version') == 1 and
+                    reply.get('request_id') == request['request_id'] and
+                    reply.get('server_id') == node['server_id']):
+                if reply.get('status') == 'ERROR':
+                    raise RuntimeError(f"server {node['server_id']}: {reply.get('error')}")
+                return reply
+        except (ConnectionError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            continue
+    raise TimeoutError(f"server {node['server_id']}: TCP request timeout")
 
 
 class ReplayCache:
-    """Return the same reply for a retried backend datagram with the same request ID."""
+    """Return the same reply for a retried backend request with the same request ID."""
     def __init__(self, capacity=REPLAY_MAX_ENTRIES, ttl=REPLAY_TTL_SECONDS):
         self.capacity = capacity
         self.ttl = ttl
@@ -418,14 +411,23 @@ def main():
                             allow_partial=args.allow_partial, integration_per_trace=args.integration_per_trace,
                             period_microseconds=args.period_us)
     replay = ReplayCache()
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+    allowed = socket.gethostbyname(args.allow_source)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((args.bind, args.port))
-        print(f'UDP trigger controller listening on {sock.getsockname()}', flush=True)
+        sock.listen(16)
+        print(f'TCP/JSON trigger controller listening on {sock.getsockname()}', flush=True)
         while True:
-            data, peer = sock.recvfrom(MAX_CONTROL_BYTES + 1)
-            if peer[0] != args.allow_source or len(data) > MAX_CONTROL_BYTES:
-                continue
-            sock.sendto(backend_reply(controller, data, peer, replay), peer)
+            connection, peer = sock.accept()
+            with connection:
+                if peer[0] != allowed:
+                    continue
+                connection.settimeout(5)
+                try:
+                    send_frame(connection, backend_reply(
+                        controller, receive_frame(connection), peer, replay))
+                except (ConnectionError, OSError, ValueError):
+                    continue
 
 
 if __name__ == '__main__':

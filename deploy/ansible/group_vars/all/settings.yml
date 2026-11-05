@@ -20,9 +20,9 @@ tianlai_storage_directory: CHANGE_ME
 tianlai_period_us: 200
 # Integration periods per trace; must match acquisition.
 tianlai_integration_per_trace: 50000
-# Cache-node UDP control port.
+# Cache-node TCP/JSON control port.
 tianlai_control_port: 19000
-# Controller UDP port for backend requests.
+# Controller TCP/JSON port for backend requests.
 tianlai_controller_port: 18999
 # Backend result UDP port; replies go to the packet source.
 tianlai_notify_port: 19001

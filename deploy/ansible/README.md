@@ -9,7 +9,8 @@
 - 真实地址、链路、网卡 PCI 地址、光模块、驱动、NUMA、MTU 及存储挂载由现场先完成验证。`tianlai_storage_directory` 必须指向目标机已有且正确挂载的存储路径下的目录；脚本只创建目录，不验证其所在磁盘或容量。
 - 清单可使用 YAML 或 INI：复制 `inventory_example.yml` 为 `inventory.yml`，或复制 `inventory_example.ini` 为 `inventory.ini`。两份示例都包含缓存服务器 1～14（节点 0～13）及同机部署的存储/控制器；选择一种维护即可。须现场核对 SSH 地址，并补齐各节点的接收 PCI 地址、万兆发送接口和地址。`controller` 与 `storage` 组必须使用同一个存储服务器主机名。
 - 在清单中填写单个发送接口/源IP及存储100G口上的单个无标签IP。不配置VLAN，数据接口不设置默认网关；管理网仍使用`tianlai_controller_ip`。
-- 消色散后端须在 `tianlai_backend_ip:tianlai_notify_port` 监听 UDP。存储服务从 `tianlai_controller_ip` 发送 `CAPTURE_RESULT`；后端持久化结果后向该报文的来源地址回复 `ACK_RESULT`。Playbook 不部署后端，也不修改相关防火墙。
+- 消色散后端须在`tianlai_backend_ip:tianlai_notify_port`监听TCP/JSON。存储服务从`tianlai_controller_ip`连接并发送`CAPTURE_RESULT`；后端持久化结果后在同一连接回复`ACK_RESULT`。Playbook不部署后端，也不修改相关防火墙。
+- 管理网需放通后端→控制器TCP 18999、控制器→缓存节点TCP 19000、存储服务器→后端TCP 19001；实际端口以清单为准。
 - 如果目标上安装的 ixcap 是共享库，确保运行时动态链接器可找到该库。脚本只检查文件存在，不负责驱动、权限或网卡初始化。
 
 ## SSH密钥和sudo密码

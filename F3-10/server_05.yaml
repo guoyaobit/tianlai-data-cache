@@ -7,7 +7,7 @@ serverCfg:
   controlBindIp: "172.0.0.133"
   # Controller IP allowed to send commands.
   controlPeerIp: "192.168.200.250"
-  # Local management UDP control port.
+  # Local management TCP/JSON control port.
   controlPort: 19000
   # Log path; "-" writes only to stderr.
   logFilePath: "-"

@@ -23,7 +23,7 @@ storage:
 backend:
   # Dedispersion backend IP for completion notices.
   address: {{ tianlai_backend_ip | to_json }}
-  # Backend UDP port for CAPTURE_RESULT.
+  # Backend TCP/JSON port for CAPTURE_RESULT.
   port: {{ tianlai_notify_port | int }}
   # Local management IP for storage completion notices.
   bindAddress: {{ tianlai_controller_ip | to_json }}

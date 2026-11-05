@@ -44,7 +44,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 
 - 将 `deviceName0..7` 或 `deviceName0..3` 改为实际接收 PCI 地址。
 - 填写单个存储网口对应的 `sendEthName`、本地IPv4、存储端IPv4及两个逻辑lane端口。
-- `controlBindIp/controlPort` 是管理网 UDP 监听地址；`controlPeerIp` 只允许调度机地址。
+- `controlBindIp/controlPort` 是管理网 TCP/JSON 监听地址；`controlPeerIp` 只允许调度机地址。
 - 所有节点及调度程序使用同一个实际 `acquisitionId`；前端复位后重新建立任务。
 - `transitionWarnPercent` 默认 80；过渡区达到该占用比例时记录一次 WARN，并在查询结果中置警告标志。
 - `chunkPeriods` 默认 64；它控制单个 ZeroMQ 数据块的积分周期数，应结合消息内存和吞吐实测调整。
@@ -101,14 +101,14 @@ sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
 
 ## 管理网触发和调度
 
-控制通道是千兆内网 **UDP + JSON**，一个报文一条消息，最多 1200 B。
+控制通道是千兆内网 **TCP + JSON**，每次连接处理一条请求和回复；每条消息使用4字节网络序长度前缀，JSON最多1200 B。
 每次请求有 request_id，每个事件有 event_id；重传使用同一 ID。
 节点通过事件状态保证幂等，同 ID 不同范围报冲突。进程内保存最近最多 64 个结束事件的
 去重记录；外部必须始终使用唯一事件 ID，不能依赖无限期历史去重。
 
 控制器等配套工具使用 Python 3.10+：
 
-- `tools/controller.py`：外部UDP触发入口；288路调度节点0～10，384路调度节点0～13。
+- `tools/controller.py`：外部TCP/JSON触发入口；288路调度节点0～10，384路调度节点0～13。
 - `tools/trigger.py`：发送一条控制消息并匹配回复。
 - `Storage/tianlai-storage`：生产部署使用的 C++ ZeroMQ 接收与落盘服务。
 - `Storage/storage.yaml`：C++ 落盘服务的完整示例配置；Ansible 会按现场清单生成正式配置。
@@ -126,7 +126,7 @@ python3 tools/controller.py --nodes tools/nodes_example.json \
 ```
 
 `--allow-source` 是允许发触发的外部控制机；节点 YAML 的 `controlPeerIp` 应当是调度机。
-外部入口默认 UDP 18999，节点默认 UDP 19000。地址按现场替换。
+外部入口默认TCP 18999，节点默认TCP 19000。地址按现场替换。
 控制器的 `--period-us` 和 `--integration-per-trace` 默认为 200 和 50000，必须与全部节点配置一致；变更节点采集参数时同时修改控制器参数。
 
 修改 `tools/trigger_example.json` 中的任务、事件及周期范围，在外部控制机执行：
@@ -138,7 +138,7 @@ python3 tools/trigger.py --host 192.168.200.250 --file tools/trigger_example.jso
 在触发JSON中设置`"channel_count":288`或`384`；省略时默认384。返回PREPARING表示请求正在处理；查询事件得到PREPARED/STORING后才表明所选模式全部节点已保护。控制器只有确认所有节点STORED后才统一RELEASE，单节点故障不会提前释放其他节点缓存。
 QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
 本字段同时进入缓存事件和TLSTORE1元数据。升级时必须先停止触发并处理完旧事件，在维护窗口统一更新控制器、14台缓存服务和存储服务，再使用新的`acquisition_id`启动，不能混跑不含该字段的旧版进程。
-所选模式的11台或14台节点持久化完成后，C++存储服务通过UDP/JSON直接向消色散后端发送
+所选模式的11台或14台节点持久化完成后，C++存储服务通过TCP/JSON直接向消色散后端发送
 `CAPTURE_RESULT`；后端持久化结果后向报文来源地址回复 `ACK_RESULT`。未确认结果会落盘保存并在重启后继续重试。示例接收器为 `tools/result_listener.py`，协议和缺包含义见 `PROTOCOL.md`。默认要求配置全部
 14台，单节点联调用`--allow-partial`，不能用该模式表示288或384路全部完成。
 原始输入头的 `ifTrace` 不充当触发位，也不修改保留字节。
@@ -188,7 +188,7 @@ make test
 
 测试另需系统 Python 的 pyzmq、libzmq 和 nlohmann-json 开发库。测试使用 ASan/UBSan 检查真实缓冲实现，覆盖跨 A/B、非零起始周期、循环覆盖、缺包、
 整周期缺失、并发收包、过渡溢出、冻结及恢复。回环联调运行三类真实程序的 `--simulate`，
-验证 UDP 输入/控制、重复触发、ZeroMQ 发送失败保留与重试、最终确认丢失、逐字节落盘内容和调度流程，
+验证UDP数据输入、TCP/JSON控制、重复触发、ZeroMQ发送失败保留与重试、最终确认丢失、逐字节落盘内容和调度流程，
 并检查全部 14 份节点映射；新模式额外验证同板奇偶包独立存储及末口填充频点。
 测试使用临时目录和缩小的缓存，不访问实际采集网卡。
 

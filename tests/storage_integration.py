@@ -8,12 +8,15 @@ from pathlib import Path
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 
 import zmq
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
+from tcp_json import receive_frame, send_frame
 CHUNK = struct.Struct('!IIIIQQII')
 FRAME = struct.Struct('!QQII')
 
@@ -105,8 +108,10 @@ def main():
         port_count = 28
         port = find_port_range(port_count)
         context = zmq.Context()
-        backend = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        backend.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         backend.bind(('127.0.0.1', 0))
+        backend.listen(4)
         backend.settimeout(10)
         notify_port = backend.getsockname()[1]
         if args.test_cli:
@@ -150,19 +155,24 @@ def main():
                            for server in range(14) for lane in range(2)]
                 for future in futures:
                     future.result(timeout=60)
-            body, source = backend.recvfrom(1201)
-            notice = json.loads(body)
+            connection, _ = backend.accept()
+            with connection:
+                notice = json.loads(receive_frame(connection))
+                send_frame(connection, json.dumps(dict(
+                    version=1, command='ACK_RESULT', status='ERROR')).encode())
             assert notice['command'] == 'CAPTURE_RESULT' and notice['status'] == 'STORED'
             assert notice['channel_count'] == 384
             assert notice['acquisition_id'] == 'acq' and notice['event_id'] == 'event'
             assert notice['start'] == {'trace_period_id': 1, 'integration_period_id': 0}
             assert notice['end_exclusive'] == {'trace_period_id': 1, 'integration_period_id': 1}
             assert set(notice['missing_by_server']) == {str(i) for i in range(14)}
-            backend.sendto(json.dumps(dict(version=1, command='ACK_RESULT', status='ERROR')).encode(), source)
-            repeated, source = backend.recvfrom(1201)
-            assert json.loads(repeated) == notice, 'storage did not retry an unacknowledged result'
-            backend.sendto(json.dumps(dict(version=1, command='ACK_RESULT', status='ACKNOWLEDGED',
-                                           acquisition_id='acq', event_id='event')).encode(), source)
+            connection, _ = backend.accept()
+            with connection:
+                repeated = json.loads(receive_frame(connection))
+                assert repeated == notice, 'storage did not retry an unacknowledged result'
+                send_frame(connection, json.dumps(dict(
+                    version=1, command='ACK_RESULT', status='ACKNOWLEDGED',
+                    acquisition_id='acq', event_id='event')).encode())
             deadline = time.monotonic() + 10
             while not (root / 'acq/event/backend-acknowledged.json').exists():
                 if time.monotonic() >= deadline:
@@ -182,7 +192,7 @@ def main():
             context.term()
         if os.name != 'nt':  # Windows terminate() is not a graceful SIGTERM.
             assert process.returncode == 0, process.stderr.read()
-    print('C++ storage: 28 lane clients, UDP completion and retry passed')
+    print('C++ storage: 28 lane clients, TCP/JSON completion and retry passed')
 
 
 if __name__ == '__main__':

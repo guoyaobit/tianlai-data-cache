@@ -424,17 +424,73 @@ static std::optional<json> build_completion_notice(const fs::path &event_directo
     return notice;
 }
 
-// Completion uses one UDP/JSON request and acknowledgment. A missing reply
-// leaves the persisted result pending, so the background thread retries.
+// Completion uses one length-prefixed TCP/JSON request and acknowledgment.
+// A missing reply leaves the persisted result pending for a later retry.
 #ifdef _WIN32
-using UdpSocket = SOCKET;
-static constexpr UdpSocket INVALID_UDP_SOCKET = INVALID_SOCKET;
-static void close_udp(UdpSocket socket) { closesocket(socket); }
+using TcpSocket = SOCKET;
+static constexpr TcpSocket INVALID_TCP_SOCKET = INVALID_SOCKET;
+static void close_tcp(TcpSocket socket) { closesocket(socket); }
+static bool set_nonblocking(TcpSocket socket) {
+    u_long enabled = 1;
+    return ioctlsocket(socket, FIONBIO, &enabled) == 0;
+}
+static bool connect_pending() {
+    const int error = WSAGetLastError();
+    return error == WSAEWOULDBLOCK || error == WSAEINPROGRESS;
+}
 #else
-using UdpSocket = int;
-static constexpr UdpSocket INVALID_UDP_SOCKET = -1;
-static void close_udp(UdpSocket socket) { ::close(socket); }
+using TcpSocket = int;
+static constexpr TcpSocket INVALID_TCP_SOCKET = -1;
+static void close_tcp(TcpSocket socket) { ::close(socket); }
+static bool set_nonblocking(TcpSocket socket) {
+    const int flags = fcntl(socket, F_GETFL, 0);
+    return flags >= 0 && fcntl(socket, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+static bool connect_pending() { return errno == EINPROGRESS; }
 #endif
+
+static bool wait_tcp(TcpSocket socket, bool writable) {
+    fd_set descriptors;
+    FD_ZERO(&descriptors);
+    FD_SET(socket, &descriptors);
+    timeval timeout{2, 0};
+#ifdef _WIN32
+    const int ready = select(0, writable ? nullptr : &descriptors,
+                             writable ? &descriptors : nullptr, nullptr, &timeout);
+#else
+    const int ready = select(socket + 1, writable ? nullptr : &descriptors,
+                             writable ? &descriptors : nullptr, nullptr, &timeout);
+#endif
+    return ready > 0;
+}
+
+static void tcp_send_all(TcpSocket socket, const unsigned char *data, size_t size) {
+    while (size) {
+        require(wait_tcp(socket, true), "completion TCP send timeout");
+        const int sent = ::send(socket, reinterpret_cast<const char *>(data),
+                                static_cast<int>(size),
+#ifdef _WIN32
+                                0
+#else
+                                MSG_NOSIGNAL
+#endif
+        );
+        require(sent > 0, "completion TCP send failed");
+        data += sent;
+        size -= static_cast<size_t>(sent);
+    }
+}
+
+static void tcp_receive_all(TcpSocket socket, unsigned char *data, size_t size) {
+    while (size) {
+        require(wait_tcp(socket, false), "completion TCP reply timeout");
+        const int received = ::recv(socket, reinterpret_cast<char *>(data),
+                                    static_cast<int>(size), 0);
+        require(received > 0, "completion TCP connection closed");
+        data += received;
+        size -= static_cast<size_t>(received);
+    }
+}
 
 class CompletionNotifier {
     fs::path root;
@@ -447,53 +503,58 @@ class CompletionNotifier {
     std::thread worker;
 
     bool send(const fs::path &event_directory, const json &notice) {
-        UdpSocket socket = ::socket(AF_INET, SOCK_DGRAM, 0);
-        if (socket == INVALID_UDP_SOCKET) throw std::runtime_error("completion UDP socket creation failed");
+        TcpSocket socket = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (socket == INVALID_TCP_SOCKET) throw std::runtime_error("completion TCP socket creation failed");
         try {
             sockaddr_in local{};
             local.sin_family = AF_INET;
             require(::inet_pton(AF_INET, source_address.c_str(), &local.sin_addr) == 1,
                     "invalid completion source IPv4");
             if (::bind(socket, reinterpret_cast<const sockaddr *>(&local), sizeof(local)))
-                throw std::runtime_error("completion UDP bind failed");
+                throw std::runtime_error("completion TCP bind failed");
             sockaddr_in target{};
             target.sin_family = AF_INET;
             target.sin_port = htons(static_cast<uint16_t>(target_port));
             require(::inet_pton(AF_INET, target_address.c_str(), &target.sin_addr) == 1,
                     "invalid completion target IPv4");
+            require(set_nonblocking(socket), "completion TCP nonblocking setup failed");
+            const int connected = ::connect(socket, reinterpret_cast<const sockaddr *>(&target),
+                                            sizeof(target));
+            require(connected == 0 || connect_pending(), "completion TCP connect failed");
+            if (connected != 0) {
+                require(wait_tcp(socket, true), "completion TCP connect timeout");
+                int error = 0;
+                socklen_t error_size = sizeof(error);
+                require(getsockopt(socket, SOL_SOCKET, SO_ERROR,
+                                   reinterpret_cast<char *>(&error), &error_size) == 0 && !error,
+                        "completion TCP connect failed");
+            }
             const auto body = notice.dump();
             require(body.size() <= 1200, "completion JSON too long");
-            if (::sendto(socket, body.data(), static_cast<int>(body.size()), 0,
-                         reinterpret_cast<const sockaddr *>(&target), sizeof(target)) !=
-                    static_cast<int>(body.size()))
-                throw std::runtime_error("completion UDP send failed");
-            fd_set readable;
-            FD_ZERO(&readable);
-            FD_SET(socket, &readable);
-            timeval timeout{1, 0};
-#ifdef _WIN32
-            const int ready = ::select(0, &readable, nullptr, nullptr, &timeout);
-#else
-            const int ready = ::select(socket + 1, &readable, nullptr, nullptr, &timeout);
-#endif
-            if (ready <= 0) throw std::runtime_error("completion UDP acknowledgment timeout");
-            std::array<char, 1201> reply{};
-            sockaddr_in peer{};
-            socklen_t peer_size = sizeof(peer);
-            const int size = ::recvfrom(socket, reply.data(), 1200, 0,
-                                        reinterpret_cast<sockaddr *>(&peer), &peer_size);
-            require(size >= 0 && peer.sin_addr.s_addr == target.sin_addr.s_addr &&
-                    peer.sin_port == target.sin_port, "completion UDP acknowledgment source mismatch");
-            auto ack = json::parse(reply.data(), reply.data() + size);
+            const uint32_t body_size = static_cast<uint32_t>(body.size());
+            const unsigned char header[4] = {
+                static_cast<unsigned char>(body_size >> 24),
+                static_cast<unsigned char>(body_size >> 16),
+                static_cast<unsigned char>(body_size >> 8),
+                static_cast<unsigned char>(body_size)};
+            tcp_send_all(socket, header, sizeof(header));
+            tcp_send_all(socket, reinterpret_cast<const unsigned char *>(body.data()), body.size());
+            unsigned char reply_header[4];
+            tcp_receive_all(socket, reply_header, sizeof(reply_header));
+            const uint32_t reply_size = read32(reply_header);
+            require(reply_size >= 1 && reply_size <= 1200, "invalid completion TCP reply length");
+            std::vector<unsigned char> reply(reply_size);
+            tcp_receive_all(socket, reply.data(), reply.size());
+            auto ack = json::parse(reply.begin(), reply.end());
             require(ack.is_object() && integer(ack, "version") == 1 && ack.at("command") == "ACK_RESULT" &&
                     ack.at("status") == "ACKNOWLEDGED" &&
                     ack.at("acquisition_id") == notice.at("acquisition_id") &&
                     ack.at("event_id") == notice.at("event_id"), "invalid backend completion acknowledgment");
             atomic_json(event_directory / "backend-acknowledged.json", ack);
-            close_udp(socket);
+            close_tcp(socket);
             return true;
         } catch (...) {
-            close_udp(socket);
+            close_tcp(socket);
             throw;
         }
     }

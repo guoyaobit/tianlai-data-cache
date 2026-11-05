@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Loopback integration of the real nodes, UDP control and ZeroMQ disk receiver."""
+"""Loopback integration of real nodes, TCP/JSON control and ZeroMQ storage."""
 import json
 import os
 from pathlib import Path
@@ -112,7 +112,7 @@ def run(server, directory):
         cfg['recvCfg'][key] = value
     write_config(directory / 'recv.yaml', cfg)
     node_config = read_config(ROOT / variant / f'server_{server:02d}.yaml')
-    control_port = free_port(socket.SOCK_DGRAM)
+    control_port = free_port(socket.SOCK_STREAM)
     simulation = [free_port(socket.SOCK_DGRAM) for _ in range(ports)]
     destinations = [free_port(socket.SOCK_STREAM) for _ in range(2)]
     values = dict(controlBindIp='127.0.0.1', controlPeerIp='127.0.0.1', controlPort=control_port)
@@ -302,11 +302,11 @@ def run(server, directory):
                           if controller.events['controller-event']['status'] in ('COMPLETED', 'PAUSED') else None)
         assert result['status'] == 'COMPLETED', result
         assert controller.dispatch(message)['status'] == 'COMPLETED'
-        # Verify the actual external UDP entry point and the command-line trigger client as well.
+        # Verify the external TCP/JSON entry point and command-line trigger client.
         (directory / 'nodes.json').write_text(json.dumps([node]))
         (directory / 'query.json').write_text(json.dumps(dict(version=1, acquisition_id='test-acq',
                                                              command='QUERY_STATUS')))
-        external_port = free_port(socket.SOCK_DGRAM)
+        external_port = free_port(socket.SOCK_STREAM)
         controller_process = subprocess.Popen([
             'python3', str(ROOT / 'tools/controller.py'), '--nodes', str(directory / 'nodes.json'),
             '--acquisition', 'test-acq', '--journal', str(directory / 'external-journal'),
@@ -317,7 +317,7 @@ def run(server, directory):
             '--port', str(external_port), '--file', str(directory / 'query.json'), '--timeout', '.5'],
             capture_output=True, text=True, timeout=10, check=True)
         assert json.loads(result.stdout)['status'] == 'BUSY_OR_WARMING'
-        print(f'{variant}: UDP receive/control, ZeroMQ send failure/retry, cross-buffer capture, disk bytes, controller passed')
+        print(f'{variant}: UDP data input, TCP/JSON control, ZeroMQ retry and controller passed')
     except Exception:
         log.flush()
         print((directory / 'node.log').read_text())

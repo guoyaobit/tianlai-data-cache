@@ -6,7 +6,7 @@ serverCfg:
   controlBindIp: {{ tianlai_control_ip | to_json }}
   # Controller IP allowed to send commands.
   controlPeerIp: {{ tianlai_controller_ip | to_json }}
-  # Local management UDP control port.
+  # Local management TCP/JSON control port.
   controlPort: {{ tianlai_control_port | int }}
   # Log path; "-" writes only to stderr.
   logFilePath: "-"

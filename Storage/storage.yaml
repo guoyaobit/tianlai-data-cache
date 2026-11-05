@@ -149,7 +149,7 @@ storage:
 backend:
   # Dedispersion backend IP for completion notices.
   address: "192.168.200.10"
-  # UDP port for CAPTURE_RESULT/ACK_RESULT.
+  # TCP/JSON port for CAPTURE_RESULT/ACK_RESULT.
   port: 19001
-  # Storage management IP for UDP completion notices.
+  # Storage management IP for TCP completion notices.
   bindAddress: "192.168.200.250"
