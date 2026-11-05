@@ -7,6 +7,7 @@ Does not test Linux directory fsync, network transport, or production throughput
 import argparse
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--includes', required=True)
+    parser.add_argument('--includes', help='optional directory containing libzmq import library')
+    parser.add_argument('--json-header', help='path to the nlohmann single-header json.hpp')
     parser.add_argument('--cxx', default='g++')
     parser.add_argument('--integration', action='store_true',
                         help='link temporary ZeroMQ DLL and run real loopback with pyzmq')
@@ -26,6 +28,38 @@ def main():
         if tmp.parent != Path(tempfile.gettempdir()).resolve() or not tmp.name.startswith('tianlai-cxx-storage-'):
             raise RuntimeError('unsafe temporary directory')
         (tmp / 'arpa').mkdir()
+        (tmp / 'nlohmann').mkdir()
+        if args.json_header:
+            shutil.copyfile(args.json_header, tmp / 'nlohmann/json.hpp')
+        elif args.includes and (Path(args.includes) / 'nlohmann/json.hpp').is_file():
+            shutil.copyfile(Path(args.includes) / 'nlohmann/json.hpp', tmp / 'nlohmann/json.hpp')
+        else:
+            parser.error('--json-header or --includes/nlohmann/json.hpp is required')
+        (tmp / 'zmq.h').write_text(r'''#pragma once
+#include <cstddef>
+#include <cstdint>
+extern "C" {
+typedef struct { unsigned char data[64]; } zmq_msg_t;
+typedef struct { void* socket; uintptr_t fd; short events; short revents; } zmq_pollitem_t;
+void* zmq_ctx_new(void); int zmq_ctx_set(void*, int, int); int zmq_ctx_term(void*);
+void* zmq_socket(void*, int); int zmq_close(void*); int zmq_bind(void*, const char*);
+int zmq_setsockopt(void*, int, const void*, size_t); int zmq_send(void*, const void*, size_t, int);
+int zmq_poll(zmq_pollitem_t*, int, long); int zmq_errno(void); const char* zmq_strerror(int);
+int zmq_msg_init(zmq_msg_t*); int zmq_msg_close(zmq_msg_t*); int zmq_msg_recv(zmq_msg_t*, void*, int);
+void* zmq_msg_data(zmq_msg_t*); size_t zmq_msg_size(const zmq_msg_t*); int zmq_msg_more(const zmq_msg_t*);
+const char* zmq_msg_gets(const zmq_msg_t*, const char*);
+}
+#define ZMQ_ROUTER 6
+#define ZMQ_LINGER 17
+#define ZMQ_ROUTER_MANDATORY 33
+#define ZMQ_SNDHWM 23
+#define ZMQ_RCVHWM 24
+#define ZMQ_MAXMSGSIZE 22
+#define ZMQ_SNDMORE 2
+#define ZMQ_DONTWAIT 1
+#define ZMQ_POLLIN 1
+#define ZMQ_IO_THREADS 1
+''')
         (tmp / 'arpa/inet.h').write_text('#include <winsock2.h>\n#include <ws2tcpip.h>\n')
         (tmp / 'fcntl.h').write_text(r'''#pragma once
 #include_next <fcntl.h>
@@ -68,15 +102,17 @@ inline unsigned long crc32(unsigned long value, const unsigned char* data, unsig
 ''')
         binary = tmp / 'storage_test.exe'
         subprocess.run([args.cxx, '-std=c++17', '-O2', '-pthread', '-ffunction-sections',
-                        '-fdata-sections', '-I' + str(tmp), '-I' + args.includes,
+                        '-fdata-sections', '-I' + str(tmp),
                         str(ROOT / 'tests/storage_receiver_regression.cpp'),
                         '-Wl,--gc-sections', '-o', str(binary)], check=True, timeout=120)
         subprocess.run([str(binary), str(tmp / 'data')], check=True, timeout=60)
         subprocess.run([args.cxx, '-std=c++17', '-O2', '-pthread', '-I' + str(tmp),
-                        '-I' + args.includes, '-c', str(ROOT / 'tests/storage_test_server.cpp'),
+                        '-c', str(ROOT / 'tests/storage_test_server.cpp'),
                         '-o', str(tmp / 'storage_test_server.o')], check=True, timeout=120)
         if args.integration:
             service = tmp / 'storage_server.exe'
+            if not args.includes:
+                parser.error('--includes is required with --integration')
             deps = Path(args.includes).resolve()
             subprocess.run([args.cxx, '-std=c++17', '-O2', '-pthread', '-I' + str(tmp),
                             '-I' + str(deps), str(ROOT / 'tests/storage_test_server.cpp'),

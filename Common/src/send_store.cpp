@@ -2,8 +2,11 @@
 #include "zmq_store.h"
 #include "log_output.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <memory>
 #include <stdexcept>
+#include <thread>
 #include <zlib.h>
 
 static void sendJson(StoreConnection &socket, const std::string &json) {
@@ -32,12 +35,20 @@ static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event, 
               "\"frequency_bins_per_port\":86,\"total_valid_frequencies\":1024,\"fft_per_packet\":"
               "12"
             : "";
+    std::string portList = "[";
+    for (unsigned p = lane; p < c.receivePorts.size(); p += 2) {
+        if (portList.size() > 1)
+            portList += ',';
+        portList += std::to_string(p);
+    }
+    portList += ']';
     sendJson(socket,
              "{\"version\":1,\"format\":\"TLSTORE1\",\"event_id\":" + quoteJson(event.id) +
                  ",\"acquisition_id\":" + quoteJson(c.acquisitionId) + ",\"server_id\":" +
                  std::to_string(c.serverId) + ",\"lane\":" + std::to_string(lane) +
                  ",\"port_count\":" + std::to_string(c.receivePorts.size()) + ",\"start_period\":" +
                  std::to_string(event.start) + ",\"period_count\":" + std::to_string(event.count) +
+                 ",\"ports\":" + portList +
                  ",\"integration_per_trace\":" + std::to_string(c.integrationPerTrace) +
                  ",\"period_microseconds\":" + std::to_string(c.periodMicroseconds) +
                  ",\"packet_bytes\":" + std::to_string(c.inputDataBytes + INPUT_HEADER_BYTES) +
@@ -55,7 +66,7 @@ static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event, 
     }
     // Reuse one block across ports and chunks. The first 40 bytes are the wire header.
     std::vector<unsigned char> message;
-    for (unsigned p = 0; p < c.receivePorts.size(); ++p) {
+    for (unsigned p = lane; p < c.receivePorts.size(); p += 2) {
         const auto &port = c.receivePorts[p];
         for (uint64_t start = event.start; start < event.start + event.count;) {
             uint64_t count = std::min<uint64_t>(c.chunkPeriods, event.start + event.count - start);
@@ -99,14 +110,34 @@ void InitSendStoreThread(CacheRuntime *para) {
         std::lock_guard<std::mutex> lock(para->eventMutex);
         event = para->event;
     }
-    StorePacer pacer(para->config->sendRateBitsPerSecond);
+    const uint64_t laneRate = para->config->sendRateBitsPerSecond / 2;
+    std::array<std::unique_ptr<StorePacer>, 2> pacers{
+        std::unique_ptr<StorePacer>(new StorePacer(laneRate)),
+        std::unique_ptr<StorePacer>(new StorePacer(laneRate))};
     const auto started = std::chrono::steady_clock::now();
-    std::string error;
+    std::array<std::string, 2> laneErrors;
+    std::array<std::thread, 2> workers;
     try {
-        sendLane(*para, 0, event, pacer);
-    } catch (const std::exception &e) {
-        error = e.what();
+        for (unsigned lane = 0; lane < 2; ++lane) {
+            workers[lane] = std::thread([&, lane] {
+                try {
+                    sendLane(*para, lane, event, *pacers[lane]);
+                } catch (const std::exception &caught) {
+                    laneErrors[lane] = caught.what();
+                }
+            });
+        }
+    } catch (const std::exception &caught) {
+        laneErrors[0] = caught.what();
     }
+    for (auto &worker : workers)
+        if (worker.joinable())
+            worker.join();
+    std::string error;
+    for (unsigned lane = 0; lane < 2; ++lane)
+        if (!laneErrors[lane].empty())
+            error += (error.empty() ? "" : "; ") + std::string("lane ") +
+                     std::to_string(lane) + ": " + laneErrors[lane];
     std::string logMessage;
     {
         std::lock_guard<std::mutex> lock(para->eventMutex);

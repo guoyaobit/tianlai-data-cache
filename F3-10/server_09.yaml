@@ -43,3 +43,8 @@ serverCfg:
   sendDestinationIp0: "192.168.210.250"
   # Storage receiver ZeroMQ/TCP port.
   sendDestinationPort0: 20009
+  # Second storage-network interface on the untagged lane-1 subnet.
+  sendEthName1: "CHANGE_ME_SEND_1"
+  sendSourceIp1: "192.168.211.109"
+  sendDestinationIp1: "192.168.211.250"
+  sendDestinationPort1: 20109

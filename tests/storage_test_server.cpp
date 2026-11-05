@@ -20,16 +20,15 @@ int main(int argc, char **argv) {
         }
         require(!directory.empty() && receiver_count == STORAGE_PORT_COUNT,
                 "invalid storage test arguments");
-        std::vector<unsigned> ports;
-        std::vector<std::string> sources;
-        for (unsigned server = 0; server < STORAGE_PORT_COUNT; ++server) {
-            ports.push_back(port + server);
-            sources.push_back("127.0.0." + std::to_string(server + 1));
-        }
+        std::vector<ReceiverEndpoint> endpoints;
+        for (unsigned server = 0; server < CACHE_NODE_COUNT; ++server)
+            for (unsigned lane = 0; lane < LANE_COUNT; ++lane)
+                endpoints.push_back({server, lane, port + lane * CACHE_NODE_COUNT + server, bind,
+                    "127.0.0." + std::to_string(1 + server + lane * CACHE_NODE_COUNT)});
         fs::create_directories(directory);
         std::signal(SIGINT, stop_handler);
         std::signal(SIGTERM, stop_handler);
-        serve(directory, bind, ports, sources, notify_address, notify_port, notify_bind);
+        serve(directory, endpoints, 4, notify_address, notify_port, notify_bind);
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "[FATAL] " << error.what() << '\n';

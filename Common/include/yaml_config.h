@@ -49,11 +49,11 @@ class YamlConfig {
     unsigned chunkPeriods = 64;
     unsigned controlPort = 19000, socketTimeoutSeconds = 15;
     // ZeroMQ application-byte rate limit; excludes network overhead and retransmissions.
-    uint64_t sendRateBitsPerSecond = 32000000000ULL / 14;
+    uint64_t sendRateBitsPerSecond = 5600000000ULL;
     uint64_t transitionBytes = 32ULL << 30, reserveMemoryBytes = 48ULL << 30;
     bool prefaultMemory = true;
     std::string acquisitionId, controlBindIp, controlPeerIp, logFilePath;
     std::vector<ReceivePortConfig> receivePorts;
-    SendPortConfig sendPorts[1];
+    SendPortConfig sendPorts[2];
 };
 #endif

@@ -14,7 +14,9 @@
           - "'CHANGE_ME' not in tianlai_acquisition_id"
           - tianlai_controller_ip is match('^[0-9.]+$')
           - tianlai_backend_ip is match('^[0-9.]+$')
-          - tianlai_storage_ip is match('^[0-9.]+$')
+          - tianlai_storage_ip0 is match('^[0-9.]+$')
+          - tianlai_storage_ip1 is match('^[0-9.]+$')
+          - tianlai_storage_ip0 != tianlai_storage_ip1
           - tianlai_storage_directory is match('^/[^ ]+$')
           - "'CHANGE_ME' not in tianlai_storage_directory"
           - tianlai_root is match('^/[^ ]+$')
@@ -26,6 +28,11 @@
           - tianlai_storage_port | int >= 1
           - tianlai_storage_port | int <= 65535
           - (tianlai_storage_port | int) + 13 <= 65535
+          - tianlai_storage_lane1_port | int >= 1
+          - (tianlai_storage_lane1_port | int) + 13 <= 65535
+          - "(tianlai_storage_lane1_port | int) > (tianlai_storage_port | int) + 13 or (tianlai_storage_port | int) > (tianlai_storage_lane1_port | int) + 13"
+          - tianlai_storage_io_threads | int >= 1
+          - tianlai_storage_io_threads | int <= 32
           - tianlai_controller_port | int >= 1
           - tianlai_controller_port | int <= 65535
         fail_msg: Complete inventory_example.yml with all 14 nodes and actual deployment values.
@@ -36,9 +43,15 @@
           - hostvars[item].tianlai_server_id | int >= 0
           - hostvars[item].tianlai_server_id | int <= 13
           - hostvars[item].tianlai_control_ip | default('') is match('^[0-9.]+$')
-          - hostvars[item].tianlai_send_ip | default('') is match('^[0-9.]+$')
-          - hostvars[item].tianlai_send_interface | default('') is match('^[A-Za-z0-9_.:-]+$')
-          - "'CHANGE_ME' not in (hostvars[item].tianlai_send_interface | default('CHANGE_ME'))"
+          - hostvars[item].tianlai_send_ips | default([]) | length == 2
+          - hostvars[item].tianlai_send_interfaces | default([]) | length == 2
+          - hostvars[item].tianlai_send_ips | default([]) | unique | list | length == 2
+          - hostvars[item].tianlai_send_interfaces | default([]) | unique | list | length == 2
+          - (hostvars[item].tianlai_send_ips | default([]) | first | default('')) is match('^[0-9.]+$')
+          - (hostvars[item].tianlai_send_ips | default([]) | last | default('')) is match('^[0-9.]+$')
+          - (hostvars[item].tianlai_send_interfaces | default([]) | first | default('')) is match('^[A-Za-z0-9_.:-]+$')
+          - (hostvars[item].tianlai_send_interfaces | default([]) | last | default('')) is match('^[A-Za-z0-9_.:-]+$')
+          - "'CHANGE_ME' not in (hostvars[item].tianlai_send_interfaces | default([]) | join(' '))"
           - hostvars[item].tianlai_receive_devices | default([]) | length == (8 if hostvars[item].tianlai_server_id | int < 3 else 4)
           - "'CHANGE_ME' not in (hostvars[item].tianlai_receive_devices | default([]) | join(' '))"
           - hostvars[item].tianlai_receive_devices | default([]) | unique | list | length == hostvars[item].tianlai_receive_devices | default([]) | length
@@ -50,7 +63,8 @@
         that:
           - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_server_id') | map('int') | sort == range(0, 14) | list
           - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_control_ip') | unique | list | length == 14
-          - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_send_ip') | unique | list | length == 14
+          - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_send_ips') | map('first') | unique | list | length == 14
+          - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_send_ips') | map('last') | unique | list | length == 14
     - name: Require controller and storage SSH targets
       ansible.builtin.assert:
         that: "'CHANGE_ME' not in (hostvars[item].ansible_host | default('CHANGE_ME'))"

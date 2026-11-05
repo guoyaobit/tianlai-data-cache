@@ -40,7 +40,8 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
         std::cout << "server=" << config.serverId << " receivePorts=" << config.receivePorts.size()
                   << " estimatedBytes=" << config.allocationBytes()
                   << " transitionPeriods=" << config.transitionPeriods() << "\n";
-        std::cout << "transport=ZeroMQ sendRateBitsPerSecond=" << config.sendRateBitsPerSecond << "\n";
+        std::cout << "transport=ZeroMQ lanes=2 sendRateBitsPerSecond="
+                  << config.sendRateBitsPerSecond << "\n";
         for (unsigned p = 0; p < config.receivePorts.size(); ++p) {
             const auto &port = config.receivePorts[p];
             std::cout << "port=" << p << " packetId=" << port.packetId
@@ -67,6 +68,13 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
                 if (port.ethName == "-" || port.ethName.find("CHANGE_ME") != std::string::npos ||
                     port.sourceIp == "0.0.0.0" || port.destinationIp == "0.0.0.0")
                     throw std::runtime_error("configure dedicated send interfaces before running");
+            const auto &lane0 = config.sendPorts[0];
+            const auto &lane1 = config.sendPorts[1];
+            if (lane0.ethName == lane1.ethName || lane0.sourceIp == lane1.sourceIp ||
+                lane0.destinationIp == lane1.destinationIp ||
+                lane0.destinationPort == lane1.destinationPort)
+                throw std::runtime_error(
+                    "dual send lanes require distinct interfaces, addresses and ports");
         }
         initLogOut(config.logFilePath);
         LOG("Cache data is memory-only; a process or host restart discards all buffered events.",

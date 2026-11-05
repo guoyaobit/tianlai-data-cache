@@ -101,7 +101,7 @@ void StorePacer::wait(size_t bytes, const ThreadFlags *flags) {
 
 // Validate the source interface and address, then create a bounded, timeout-enabled ZeroMQ request connection.
 StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane, StorePacer &limit)
-    : para(p), pacer(limit) {
+    : para(p), pacer(limit), laneIndex(lane) {
     const auto &config = para.config->sendPorts[lane];
     validateSource(config);
     context = zmq_ctx_new();
@@ -179,8 +179,8 @@ void StoreConnection::sendMessage(const std::vector<unsigned char> &message, boo
     // it has traversed the network and been written. Allow for configured
     // slow transfer rates in addition to the disk/feedback timeout.
     const uint64_t transferSeconds =
-        (message.size() * 8ULL + para.config->sendRateBitsPerSecond - 1) /
-        para.config->sendRateBitsPerSecond;
+        (message.size() * 8ULL + pacer.bitsPerSecond() - 1) /
+        pacer.bitsPerSecond();
     deadline = std::chrono::steady_clock::now() +
                std::chrono::seconds(para.config->socketTimeoutSeconds + 2 * transferSeconds);
     Message reply;

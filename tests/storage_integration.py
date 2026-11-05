@@ -36,13 +36,13 @@ def find_port_range(count):
     raise RuntimeError('no contiguous TCP port range available')
 
 
-def send_event(context, port, root, server):
+def send_event(context, port, root, server, lane):
     remote = server >= 11
     ports, boards, packet_bytes = ((8, 36, 2320) if server < 3 else
                                   (4, 24, 8272) if remote else (4, 18, 8848))
     per_board = 2 if remote else 1
     meta = dict(version=1, format='TLSTORE1', acquisition_id='acq', event_id='event',
-                server_id=server, lane=0, port_count=ports, start_period=100,
+                server_id=server, lane=lane, port_count=ports, ports=list(range(lane, ports, 2)), start_period=100,
                 period_count=1, integration_per_trace=100, period_microseconds=10000,
                 packet_bytes=packet_bytes)
     if remote:
@@ -52,7 +52,7 @@ def send_event(context, port, root, server):
     sock.setsockopt(zmq.LINGER, 0)
     sock.setsockopt(zmq.SNDTIMEO, 30000)
     sock.setsockopt(zmq.RCVTIMEO, 30000)
-    sock.connect(f'tcp://127.0.0.{server + 1};127.0.0.1:{port}')
+    sock.connect(f'tcp://127.0.0.{server + 1 + lane * 14};127.0.0.1:{port}')
     try:
         encoded = json.dumps(meta, separators=(',', ':')).encode()
         sock.send(struct.pack('!I', len(encoded)) + encoded)
@@ -64,7 +64,7 @@ def send_event(context, port, root, server):
             assert result['server_id'] == server and result['event_id'] == 'event'
             return
         expected = []
-        for p in range(ports):
+        for p in range(lane, ports, 2):
             packet_id = (server * 8 + p if server < 3 else
                          2 * ((server - 11) * 4 + p) if remote else 24 + (server - 3) * 2 + p // 2)
             board_begin = 0 if server < 3 else 36 if remote else (p % 2) * 18
@@ -84,8 +84,8 @@ def send_event(context, port, root, server):
     finally:
         sock.close()
     directory = root / 'acq' / 'event' / f'server-{server}'
-    marker = json.loads((directory / 'lane-0.stored.json').read_text())
-    for p, body in enumerate(expected):
+    marker = json.loads((directory / f'lane-{lane}.stored.json').read_text())
+    for p, body in zip(range(lane, ports, 2), expected):
         assert (directory / f'port-{p}.bin').read_bytes() == body
         assert marker['missing_packets'][str(p)] == boards - 1
         assert marker['file_crc32'][str(p)] == zlib.crc32(body)
@@ -103,7 +103,7 @@ def main():
         binary = ROOT / 'Storage/tianlai-storage'
     with tempfile.TemporaryDirectory(prefix='tianlai-native-store-') as temporary:
         root = Path(temporary)
-        port_count = 14
+        port_count = 28
         port = find_port_range(port_count)
         context = zmq.Context()
         backend = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -118,10 +118,12 @@ def main():
         else:
             config = root / 'storage.yaml'
             receivers = '\n'.join(
-                f'    - serverId: {server}\n      port: {port + server}\n'
-                f'      allowedSource: "127.0.0.{server + 1}"' for server in range(14))
+                f'    - serverId: {server}\n      lane: {lane}\n      bindAddress: "127.0.0.1"\n'
+                f'      port: {port + lane * 14 + server}\n'
+                f'      allowedSource: "127.0.0.{server + 1 + lane * 14}"'
+                for server in range(14) for lane in range(2))
             config.write_text(
-                f'storage:\n  directory: "{root.as_posix()}"\n  bindAddress: "127.0.0.1"\n'
+                f'storage:\n  directory: "{root.as_posix()}"\n  ioThreads: 4\n'
                 f'  receivers:\n{receivers}\n'
                 f'backend:\n  address: "127.0.0.1"\n  port: {notify_port}\n'
                 '  bindAddress: "127.0.0.1"\n', encoding='utf-8')
@@ -143,9 +145,10 @@ def main():
                     if time.monotonic() >= deadline:
                         raise TimeoutError('storage service did not start')
                     time.sleep(.05)
-            with ThreadPoolExecutor(max_workers=14) as pool:
-                futures = [pool.submit(send_event, context, port + server % port_count, root, server)
-                           for server in range(14)]
+            with ThreadPoolExecutor(max_workers=28) as pool:
+                futures = [pool.submit(send_event, context, port + lane * 14 + server,
+                                       root, server, lane)
+                           for server in range(14) for lane in range(2)]
                 for future in futures:
                     future.result(timeout=60)
             body, source = backend.recvfrom(1201)
@@ -167,7 +170,7 @@ def main():
                 time.sleep(.05)
             # A lost node-side final reply now returns the durable result at metadata,
             # without clearing the completion marker or rewriting the files.
-            send_event(context, port + 3 % port_count, root, 3)
+            send_event(context, port + 3, root, 3, 0)
         finally:
             process.terminate()
             try:
@@ -179,7 +182,7 @@ def main():
             context.term()
         if os.name != 'nt':  # Windows terminate() is not a graceful SIGTERM.
             assert process.returncode == 0, process.stderr.read()
-    print('C++ storage: 14 clients across 14 dedicated receiver ports, UDP completion and retry passed')
+    print('C++ storage: 28 lane clients, UDP completion and retry passed')
 
 
 if __name__ == '__main__':

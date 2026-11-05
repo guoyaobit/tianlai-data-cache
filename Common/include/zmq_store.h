@@ -2,11 +2,12 @@
 #define STORE_ZMQSTORE_H_
 #include "functions.h"
 
-// One pacer per node/event. No accumulated idle credits.
+// One pacer per send lane and event. No accumulated idle credits.
 class StorePacer {
   public:
     explicit StorePacer(uint64_t bitsPerSecond) : rate(bitsPerSecond) {}
     void wait(size_t bytes, const ThreadFlags *flags = nullptr);
+    uint64_t bitsPerSecond() const { return rate; }
 
   private:
     uint64_t rate;
@@ -30,6 +31,7 @@ class StoreConnection {
   private:
     CacheRuntime &para;
     StorePacer &pacer;
+    unsigned laneIndex = 0;
     void *context = nullptr;
     void *socket = nullptr;
     std::vector<unsigned char> result;

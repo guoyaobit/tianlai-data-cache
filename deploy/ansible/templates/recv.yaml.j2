@@ -24,7 +24,7 @@ recvCfg:
   transitionWarnPercent: 80
   # Integration periods per storage block (1-64).
   chunkPeriods: 64
-  # Per-node ZeroMQ payload rate limit (bit/s).
-  sendRateBitsPerSecond: 2285714285
+  # Combined payload limit for both send lanes (bit/s).
+  sendRateBitsPerSecond: 5600000000
   # Send/reply timeout (s); large messages get extra time.
   socketTimeoutSeconds: 60

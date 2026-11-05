@@ -18,11 +18,14 @@ serverCfg:
   # Local UDP port for simulation only.
   simulationPort{{ loop.index0 }}: {{ 20000 + (tianlai_server_id | int) * 10 + loop.index0 }}
 {% endfor %}
-  # Storage-network transmit interface; must match source IP.
-  sendEthName0: {{ tianlai_send_interface | to_json }}
-  # Local storage-network source IP.
-  sendSourceIp0: {{ tianlai_send_ip | to_json }}
-  # Storage receiver data-network IP.
-  sendDestinationIp0: {{ tianlai_storage_ip | to_json }}
+  # Lane 0 uses physical port 5 and the first untagged subnet.
+  sendEthName0: {{ tianlai_send_interfaces[0] | to_json }}
+  sendSourceIp0: {{ tianlai_send_ips[0] | to_json }}
+  sendDestinationIp0: {{ tianlai_storage_ip0 | to_json }}
   # Dedicated node port: base port + SERVERID.
   sendDestinationPort0: {{ (tianlai_storage_port | int) + (tianlai_server_id | int) }}
+  # Lane 1 uses physical port 6 and the second untagged subnet.
+  sendEthName1: {{ tianlai_send_interfaces[1] | to_json }}
+  sendSourceIp1: {{ tianlai_send_ips[1] | to_json }}
+  sendDestinationIp1: {{ tianlai_storage_ip1 | to_json }}
+  sendDestinationPort1: {{ (tianlai_storage_lane1_port | int) + (tianlai_server_id | int) }}

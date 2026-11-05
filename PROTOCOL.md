@@ -88,7 +88,7 @@ COMPLETED 只表示事件保存完成，不代表已经恢复完整 100 秒历�
 
 ### 写盘完成主动通知
 
-C++ 存储服务确认 0～13 号节点的 `lane-0.stored.json` 全部持久化且事件元数据一致后，先写入事件级 `storage-complete.json`，再从 YAML 的 `backend.bindAddress` 指定的管理网 IPv4 地址，通过 UDP 向 `backend.address:backend.port` 指定的消色散后端发送一个不超过 1200 B 的 UTF-8 JSON 数据报：
+C++存储服务确认0～13号节点各自的`lane-0.stored.json`和`lane-1.stored.json`全部持久化且事件元数据一致后，先写入事件级`storage-complete.json`，再通过UDP通知消色散后端：
 
 ```json
 {"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"acq-20260918-001","event_id":"event-000001","start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0,"11":0,"12":0,"13":0}}
@@ -112,7 +112,7 @@ PREPARE 字段与 CAPTURE 相同，仅 command 不同。
 |---|---|---|
 | PREPARE | event_id、start、period_count | 检查历史区间并异步保护，返回 PREPARING/PREPARED |
 | COMMIT | event_id | 全部节点准备后，由控制器转为 QUEUED |
-| SEND | event_id | QUEUED 或 SEND_FAILED 开始单口限速 ZeroMQ 传输；忙时不重复启动 |
+| SEND | event_id | QUEUED或SEND_FAILED时并行启动两个限速ZeroMQ lane；忙时不重复启动 |
 | QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、过渡区峰值和 error |
 | RELEASE | event_id | 只有该节点全部接收口数据可靠落盘后，即 STORED 状态，才允许释放冻结区 |
 | CANCEL | event_id | 未发送或发送失败时放弃事件；PREPARING 时延后安全释放 |
@@ -123,19 +123,19 @@ PREPARE 字段与 CAPTURE 相同，仅 command 不同。
 发送失败为 SEND_FAILED，仍保护数据；准备失败为 REJECTED；明确取消为 CANCELLED。
 释放后历史不足时节点 QUERY_STATUS 返回 WARMING，而不是 READY。
 
-控制器只有在全部节点 PREPARED 后才并行提交仍处于 PREPARED 的节点，全部提交完成后才授权发送。14 个节点并行发送，每节点一个 ZeroMQ 连接，按配置限制应用层发送速率。
+控制器只有在全部节点PREPARED后才授权发送。14个节点并行，每节点两个ZeroMQ连接；任一lane失败都会使节点进入SEND_FAILED并继续保护数据。
 默认 RPC 重试间隔 200 ms、5 次；准备/发送长任务通过查询等待。
 调度器重启时读取日志，未完成事件先 PAUSED；RESUME 根据节点现状继续，不盲目重放 SEND。
 
 ## ZeroMQ 数据协议 TLSTORE1
 
-数据通道和管理网 UDP 控制通道独立。每台缓存服务器通过独立的 ZeroMQ REQ socket 以 TCP 连接存储端。YAML 的 `storage.receivers` 必须显式列出 0～13 号节点各自的 `serverId`、`port` 和 `allowedSource`；存储端据此启动 14 个 ROUTER socket 和 14 个网络接收线程。默认端口为 TCP 20000～20013。来源 IP、监听端口和元数据 server_id 任一不匹配都会拒绝会话。每个节点会话另由独立工作线程完成校验和写盘，lane 固定为 0，覆盖本机所有接收口。TLSTORE1 元数据中的 `port_count` 表示缓存节点的 FPGA 接收口数量，与存储监听线程数无关。
+数据通道和管理网UDP控制通道独立。每台缓存服务器建立lane 0和lane 1两个ZeroMQ REQ连接，分别绑定物理5/6口。lane 0只发送偶数接收口，lane 1只发送奇数接收口。`storage.receivers`必须显式列出28个`serverId/lane/bindAddress/port/allowedSource`组合；存储端据此启动28个ROUTER监听线程。默认端口为20000～20013和20100～20113。任一端点不匹配都会拒绝会话。
 
 每个 ZeroMQ 请求是一条消息：先发送带 4 字节长度的 JSON 元数据，然后逐条发送 40 字节块头和正文，最后发送 40 字节 END。通常除 END 外每条消息由存储端成功校验并写入后回复 ASCII OK；该 OK 不是持久化确认。存储端累计 256 MiB 或经过 1 秒后批量 `fdatasync`，END 在全部文件及完成标记持久化后回复 4 字节长度前缀的 STORED JSON。若相同元数据对应的持久化标记已经存在，首条元数据消息直接返回 STORED，发送端不再重传数据。发送端验证事件、采集编号、节点和 lane 后才进入 STORED。消息排队、块级 OK、TCP ACK 或 ZeroMQ send 成功均不代表完整落盘。
 
-每次 SEND 使用新的 ZeroMQ socket 会话。超时、断线、校验错误或回执错误进入 SEND_FAILED，事件仍受保护。未形成持久化标记时，重试从该节点事件开头发送并按固定偏移重写；标记已存在时直接返回 STORED。同节点不可并发写，同事件元数据冲突时拒绝。旧会话超时清理前重试可能返回忙，需等待并重试。HWM 限制消息数量而非字节，操作系统缓存与 libzmq 缓冲仍占用额外内存。
+每次SEND为两个lane分别建立新会话。未完成lane从头重传；已有持久化标记的lane直接返回STORED。同一server/lane不可并发写，但同一server的两个lane可以并行写入互不重叠的端口文件。
 
-sendRateBitsPerSecond 控制应用消息平均字节速率，默认每节点 2,285,714,285 bit/s，14 台合计约 32 Gbit/s。该数值不含 ZeroMQ、TCP/IP、链路开销和内核重传，消息排队也可能产生突发，不能保证物理链路严格不超过 32 Gbit/s；若须严格限制，需使用网络层限速并实测，或调低应用速率留余量。socketTimeoutSeconds 控制超时。
+`sendRateBitsPerSecond`控制单节点两个lane合计速率，默认5.6 Gbit/s，平均分配到两个lane；14台合计78.4 Gbit/s。该值不含协议开销，须为单100G接收口和磁盘阵列保留余量。
 
 ### TLSTORE1 消息内容
 
@@ -150,6 +150,7 @@ sendRateBitsPerSecond 控制应用消息平均字节速率，默认每节点 2,2
   "server_id": 3,
   "lane": 0,
   "port_count": 4,
+  "ports": [0, 2],
   "start_period": 6045000,
   "period_count": 15000,
   "integration_per_trace": 50000,
@@ -157,6 +158,8 @@ sendRateBitsPerSecond 控制应用消息平均字节速率，默认每节点 2,2
   "packet_bytes": 8848
 }
 ```
+
+`port_count`仍表示节点接收口总数；`ports`列出本lane实际发送的端口，lane 0必须为偶数口，lane 1必须为奇数口。两个列表互斥且并集覆盖全部接收口。
 
 随后逐接收口发送数据块，每块默认 64 个积分周期，最后一块可以不足 64 个。
 块头共 40 B，所有整数大端，禁止直接发送带本机填充的 C++ struct：

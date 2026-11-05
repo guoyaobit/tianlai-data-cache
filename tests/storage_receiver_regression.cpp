@@ -8,9 +8,10 @@ static void put32(Bytes &out, uint32_t value) {
 static void put64(Bytes &out, uint64_t value) {
     put32(out, static_cast<uint32_t>(value >> 32)); put32(out, static_cast<uint32_t>(value));
 }
-static Bytes metadata(const std::string &event, unsigned count = 1) {
+static Bytes metadata(const std::string &event, unsigned lane = 0, unsigned count = 1) {
     return framed_json(json{{"version", 1}, {"format", "TLSTORE1"}, {"event_id", event},
-        {"acquisition_id", "acq"}, {"server_id", 3}, {"lane", 0}, {"port_count", 4},
+        {"acquisition_id", "acq"}, {"server_id", 3}, {"lane", lane}, {"port_count", 4},
+        {"ports", lane == 0 ? json{0, 2} : json{1, 3}},
         {"start_period", 100}, {"period_count", count}, {"integration_per_trace", 100},
         {"period_microseconds", 10000}, {"packet_bytes", 8848}});
 }
@@ -42,24 +43,30 @@ int main(int argc, char **argv) {
     fs::create_directories(root);
     Shared shared;
     {
-        EventWriter wrong_shard(root, shared, 0, 4);
-        rejects([&] { wrong_shard.begin(metadata("wrong-shard")); }, "wrong storage port");
+        EventWriter wrong_endpoint(root, shared, 0, 0);
+        rejects([&] { wrong_endpoint.begin(metadata("wrong-endpoint")); }, "wrong storage port");
     }
     {
-        EventWriter writer(root, shared);
-        writer.begin(metadata("event"));
+        EventWriter writer(root, shared, 3, 0);
+        EventWriter lane1(root, shared, 3, 1);
+        writer.begin(metadata("event", 0));
+        lane1.begin(metadata("event", 1));
         EventWriter concurrent(root, shared);
         rejects([&] { concurrent.begin(metadata("other")); }, "already receiving");
         rejects([&] { writer.block(block(0, true)); }, "missing packet slot");
         auto bad_crc = block(0); bad_crc.back() = 1;
         rejects([&] { writer.block(bad_crc); }, "checksum mismatch");
-        for (unsigned p = 0; p < 4; ++p) writer.block(block(p));
+        for (unsigned p : {0U, 2U}) writer.block(block(p));
+        for (unsigned p : {1U, 3U}) lane1.block(block(p));
         auto result = writer.finish(end_message());
+        auto lane1_result = lane1.finish(end_message());
         assert(read32(result.data()) == result.size() - 4);
+        assert(read32(lane1_result.data()) == lane1_result.size() - 4);
         assert(json::parse(result.begin() + 4, result.end()).at("status") == "STORED");
     }
     auto directory = root / "acq/event/server-3";
     json marker; std::ifstream(directory / "lane-0.stored.json") >> marker;
+    assert(fs::exists(directory / "lane-1.stored.json"));
     assert(marker.at("missing_packets").at("0") == 17);
     std::ifstream in(directory / "port-0.bin", std::ios::binary);
     Bytes saved((std::istreambuf_iterator<char>(in)), {});
@@ -67,7 +74,7 @@ int main(int argc, char **argv) {
     assert(saved == Bytes(expected.begin() + CHUNK_HEADER, expected.end()));
     {
         EventWriter conflict(root, shared);
-        rejects([&] { conflict.begin(metadata("event", 2)); }, "metadata conflicts");
+        rejects([&] { conflict.begin(metadata("event", 0, 2)); }, "metadata conflicts");
         assert(fs::exists(directory / "lane-0.stored.json"));
     }
     {
@@ -77,11 +84,33 @@ int main(int argc, char **argv) {
         assert(json::parse(retry_result.begin() + 4, retry_result.end()).at("status") == "STORED");
     }
     assert(fs::exists(directory / "lane-0.stored.json"));
+    // Event-level completion requires both durable lanes from all 14 servers.
+    const auto complete = root / "acq/complete";
+    for (unsigned server = 0; server < CACHE_NODE_COUNT; ++server) {
+        const auto node = complete / ("server-" + std::to_string(server));
+        fs::create_directories(node);
+        for (unsigned lane = 0; lane < LANE_COUNT; ++lane) {
+            const auto prefix = "lane-" + std::to_string(lane);
+            json meta = {{"version", 1}, {"format", "TLSTORE1"}, {"acquisition_id", "acq"},
+                         {"event_id", "complete"}, {"server_id", server}, {"lane", lane},
+                         {"start_period", 100}, {"period_count", 1},
+                         {"integration_per_trace", 100}, {"period_microseconds", 10000}};
+            json stored = {{"version", 1}, {"status", "STORED"}, {"acquisition_id", "acq"},
+                           {"event_id", "complete"}, {"server_id", server}, {"lane", lane},
+                           {"missing_packets", {{std::to_string(lane), lane + 1}}}};
+            atomic_json(node / (prefix + ".meta.json"), meta);
+            atomic_json(node / (prefix + ".stored.json"), stored);
+        }
+    }
+    const auto notice = build_completion_notice(complete);
+    assert(notice && notice->at("status") == "STORED");
+    assert(notice->at("missing_by_server").at("0") == 3);
+    assert(fs::exists(complete / "storage-complete.json"));
     // Exercise the actual worker's request/response ordering without a network socket.
     Responses responses;
     Session session("session-1");
     session.worker = std::thread(run_session, &session, std::cref(root), std::ref(shared),
-                                 std::ref(responses), 0, 1);
+                                 std::ref(responses), 3, 0);
     auto exchange = [&](Bytes message) {
         assert(session.put(std::move(message)));
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -98,10 +127,10 @@ int main(int argc, char **argv) {
         throw std::runtime_error("session reply timeout");
     };
     assert(exchange(metadata("session")).body == Bytes({'O', 'K'}));
-    for (unsigned p = 0; p < 4; ++p) assert(exchange(block(p)).body == Bytes({'O', 'K'}));
+    for (unsigned p : {0U, 2U}) assert(exchange(block(p)).body == Bytes({'O', 'K'}));
     auto result = exchange(end_message());
     assert(result.finished && json::parse(result.body.begin() + 4, result.body.end()).at("status") == "STORED");
     session.worker.join();
     assert(fs::exists(root / "acq/session/server-3/lane-0.stored.json"));
-    std::cout << "C++ storage: shard mapping, validation, workers and idempotent retry passed\n";
+    std::cout << "C++ storage: dual-lane mapping, validation and idempotent retry passed\n";
 }

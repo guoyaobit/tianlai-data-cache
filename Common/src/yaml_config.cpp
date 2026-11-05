@@ -61,7 +61,7 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     chunkPeriods = number(cfg, "chunkPeriods", 1, 64);
     socketTimeoutSeconds = number(cfg, "socketTimeoutSeconds", 1, 300);
     if (cfg["sendRateBitsPerSecond"])
-        sendRateBitsPerSecond = number(cfg, "sendRateBitsPerSecond", 1000000, 32000000000ULL / 14);
+        sendRateBitsPerSecond = number(cfg, "sendRateBitsPerSecond", 2000000, 18000000000ULL);
     if (cfg["udpFragmentBytes"])
         throw std::runtime_error("udpFragmentBytes is obsolete; remove it for ZeroMQ storage transport");
     prefaultMemory = number(cfg, "prefaultMemory", 0, 1) != 0;
@@ -99,7 +99,7 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
         }
         receivePorts.push_back(port);
     }
-    for (unsigned p = 0; p < 1; ++p) {
+    for (unsigned p = 0; p < 2; ++p) {
         auto suffix = std::to_string(p);
         sendPorts[p].ethName = field(node, "sendEthName" + suffix);
         sendPorts[p].sourceIp = ip(node, "sendSourceIp" + suffix);

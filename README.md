@@ -43,7 +43,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 先修改每台对应的 `server_XX.yaml` 和该组的 `receive_config.yaml`：
 
 - 将 `deviceName0..7` 或 `deviceName0..3` 改为实际接收 PCI 地址。
-- 填写一个专用发送接口 `sendEthName0`、本地 IPv4 及存储端对应 IPv4/端口。
+- 填写物理5/6口对应的 `sendEthName0/1`、两个无标签子网的本地IPv4及存储端地址/端口。
 - `controlBindIp/controlPort` 是管理网 UDP 监听地址；`controlPeerIp` 只允许调度机地址。
 - 所有节点及调度程序使用同一个实际 `acquisitionId`；前端复位后重新建立任务。
 - `transitionWarnPercent` 默认 80；过渡区达到该占用比例时记录一次 WARN，并在查询结果中置警告标志。
@@ -151,9 +151,9 @@ QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
 
 ## ZeroMQ 回传与存储
 
-14 台缓存服务器并行回传，每台通过一个专用发送接口使用基于 TCP 的 ZeroMQ 连接至存储服务器。C++ 存储服务启动 14 个网络接收线程，分别监听 TCP 20000～20013；节点固定连接 `20000 + server_id`，每个端口只接受对应节点，同一节点重试时不改变端口。每个活动节点另有独立写盘线程，因此网络收包和磁盘校验/写入不会共用一个串行线程。消色散后端与本系统之间的触发、查询、回复和完成通知统一使用 UDP/JSON；FPGA 输入也使用 UDP。发送端要求 libzmq 支持 ZMQ_BINDTODEVICE，且进程有相应权限；源 IP 必须属于指定的发送接口。
+14 台缓存服务器并行回传，每台通过物理5/6口建立两个基于TCP的ZeroMQ连接。lane 0发送偶数接收口，lane 1发送奇数接收口，数据不复制。两个发送口使用不同的无标签IP子网；存储服务器同一个100G物理口配置两个IP。C++存储服务启动28个网络接收线程：lane 0监听20000～20013，lane 1监听20100～20113。每个活动lane另有独立写盘线程。发送端要求libzmq支持ZMQ_BINDTODEVICE，且源IP必须属于指定接口。
 
-每台 sendRateBitsPerSecond 默认 2,285,714,285 bit/s，是提交给 ZeroMQ 的应用层平均字节速率；14 台合计约 32 Gbit/s。ZeroMQ、TCP/IP 与链路开销、重传以及消息排队引起的突发不在额度内，不保证物理链路严格不超过 32 Gbit/s。若须严格限制线速，需在网络层配置并验证限速，或调低应用速率预留余量。
+`sendRateBitsPerSecond` 是单节点两个lane合计的应用层限速，默认5.6 Gbit/s；程序平均分配为每lane约2.8 Gbit/s，14台合计78.4 Gbit/s，为单100G接收口预留协议和重传余量。该值不是线速保证，必须结合存储阵列持续写入能力实测。
 
 每条 ZeroMQ 消息由存储端检查并处理；数据块校验、写入页缓存后返回 OK，再发送下一块。存储端累计 256 MiB 或经过 1 秒后批量 `fdatasync`，收到 END 后强制同步全部数据文件，再持久化完成标记并返回 STORED。块级 OK 只表示已校验并写入，不表示断电安全；节点只有验证最终 STORED 后才允许释放事件。连接、超时或写盘失败时节点保留冻结数据并报告 SEND_FAILED。
 
@@ -165,11 +165,11 @@ make storage
 ./Storage/tianlai-storage --config Storage/storage.yaml
 ```
 
-节点 `sendDestinationIp0` 指向该地址，`sendDestinationPort0` 必须等于起始端口加 `server_id`；连错端口会被明确拒绝。可重复使用 --allow-source 限制来源；对应的 libzmq 必须能提供来源地址，否则启用该限制时拒绝请求。节点最终确认丢失时，存储端在元数据阶段直接返回已有 STORED，不重复写盘；未完成传输才从事件开头重传。只有 14 个 `lane-0.stored.json` 元数据一致时才生成 `storage-complete.json` 并通知后端，后端确认另存为 `backend-acknowledged.json`。
+`sendDestinationIp0/1`分别指向100G口上的两个IP，端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。最终确认丢失时，已完成lane在元数据阶段直接返回STORED；只有28个lane持久化标记一致时才生成`storage-complete.json`并通知后端。
 
 ZeroMQ 数据通道不使用 UDP 分片参数；旧配置中的 udpFragmentBytes 必须删除。TCP/IP MTU 仍须按实际网络配置。ZeroMQ 不会补回 FPGA 到缓存服务器之间丢失的 UDP 包；旧 UDP/TCP 存储发送端与 ZeroMQ 接收器不兼容，需协调同时更新。
 
-32 Gbit/s 是默认应用速率总和，不是已验证的持续落盘能力。14 个网络线程消除共享监听线程瓶颈，但不会自动增加网卡、PCIe 或磁盘阵列带宽；14 节点并发时的 CPU、网络及磁盘性能仍须实机验收。默认每块 64 个积分周期，存储端采用有界批量同步；必要时结合 NUMA 进行线程/中断绑定、优化存储端或下调发送速率。
+78.4 Gbit/s是默认应用速率总和，不是已验证的持续落盘能力。28个监听线程和4个ZeroMQ I/O线程不会自动增加网卡、PCIe或磁盘阵列带宽；100G网卡RSS、中断亲和性、NUMA和磁盘持续写入仍须实机验收。
 
 ## 缓存进程异常退出与恢复
 

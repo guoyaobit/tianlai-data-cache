@@ -56,11 +56,17 @@ void put64(std::vector<unsigned char>& v, uint64_t n) {
     for (int i=7; i>=0; --i) v.push_back((n>>(8*i))&255);
 }
 std::string quoteJson(const std::string& value) { return "\\\"" + value + "\\\""; }
-boost::property_tree::ptree parseControl(const std::string&) { return {}; }
+static uint64_t parsed_lane = 0;
+boost::property_tree::ptree parseControl(const std::string& value) {
+    parsed_lane = value.find("\\\"lane\\\":1") != std::string::npos ? 1 : 0;
+    return {};
+}
 std::string getId(const boost::property_tree::ptree&, const std::string& key) {
     return key == "status" ? "STORED" : key == "event_id" ? "event1" : "acq1";
 }
-uint64_t getNumber(const boost::property_tree::ptree&, const std::string&) { return 0; }
+uint64_t getNumber(const boost::property_tree::ptree&, const std::string& key) {
+    return key == "lane" ? parsed_lane : 0;
+}
 ''')
         binary = tmp / 'pool_test.exe'
         subprocess.run([args.cxx, '-std=c++14', '-O2', '-pthread', '-I' + str(tmp),

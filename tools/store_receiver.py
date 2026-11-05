@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TLSTORE1 ZeroMQ reference disk receiver; benchmark before 32 Gbit/s deployment."""
+"""TLSTORE1 dual-lane reference receiver; production uses the C++ 100 GbE service."""
 import argparse
 import json
 import os
@@ -121,7 +121,7 @@ class StoreReceiver:
             per_trace, period_us = meta['integration_per_trace'], meta['period_microseconds']
             if (any(type(x) is not int for x in (server, lane, start, count, per_trace, period_us)) or
                     meta['version'] != 1 or meta['format'] != 'TLSTORE1' or
-                    not 0 <= server <= 13 or lane != 0 or lane != listen_lane or
+                    not 0 <= server <= 13 or not 0 <= lane < 2 or lane != listen_lane or
                     not 1 <= period_us <= 1000000 or 1000000 % period_us or
                     not 1 <= per_trace <= 0x800000 or not 0 <= start < (1 << 20) * per_trace or
                     not 1 <= count <= 5000000 // period_us or start + count > (1 << 20) * per_trace):
@@ -136,9 +136,12 @@ class StoreReceiver:
                 raise ValueError('remote packet-pair metadata required')
             if meta['port_count'] != ports or meta['packet_bytes'] != packet_bytes:
                 raise ValueError('input profile mismatch')
+            selected_ports = list(range(lane, ports, 2))
+            if meta.get('ports') != selected_ports:
+                raise ValueError('invalid lane port assignment')
             key = (acquisition, event, server, lane)
             with self.lock:
-                if any(active[2] == server for active in self.active):
+                if any(active[2:] == (server, lane) for active in self.active):
                     key = None
                     raise ValueError('server already receiving')
                 self.active.add(key)
@@ -159,7 +162,7 @@ class StoreReceiver:
             if stored_path.exists():
                 stored_path.unlink()
                 sync_directory(path)
-            progress = {p: start for p in range(ports)}
+            progress = {p: start for p in selected_ports}
             checksums = {p: 0 for p in progress}
             missing = {p: 0 for p in progress}
             stride = FRAME.size + boards * packet_bytes

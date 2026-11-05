@@ -6,13 +6,13 @@
       roles: "{{ group_names | intersect(['cache_nodes', 'storage', 'controller']) }}"
       configured:
         receive_pci_addresses: "{{ tianlai_receive_devices | default([]) }}"
-        send_interface: "{{ tianlai_send_interface | default(none) }}"
-        send_ip: "{{ tianlai_send_ip | default(none) }}"
+        send_interfaces: "{{ tianlai_send_interfaces | default([]) }}"
+        send_ips: "{{ tianlai_send_ips | default([]) }}"
         control_ip: "{{ tianlai_control_ip | default(tianlai_controller_ip if 'controller' in group_names else none) }}"
-        storage_ip: "{{ tianlai_storage_ip }}"
-        storage_port_base: "{{ tianlai_storage_port | int }}"
-        storage_receiver_count: 14
-        assigned_storage_port: "{{ ((tianlai_storage_port | int) + (tianlai_server_id | int)) if 'cache_nodes' in group_names else none }}"
+        storage_ips: "{{ [tianlai_storage_ip0, tianlai_storage_ip1] }}"
+        storage_port_bases: "{{ [tianlai_storage_port | int, tianlai_storage_lane1_port | int] }}"
+        storage_receiver_count: 28
+        assigned_storage_ports: "{{ [((tianlai_storage_port | int) + (tianlai_server_id | int)), ((tianlai_storage_lane1_port | int) + (tianlai_server_id | int))] if 'cache_nodes' in group_names else [] }}"
   changed_when: false
 
 - name: Collect configured and discovered network information

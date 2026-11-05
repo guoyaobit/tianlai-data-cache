@@ -1,4 +1,4 @@
-// TLSTORE1 ZeroMQ disk receiver. Each node has a dedicated ROUTER port/network
+// TLSTORE1 ZeroMQ disk receiver. Each server/lane has a dedicated ROUTER/network
 // thread, a bounded queue and an independent native disk worker thread.
 #ifdef _WIN32
 #include <winsock2.h>
@@ -14,6 +14,7 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <climits>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
@@ -32,6 +33,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -48,7 +50,9 @@ constexpr size_t MAX_MESSAGE = 13 * 1024 * 1024;
 constexpr size_t MAX_SESSIONS_PER_PORT = 1;
 constexpr uint64_t DATA_SYNC_BYTES = 256ULL * 1024 * 1024;
 constexpr auto DATA_SYNC_INTERVAL = std::chrono::seconds(1);
-constexpr unsigned STORAGE_PORT_COUNT = 14;
+constexpr unsigned CACHE_NODE_COUNT = 14;
+constexpr unsigned LANE_COUNT = 2;
+constexpr unsigned STORAGE_PORT_COUNT = CACHE_NODE_COUNT * LANE_COUNT;
 constexpr size_t CHUNK_HEADER = 40, FRAME_HEADER = 24;
 static volatile std::sig_atomic_t stopping = 0;
 static void stop_handler(int) { stopping = 1; }
@@ -132,19 +136,20 @@ struct Shared {
     std::set<unsigned> active;
 };
 
-// Owns one event; no second worker may write files for the same server.
+// Owns one server/lane transfer; both lanes may write disjoint port files concurrently.
 class EventWriter {
     fs::path root, directory;
     Shared &shared;
-    unsigned shard = 0, shard_count = 1;
+    unsigned expected_server = UINT_MAX, expected_lane = UINT_MAX;
     json metadata;
     std::string event, acquisition;
-    unsigned server = 0, ports = 0, boards = 0, packet_bytes = 0, packets_per_board = 1;
+    unsigned server = 0, lane = 0, ports = 0, boards = 0, packet_bytes = 0, packets_per_board = 1;
     uint64_t start = 0, count = 0, per_trace = 0, stride = 0;
     bool claimed = false;
     std::vector<int> files;
     std::vector<uint64_t> progress, missing;
     std::vector<uint32_t> checksums;
+    std::vector<bool> selected;
     uint64_t unsynced_bytes = 0;
     std::chrono::steady_clock::time_point last_data_sync;
 
@@ -160,11 +165,15 @@ class EventWriter {
     }
 
   public:
-    EventWriter(fs::path base, Shared &state, unsigned shard_index = 0, unsigned shards = 1)
-        : root(std::move(base)), shared(state), shard(shard_index), shard_count(shards) {}
+    EventWriter(fs::path base, Shared &state, unsigned server_id = UINT_MAX,
+                unsigned lane_id = UINT_MAX)
+        : root(std::move(base)), shared(state), expected_server(server_id), expected_lane(lane_id) {}
     ~EventWriter() {
         for (int fd : files) if (fd >= 0) ::close(fd);
-        if (claimed) { std::lock_guard<std::mutex> lock(shared.mutex); shared.active.erase(server); }
+        if (claimed) {
+            std::lock_guard<std::mutex> lock(shared.mutex);
+            shared.active.erase(server * LANE_COUNT + lane);
+        }
     }
     // Returns an already durable STORED result when the same transfer is retried.
     // This avoids rewriting an event merely because the previous final reply was lost.
@@ -177,16 +186,20 @@ class EventWriter {
         event = metadata.at("event_id").get<std::string>();
         acquisition = metadata.at("acquisition_id").get<std::string>();
         require(valid_id(event) && valid_id(acquisition), "invalid event/acquisition identifier");
-        auto node = integer(metadata, "server_id"), lane = integer(metadata, "lane");
+        auto node = integer(metadata, "server_id"), lane_value = integer(metadata, "lane");
         start = integer(metadata, "start_period"); count = integer(metadata, "period_count");
         per_trace = integer(metadata, "integration_per_trace"); auto period_us = integer(metadata, "period_microseconds");
         require(integer(metadata, "version") == 1 && metadata.at("format") == "TLSTORE1" &&
-                node <= 13 && lane == 0 && period_us >= 1 && period_us <= 1000000 &&
+                node < CACHE_NODE_COUNT && lane_value < LANE_COUNT &&
+                period_us >= 1 && period_us <= 1000000 &&
                 1000000 % period_us == 0 && per_trace >= 1 && per_trace <= 0x800000 &&
                 start < (1ULL << 20) * per_trace && count >= 1 && count <= 5000000 / period_us &&
                 start + count <= (1ULL << 20) * per_trace, "invalid stream metadata");
         server = static_cast<unsigned>(node);
-        require(server % shard_count == shard, "server connected to the wrong storage port");
+        lane = static_cast<unsigned>(lane_value);
+        require((expected_server == UINT_MAX || server == expected_server) &&
+                    (expected_lane == UINT_MAX || lane == expected_lane),
+                "server/lane connected to the wrong storage port");
         if (server < 3) { ports = 8; boards = 36; packet_bytes = 2320; }
         else if (server < 11) { ports = 4; boards = 18; packet_bytes = 8848; }
         else {
@@ -198,39 +211,53 @@ class EventWriter {
         }
         require(integer(metadata, "port_count") == ports && integer(metadata, "packet_bytes") == packet_bytes,
                 "input profile mismatch");
+        const auto &port_list = metadata.at("ports");
+        require(port_list.is_array() && port_list.size() == ports / LANE_COUNT,
+                "invalid lane port list");
+        selected.assign(ports, false);
+        for (size_t index = 0; index < port_list.size(); ++index) {
+            const auto port = port_list.at(index).get<unsigned>();
+            require(port < ports && port % LANE_COUNT == lane && !selected[port],
+                    "invalid lane port assignment");
+            selected[port] = true;
+        }
         ensure_dir(root, acquisition); ensure_dir(root / acquisition, event);
         ensure_dir(root / acquisition / event, "server-" + std::to_string(server));
         directory = root / acquisition / event / ("server-" + std::to_string(server));
-        auto meta_path = directory / "lane-0.meta.json";
+        const auto lane_name = "lane-" + std::to_string(lane);
+        auto meta_path = directory / (lane_name + ".meta.json");
         if (fs::exists(meta_path)) {
             std::ifstream input(meta_path); json old; input >> old;
             require(old == metadata, "event metadata conflicts with an existing transfer");
         }
         stride = FRAME_HEADER + uint64_t(boards) * packet_bytes;
-        auto marker = directory / "lane-0.stored.json";
+        auto marker = directory / (lane_name + ".stored.json");
         if (fs::exists(marker)) {
             std::ifstream input(marker); json stored; input >> stored;
             require(stored.at("status") == "STORED" && stored.at("event_id") == event &&
                     stored.at("acquisition_id") == acquisition && integer(stored, "server_id") == server &&
-                    integer(stored, "lane") == 0, "invalid existing completion marker");
+                    integer(stored, "lane") == lane, "invalid existing completion marker");
             for (unsigned p = 0; p < ports; ++p) {
+                if (!selected[p]) continue;
                 const auto path = directory / ("port-" + std::to_string(p) + ".bin");
                 require(fs::is_regular_file(path) && fs::file_size(path) == count * stride,
                         "stored event file is missing or has the wrong size");
             }
             json ack = {{"version", 1}, {"status", "STORED"}, {"event_id", event},
-                        {"acquisition_id", acquisition}, {"server_id", server}, {"lane", 0}};
+                        {"acquisition_id", acquisition}, {"server_id", server}, {"lane", lane}};
             return framed_json(ack);
         }
         {
             std::lock_guard<std::mutex> lock(shared.mutex);
-            require(shared.active.insert(server).second, "server already receiving");
+            require(shared.active.insert(server * LANE_COUNT + lane).second,
+                    "server lane already receiving");
             claimed = true;
         }
         atomic_json(meta_path, metadata);
         progress.assign(ports, start); missing.assign(ports, 0); checksums.assign(ports, 0);
         files.assign(ports, -1);
         for (unsigned p = 0; p < ports; ++p) {
+            if (!selected[p]) continue;
             auto path = directory / ("port-" + std::to_string(p) + ".bin");
             files[p] = ::open(path.string().c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0640);
             if (files[p] < 0) throw system_error("open event file");
@@ -246,7 +273,7 @@ class EventWriter {
         auto kind = read32(p), port = read32(p + 4), packet = read32(p + 8), board = read32(p + 12);
         auto first = read64(p + 16), n = read64(p + 24);
         auto size = read32(p + 32), checksum = read32(p + 36);
-        require(kind == 1 && port < ports, "invalid chunk type/port");
+        require(kind == 1 && port < ports && selected[port], "invalid chunk type/port");
         unsigned expected_packet = server < 3 ? server * 8 + port : server >= 11 ?
             2 * ((server - 11) * 4 + port) : 24 + (server - 3) * 2 + port / 2;
         unsigned expected_board = server < 3 ? 0 : server >= 11 ? 36 : (port % 2) * 18;
@@ -285,17 +312,20 @@ class EventWriter {
     Bytes finish(const Bytes &message) {
         require(message.size() == CHUNK_HEADER && read32(message.data()) == 2 &&
                 std::all_of(message.begin() + 4, message.end(), [](unsigned char c) { return c == 0; }), "invalid END record");
-        for (unsigned p = 0; p < ports; ++p)
+        for (unsigned p = 0; p < ports; ++p) {
+            if (!selected[p]) continue;
             require(progress[p] == start + count, "incomplete lane transfer");
+        }
         sync_data(true);
         json ack = {{"version", 1}, {"status", "STORED"}, {"event_id", event},
-                    {"acquisition_id", acquisition}, {"server_id", server}, {"lane", 0}};
+                    {"acquisition_id", acquisition}, {"server_id", server}, {"lane", lane}};
         json marker = ack; marker["missing_packets"] = json::object(); marker["file_crc32"] = json::object();
         for (unsigned p = 0; p < ports; ++p) {
+            if (!selected[p]) continue;
             marker["missing_packets"][std::to_string(p)] = missing[p];
             marker["file_crc32"][std::to_string(p)] = checksums[p];
         }
-        atomic_json(directory / "lane-0.stored.json", marker);
+        atomic_json(directory / ("lane-" + std::to_string(lane) + ".stored.json"), marker);
         return framed_json(ack);
     }
 };
@@ -346,10 +376,10 @@ struct Session {
 };
 
 static void run_session(Session *session, const fs::path &root, Shared &shared, Responses &out,
-                        unsigned shard, unsigned shard_count) {
+                        unsigned server, unsigned lane) {
     bool pending = false;
     try {
-        EventWriter writer(root, shared, shard, shard_count);
+        EventWriter writer(root, shared, server, lane);
         Bytes message;
         if (!session->take(message)) { out.post({session->identity, {}, true, false}); return; }
         pending = true;
@@ -412,40 +442,44 @@ static json read_json_file(const fs::path &path) {
     return value;
 }
 
-// Builds one event-level result only after all 14 node markers are durable.
+// Builds one event-level result only after both lanes from all 14 nodes are durable.
 // The result itself is persisted before it can be sent to the backend.
 static std::optional<json> build_completion_notice(const fs::path &event_directory) {
     json first;
     json missing = json::object();
-    for (unsigned server = 0; server < 14; ++server) {
+    for (unsigned server = 0; server < CACHE_NODE_COUNT; ++server) {
         const auto directory = event_directory / ("server-" + std::to_string(server));
-        const auto meta_path = directory / "lane-0.meta.json";
-        const auto marker_path = directory / "lane-0.stored.json";
-        if (!fs::is_regular_file(meta_path) || !fs::is_regular_file(marker_path)) return std::nullopt;
-        const auto meta = read_json_file(meta_path);
-        const auto marker = read_json_file(marker_path);
-        require(integer(meta, "server_id") == server && integer(meta, "lane") == 0 &&
-                meta.at("acquisition_id") == event_directory.parent_path().filename().string() &&
-                meta.at("event_id") == event_directory.filename().string() &&
-                marker.at("status") == "STORED" && integer(marker, "server_id") == server &&
-                integer(marker, "lane") == 0 && marker.at("event_id") == meta.at("event_id") &&
-                marker.at("acquisition_id") == meta.at("acquisition_id"),
-                "node completion marker mismatch");
-        if (server == 0) first = meta;
-        else {
-            for (const char *field : {"format", "acquisition_id", "event_id", "start_period",
-                                      "period_count", "integration_per_trace", "period_microseconds"})
-                require(meta.at(field) == first.at(field), "node event metadata mismatch");
-        }
         uint64_t absent = 0;
-        const auto &by_port = marker.at("missing_packets");
-        require(by_port.is_object(), "missing packet object required");
-        for (auto item = by_port.begin(); item != by_port.end(); ++item) {
-            require(item.value().is_number_unsigned() || item.value().is_number_integer(),
-                    "invalid missing packet count");
-            const auto value = item.value().get<int64_t>();
-            require(value >= 0, "negative missing packet count");
-            absent += static_cast<uint64_t>(value);
+        for (unsigned lane = 0; lane < LANE_COUNT; ++lane) {
+            const auto prefix = "lane-" + std::to_string(lane);
+            const auto meta_path = directory / (prefix + ".meta.json");
+            const auto marker_path = directory / (prefix + ".stored.json");
+            if (!fs::is_regular_file(meta_path) || !fs::is_regular_file(marker_path))
+                return std::nullopt;
+            const auto meta = read_json_file(meta_path);
+            const auto marker = read_json_file(marker_path);
+            require(integer(meta, "server_id") == server && integer(meta, "lane") == lane &&
+                    meta.at("acquisition_id") == event_directory.parent_path().filename().string() &&
+                    meta.at("event_id") == event_directory.filename().string() &&
+                    marker.at("status") == "STORED" && integer(marker, "server_id") == server &&
+                    integer(marker, "lane") == lane && marker.at("event_id") == meta.at("event_id") &&
+                    marker.at("acquisition_id") == meta.at("acquisition_id"),
+                    "node completion marker mismatch");
+            if (server == 0 && lane == 0) first = meta;
+            else {
+                for (const char *field : {"format", "acquisition_id", "event_id", "start_period",
+                                          "period_count", "integration_per_trace", "period_microseconds"})
+                    require(meta.at(field) == first.at(field), "node event metadata mismatch");
+            }
+            const auto &by_port = marker.at("missing_packets");
+            require(by_port.is_object(), "missing packet object required");
+            for (auto item = by_port.begin(); item != by_port.end(); ++item) {
+                require(item.value().is_number_unsigned() || item.value().is_number_integer(),
+                        "invalid missing packet count");
+                const auto value = item.value().get<int64_t>();
+                require(value >= 0, "negative missing packet count");
+                absent += static_cast<uint64_t>(value);
+            }
         }
         missing[std::to_string(server)] = absent;
     }
@@ -611,10 +645,19 @@ class CompletionNotifier {
     }
 };
 
-// Each configured node owns one ROUTER socket and one network thread, while its
+struct ReceiverEndpoint {
+    unsigned server = 0, lane = 0, port = 0;
+    std::string address, allowed_source;
+    ReceiverEndpoint(unsigned server_id, unsigned lane_id, unsigned tcp_port,
+                     std::string bind_address, std::string source)
+        : server(server_id), lane(lane_id), port(tcp_port), address(std::move(bind_address)),
+          allowed_source(std::move(source)) {}
+};
+
+// Each configured server/lane owns one ROUTER socket and one network thread, while its
 // validation and disk work stay on a separate session worker.
 static void serve_port(void *context, const fs::path &root, const std::string &address, unsigned port,
-                       unsigned shard, unsigned shard_count,
+                       unsigned server, unsigned lane,
                        const std::string &allowed_source, Shared &shared,
                        CompletionNotifier &notifier, const std::atomic<bool> &shutdown) {
     void *router = zmq_socket(context, ZMQ_ROUTER);
@@ -630,7 +673,8 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
         auto endpoint = "tcp://" + address + ":" + std::to_string(port);
         if (zmq_bind(router, endpoint.c_str()))
             throw std::runtime_error(std::string("ZeroMQ bind: ") + zmq_strerror(zmq_errno()));
-        std::cout << "storage shard " << shard << " listening on " << endpoint << std::endl;
+        std::cout << "storage server " << server << " lane " << lane << " listening on "
+                  << endpoint << std::endl;
         while (!stopping && !shutdown.load(std::memory_order_relaxed)) {
             std::queue<Response> ready;
             { std::lock_guard<std::mutex> lock(responses.mutex); std::swap(ready, responses.ready); }
@@ -689,7 +733,7 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
                 sessions.emplace(identity, std::move(entry));
                 try {
                     session->worker = std::thread(run_session, session, std::cref(root), std::ref(shared),
-                                                  std::ref(responses), shard, shard_count);
+                                                  std::ref(responses), server, lane);
                 }
                 catch (...) { sessions.erase(identity); throw; }
             } else if (it->second->in_flight || !it->second->put(std::move(body))) {
@@ -706,13 +750,16 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
     zmq_close(router);
 }
 
-static void serve(const fs::path &root, const std::string &address,
-                  const std::vector<unsigned> &receiver_ports,
-                  const std::vector<std::string> &allowed_sources,
+static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &endpoints,
+                  unsigned io_threads,
                   const std::string &notify_address, unsigned notify_port,
                   const std::string &notify_bind) {
     void *context = zmq_ctx_new();
     if (!context) throw std::runtime_error("ZeroMQ context creation failed");
+    if (zmq_ctx_set(context, ZMQ_IO_THREADS, static_cast<int>(io_threads))) {
+        zmq_ctx_term(context);
+        throw std::runtime_error("ZeroMQ I/O thread configuration failed");
+    }
     Shared shared;
     CompletionNotifier notifier(root, notify_address, notify_port, notify_bind);
     std::atomic<bool> shutdown{false};
@@ -720,12 +767,12 @@ static void serve(const fs::path &root, const std::string &address,
     std::exception_ptr first_error;
     std::vector<std::thread> receivers;
     try {
-        for (unsigned shard = 0; shard < receiver_ports.size(); ++shard) {
-            receivers.emplace_back([&, shard] {
+        for (unsigned index = 0; index < endpoints.size(); ++index) {
+            receivers.emplace_back([&, index] {
                 try {
-                    serve_port(context, root, address, receiver_ports.at(shard), shard,
-                               static_cast<unsigned>(receiver_ports.size()),
-                               allowed_sources.at(shard), shared, notifier, shutdown);
+                    const auto &endpoint = endpoints.at(index);
+                    serve_port(context, root, endpoint.address, endpoint.port, endpoint.server,
+                               endpoint.lane, endpoint.allowed_source, shared, notifier, shutdown);
                 } catch (...) {
                     {
                         std::lock_guard<std::mutex> lock(error_mutex);
@@ -749,10 +796,9 @@ static void serve(const fs::path &root, const std::string &address,
 #ifndef STORAGE_RECEIVER_NO_MAIN
 struct StorageConfig {
     fs::path directory;
-    std::string bind_address, backend_address, backend_bind_address;
-    unsigned backend_port = 0;
-    std::vector<unsigned> receiver_ports;
-    std::vector<std::string> allowed_sources;
+    std::string backend_address, backend_bind_address;
+    unsigned backend_port = 0, io_threads = 4;
+    std::vector<ReceiverEndpoint> receivers;
 };
 
 static void require_yaml_keys(const YAML::Node &node, std::initializer_list<const char *> expected,
@@ -773,45 +819,46 @@ static StorageConfig load_storage_config(const fs::path &path) {
     require_yaml_keys(root, {"storage", "backend"}, "root");
     const auto storage = root["storage"];
     const auto backend = root["backend"];
-    require_yaml_keys(storage, {"directory", "bindAddress", "receivers"}, "storage");
+    require_yaml_keys(storage, {"directory", "ioThreads", "receivers"}, "storage");
     require_yaml_keys(backend, {"address", "port", "bindAddress"}, "backend");
     StorageConfig config;
     config.directory = storage["directory"].as<std::string>();
-    config.bind_address = storage["bindAddress"].as<std::string>();
+    config.io_threads = storage["ioThreads"].as<unsigned>();
     config.backend_address = backend["address"].as<std::string>();
     config.backend_port = backend["port"].as<unsigned>();
     config.backend_bind_address = backend["bindAddress"].as<std::string>();
     const auto receivers = storage["receivers"];
     require(receivers.IsSequence() && receivers.size() == STORAGE_PORT_COUNT,
-            "receivers must contain exactly 14 entries");
-    std::set<unsigned> unique_servers, unique_ports;
+            "receivers must contain exactly 28 entries");
+    std::set<std::pair<unsigned, unsigned>> unique_endpoints;
+    std::set<unsigned> unique_ports;
     std::set<std::string> unique_sources;
-    config.receiver_ports.resize(STORAGE_PORT_COUNT);
-    config.allowed_sources.resize(STORAGE_PORT_COUNT);
     for (const auto &receiver : receivers) {
-        require_yaml_keys(receiver, {"serverId", "port", "allowedSource"}, "storage.receivers[]");
+        require_yaml_keys(receiver, {"serverId", "lane", "bindAddress", "port", "allowedSource"},
+                          "storage.receivers[]");
         const auto server = receiver["serverId"].as<unsigned>();
+        const auto lane = receiver["lane"].as<unsigned>();
+        const auto address = receiver["bindAddress"].as<std::string>();
         const auto port = receiver["port"].as<unsigned>();
         const auto source = receiver["allowedSource"].as<std::string>();
-        require(server < STORAGE_PORT_COUNT && port >= 1024 && port <= 65535,
-                "invalid receiver serverId or port");
-        require(unique_servers.insert(server).second && unique_ports.insert(port).second &&
+        require(server < CACHE_NODE_COUNT && lane < LANE_COUNT && port >= 1024 && port <= 65535,
+                "invalid receiver serverId, lane or port");
+        require(unique_endpoints.insert({server, lane}).second && unique_ports.insert(port).second &&
                     unique_sources.insert(source).second,
-                "receiver serverId, port and allowedSource must be unique");
-        config.receiver_ports[server] = port;
-        config.allowed_sources[server] = source;
+                "receiver server/lane, port and allowedSource must be unique");
+        config.receivers.push_back({server, lane, port, address, source});
     }
 
     in_addr parsed{};
-    require(config.directory.is_absolute() &&
-                ::inet_pton(AF_INET, config.bind_address.c_str(), &parsed) == 1 &&
+    require(config.directory.is_absolute() && config.io_threads >= 1 && config.io_threads <= 32 &&
                 ::inet_pton(AF_INET, config.backend_address.c_str(), &parsed) == 1 &&
                 ::inet_pton(AF_INET, config.backend_bind_address.c_str(), &parsed) == 1 &&
                 config.backend_port >= 1 && config.backend_port <= 65535,
             "invalid storage path, bind address or backend endpoint");
-    for (const auto &source : config.allowed_sources)
-        require(::inet_pton(AF_INET, source.c_str(), &parsed) == 1,
-                "invalid cache data IPv4 address in storage.receivers");
+    for (const auto &receiver : config.receivers)
+        require(::inet_pton(AF_INET, receiver.address.c_str(), &parsed) == 1 &&
+                    ::inet_pton(AF_INET, receiver.allowed_source.c_str(), &parsed) == 1,
+                "invalid data IPv4 address in storage.receivers");
     return config;
 }
 
@@ -823,17 +870,17 @@ int main(int argc, char **argv) {
         const auto config = load_storage_config(argv[2]);
         if (check_only) {
             std::cout << "storage directory: " << config.directory << '\n';
-            for (unsigned server = 0; server < STORAGE_PORT_COUNT; ++server)
-                std::cout << "server " << server << ": " << config.bind_address << ':'
-                          << config.receiver_ports[server] << " <- "
-                          << config.allowed_sources[server] << '\n';
+            for (const auto &receiver : config.receivers)
+                std::cout << "server " << receiver.server << " lane " << receiver.lane << ": "
+                          << receiver.address << ':' << receiver.port << " <- "
+                          << receiver.allowed_source << '\n';
             std::cout << "backend UDP: " << config.backend_bind_address << " -> "
                       << config.backend_address << ':' << config.backend_port << '\n';
             return 0;
         }
         fs::create_directories(config.directory);
         std::signal(SIGINT, stop_handler); std::signal(SIGTERM, stop_handler);
-        serve(config.directory, config.bind_address, config.receiver_ports, config.allowed_sources,
+        serve(config.directory, config.receivers, config.io_threads,
               config.backend_address, config.backend_port,
               config.backend_bind_address);
         return 0;

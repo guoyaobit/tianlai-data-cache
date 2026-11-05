@@ -114,11 +114,11 @@ def run(server, directory):
     node_config = read_config(ROOT / variant / f'server_{server:02d}.yaml')
     control_port = free_port(socket.SOCK_DGRAM)
     simulation = [free_port(socket.SOCK_DGRAM) for _ in range(ports)]
-    destinations = [free_port(socket.SOCK_STREAM)]
+    destinations = [free_port(socket.SOCK_STREAM) for _ in range(2)]
     values = dict(controlBindIp='127.0.0.1', controlPeerIp='127.0.0.1', controlPort=control_port)
     for p in range(ports):
         values[f'simulationPort{p}'] = simulation[p]
-    for lane in range(1):
+    for lane in range(2):
         values.update({f'sendEthName{lane}': '-', f'sendSourceIp{lane}': '127.0.0.1',
                        f'sendDestinationIp{lane}': '127.0.0.1',
                        f'sendDestinationPort{lane}': destinations[lane]})
@@ -229,7 +229,7 @@ def run(server, directory):
         assert request('QUERY_STATUS')['status'] == 'BUSY'
         receiver = DropFirstAckReceiver(directory / 'disk', ['127.0.0.1'])
         threads = [threading.Thread(target=receiver.listen,
-                   args=(('127.0.0.1', destinations[lane]), lane, stop_receiver), daemon=True) for lane in range(1)]
+                   args=(('127.0.0.1', destinations[lane]), lane, stop_receiver), daemon=True) for lane in range(2)]
         for thread in threads:
             thread.start()
         time.sleep(.1)
@@ -256,9 +256,10 @@ def run(server, directory):
                     expected = make_packet(period, port, board) if mask & (1 << board) else bytes(payload + 16)
                     assert content[at:at + payload + 16] == expected
         event_path = directory / 'disk/test-acq/crossing' / f'server-{server}'
-        stored = json.loads((event_path / 'lane-0.stored.json').read_text())
-        assert set(stored['file_crc32']) == {str(p) for p in range(ports)}
-        assert not (event_path / 'lane-1.stored.json').exists()
+        stored = [json.loads((event_path / f'lane-{lane}.stored.json').read_text())
+                  for lane in range(2)]
+        assert set(stored[0]['file_crc32']) == {str(p) for p in range(0, ports, 2)}
+        assert set(stored[1]['file_crc32']) == {str(p) for p in range(1, ports, 2)}
         if remote:
             meta = json.loads((directory / 'disk/test-acq/crossing' /
                                f'server-{server}/lane-0.meta.json').read_text())
@@ -334,7 +335,7 @@ def main():
                                     check=True, capture_output=True, text=True)
             server = int(cfg.stem.split('_')[-1])
             assert f'server={server}' in result.stdout
-            assert 'transport=ZeroMQ sendRateBitsPerSecond=2285714285' in result.stdout
+            assert 'transport=ZeroMQ lanes=2 sendRateBitsPerSecond=5600000000' in result.stdout
             if server < 3:
                 for port in range(8):
                     assert f'port={port} packetId={server * 8 + port} boards=0..35' in result.stdout
@@ -354,7 +355,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='tianlai-store-loopback-') as temp:
         # Reject any per-node configuration that could oversubscribe the 14-node budget.
         for variant, server in (('F0-2', 0), ('F3-10', 3), ('F11-13', 11)):
-            for key, value in (('sendRateBitsPerSecond', 2285714286), ('sendRateBitsPerSecond', 0)):
+            for key, value in (('sendRateBitsPerSecond', 18000000001), ('sendRateBitsPerSecond', 0)):
                 cfg = read_config(ROOT / variant / 'receive_config.yaml')
                 cfg['recvCfg'][key] = value
                 bad = Path(temp) / 'invalid.yaml'

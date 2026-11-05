@@ -10,12 +10,15 @@ all:
     tianlai_controller_ip: CHANGE_ME
     # Backend IP for triggers and completion notices.
     tianlai_backend_ip: CHANGE_ME
-    # Storage ZeroMQ listen IP; verify on site.
-    tianlai_storage_ip: CHANGE_ME  # Storage 10 GbE IP (not documented)
+    # Two untagged IPs on the storage server's single 100 GbE interface.
+    tianlai_storage_ip0: CHANGE_ME
+    tianlai_storage_ip1: CHANGE_ME
     # Event path under the mounted storage directory.
     tianlai_storage_directory: CHANGE_ME
     # First TCP port for storage data listeners.
     tianlai_storage_port: 20000
+    tianlai_storage_lane1_port: 20100
+    tianlai_storage_io_threads: 4
   children:
     cache_nodes:
       hosts:
@@ -26,10 +29,9 @@ all:
           tianlai_server_id: 0
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.128"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore2:
@@ -39,10 +41,9 @@ all:
           tianlai_server_id: 1
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.129"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore3:
@@ -52,10 +53,9 @@ all:
           tianlai_server_id: 2
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.130"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore4:
@@ -65,10 +65,9 @@ all:
           tianlai_server_id: 3
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.131"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore5:
@@ -78,10 +77,9 @@ all:
           tianlai_server_id: 4
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.132"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore6:
@@ -91,10 +89,9 @@ all:
           tianlai_server_id: 5
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.133"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore7:
@@ -104,10 +101,9 @@ all:
           tianlai_server_id: 6
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.134"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore8:
@@ -117,10 +113,9 @@ all:
           tianlai_server_id: 7
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.135"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore9:
@@ -130,10 +125,9 @@ all:
           tianlai_server_id: 8
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.136"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore10:
@@ -143,10 +137,9 @@ all:
           tianlai_server_id: 9
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.137"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore11:
@@ -156,10 +149,9 @@ all:
           tianlai_server_id: 10
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.138"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore12:
@@ -169,10 +161,9 @@ all:
           tianlai_server_id: 11
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.139"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore13:
@@ -182,10 +173,9 @@ all:
           tianlai_server_id: 12
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.140"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
         tianlaistore14:
@@ -195,10 +185,9 @@ all:
           tianlai_server_id: 13
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.141"
-          # Cache-node interface for the storage network.
-          tianlai_send_interface: CHANGE_ME
-          # Cache-node source IP for storage traffic.
-          tianlai_send_ip: CHANGE_ME
+          # Physical ports 5/6 and their two untagged data-subnet addresses.
+          tianlai_send_interfaces: [CHANGE_ME, CHANGE_ME]
+          tianlai_send_ips: [CHANGE_ME, CHANGE_ME]
           # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
           tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
     controller:

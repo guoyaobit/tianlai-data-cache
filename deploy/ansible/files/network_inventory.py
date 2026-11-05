@@ -104,16 +104,16 @@ def collect(sysfs=Path('/sys'), address_reader=ip_addresses):
 
 
 def build_report(inventory, request):
-    """Match the configured receive PCI addresses and send interface to observations."""
+    """Match configured receive PCI addresses and both send interfaces to observations."""
     if not isinstance(request, dict) or not isinstance(request.get('configured'), dict):
         raise ValueError('report request must contain a configured object')
     configured = request['configured']
     receive_addresses = configured.get('receive_pci_addresses', [])
     if not isinstance(receive_addresses, list) or any(not isinstance(item, str) for item in receive_addresses):
         raise ValueError('receive_pci_addresses must be a list of strings')
-    send_interface = configured.get('send_interface')
-    if send_interface is not None and not isinstance(send_interface, str):
-        raise ValueError('send_interface must be a string or null')
+    send_interfaces = configured.get('send_interfaces', [])
+    if not isinstance(send_interfaces, list) or any(not isinstance(item, str) for item in send_interfaces):
+        raise ValueError('send_interfaces must be a list of strings')
 
     devices = {item['pci_address'].lower(): item for item in inventory['pci_network_devices']}
     interfaces = {item['name']: item for item in inventory['interfaces']}
@@ -125,7 +125,7 @@ def build_report(inventory, request):
             {'pci_address': address, 'observed': devices.get(address.lower())}
             for address in receive_addresses
         ],
-        'matched_send_interface': interfaces.get(send_interface),
+        'matched_send_interfaces': [interfaces.get(name) for name in send_interfaces],
         'interfaces': inventory['interfaces'],
         'pci_network_devices': inventory['pci_network_devices'],
         'warnings': inventory['warnings'],
