@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """UDP controller: protect every node selected by the channel mode, then export concurrently."""
 import argparse
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import socket
 import threading
@@ -9,6 +11,12 @@ import time
 import uuid
 from pathlib import Path
 from durable_json import atomic_json, ID
+
+
+MAX_CONTROL_BYTES = 1200
+RPC_ATTEMPTS = 6
+REPLAY_TTL_SECONDS = 300
+REPLAY_MAX_ENTRIES = 1024
 
 
 def parse_request(data):
@@ -27,43 +35,113 @@ def parse_request(data):
     return message
 
 
-def rpc(node, acquisition, command, *, timeout=.2, retries=5, **fields):
-    """Send a control request to a node and return the reply after matching the request and node IDs."""
+def rpc(node, acquisition, command, *, timeout=.25, retries=RPC_ATTEMPTS, **fields):
+    """Call one node with a stable request ID and bounded exponential retries."""
     request = dict(version=1, request_id=uuid.uuid4().hex, acquisition_id=acquisition,
                    command=command, **fields)
     body = json.dumps(request, separators=(',', ':')).encode()
-    if len(body) > 1200:
+    if len(body) > MAX_CONTROL_BYTES:
         raise ValueError('control message too long')
     peer = (socket.gethostbyname(node['host']), node.get('port', 19000))
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.settimeout(timeout)
-        for _ in range(retries):
+        for attempt in range(retries):
+            attempt_timeout = timeout * min(8, 1 << attempt)
             sock.sendto(body, peer)
-            deadline = time.monotonic() + timeout
+            deadline = time.monotonic() + attempt_timeout
             while time.monotonic() < deadline:
                 sock.settimeout(max(.001, deadline - time.monotonic()))
                 try:
-                    data, address = sock.recvfrom(1201)
+                    data, address = sock.recvfrom(MAX_CONTROL_BYTES + 1)
                 except socket.timeout:
                     break
-                if address != peer or len(data) > 1200:
+                if address != peer or len(data) > MAX_CONTROL_BYTES:
                     continue
-                reply = json.loads(data)
-                if reply.get('request_id') == request['request_id'] and reply.get('server_id') == node['server_id']:
+                try:
+                    reply = parse_request(data)
+                except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+                    continue
+                if (reply.get('version') == 1 and
+                        reply.get('request_id') == request['request_id'] and
+                        reply.get('server_id') == node['server_id']):
                     if reply.get('status') == 'ERROR':
                         raise RuntimeError(f"server {node['server_id']}: {reply.get('error')}")
                     return reply
     raise TimeoutError(f"server {node['server_id']}: UDP acknowledgment timeout")
 
 
+class ReplayCache:
+    """Return the same reply for a retried backend datagram with the same request ID."""
+    def __init__(self, capacity=REPLAY_MAX_ENTRIES, ttl=REPLAY_TTL_SECONDS):
+        self.capacity = capacity
+        self.ttl = ttl
+        self.entries = OrderedDict()
+
+    def get(self, peer, request_id, digest):
+        key = (peer[0], request_id)
+        entry = self.entries.get(key)
+        if entry is None:
+            return None
+        saved_digest, expires, reply = entry
+        if expires <= time.monotonic():
+            del self.entries[key]
+            return None
+        if saved_digest != digest:
+            raise ValueError('REQUEST_ID_CONFLICT')
+        self.entries.move_to_end(key)
+        return reply
+
+    def put(self, peer, request_id, digest, reply):
+        key = (peer[0], request_id)
+        self.entries[key] = (digest, time.monotonic() + self.ttl, reply)
+        self.entries.move_to_end(key)
+        while len(self.entries) > self.capacity:
+            self.entries.popitem(last=False)
+
+
+def backend_reply(controller, data, peer, cache):
+    """Validate one backend request and provide replay-safe bounded JSON."""
+    request_id = ''
+    cacheable = True
+    digest = hashlib.sha256(data).digest()
+    try:
+        message = parse_request(data)
+        request_id = message['request_id']
+        if not ID.fullmatch(request_id):
+            raise ValueError('invalid request_id')
+        cached = cache.get(peer, request_id, digest)
+        if cached is not None:
+            return cached
+        reply = controller.dispatch(message)
+    except Exception as error:
+        if str(error) == 'REQUEST_ID_CONFLICT':
+            cacheable = False
+        reply = dict(status='ERROR', error=str(error)[:350])
+    reply.update(version=1, request_id=request_id)
+    body = json.dumps(reply, separators=(',', ':')).encode()
+    if len(body) > MAX_CONTROL_BYTES:
+        body = json.dumps(dict(version=1, request_id=request_id, status='ERROR',
+                               error='REPLY_TOO_LARGE'), separators=(',', ':')).encode()
+    if cacheable and ID.fullmatch(request_id):
+        cache.put(peer, request_id, digest, body)
+    return body
+
+
 class Controller:
     def __init__(self, nodes, acquisition, journal, allow_partial=False,
                  integration_per_trace=50000, period_microseconds=200):
+        def valid_node(node):
+            return (isinstance(node, dict) and type(node.get('server_id')) is int and
+                    0 <= node['server_id'] <= 13 and isinstance(node.get('host'), str) and
+                    0 < len(node['host']) <= 255 and
+                    type(node.get('port', 19000)) is int and
+                    1024 <= node.get('port', 19000) <= 65535)
+        if (not isinstance(nodes, list) or not nodes or not all(map(valid_node, nodes)) or
+                len({n['server_id'] for n in nodes}) != len(nodes) or
+                len({(n['host'], n.get('port', 19000)) for n in nodes}) != len(nodes) or
+                not ID.fullmatch(acquisition)):
+            raise ValueError('invalid node list/acquisition ID')
         self.nodes = sorted(nodes, key=lambda n: n['server_id'])
         self.allow_partial = allow_partial
-        if (len({n['server_id'] for n in nodes}) != len(nodes) or not nodes or
-                any(not 0 <= n['server_id'] <= 13 for n in nodes) or not ID.fullmatch(acquisition)):
-            raise ValueError('invalid node list/acquisition ID')
         if not allow_partial and {n['server_id'] for n in nodes} != set(range(14)):
             raise ValueError('production requires all 14 nodes; use allow_partial only for testing')
         if (type(integration_per_trace) is not int or not 1 <= integration_per_trace <= (1 << 23) or
@@ -108,18 +186,19 @@ class Controller:
         return selected
 
     def parallel(self, command, nodes=None, **fields):
+        """Run one idempotent command on all selected nodes and report every failure."""
         selected = self.nodes if nodes is None else nodes
         with ThreadPoolExecutor(max_workers=len(selected)) as workers:
             futures = [workers.submit(rpc, n, self.acquisition, command, **fields) for n in selected]
             results = []
-            error = None
-            for future in futures:
+            errors = []
+            for node, future in zip(selected, futures):
                 try:
                     results.append(future.result())
                 except Exception as caught:
-                    error = caught
-            if error:
-                raise error
+                    errors.append(f"server {node['server_id']}: {caught}")
+            if errors:
+                raise RuntimeError('; '.join(errors))
             return results
 
     def poll_event(self, node, event_id, terminal, timeout):
@@ -199,58 +278,65 @@ class Controller:
             return dict(self.events[event_id])
 
     def run_event(self, event_id):
-        """Wait for all nodes to become ready, send in parallel, then confirm persistence and release each node."""
+        """Protect all nodes, store all data, then release only after the global durable barrier."""
         try:
             event = self.events[event_id]
             nodes = self.event_nodes(event.get('channel_count', 384))
-            # PREPARE is idempotent. Reconciliation also works after controller restart.
-            prepared = self.parallel('PREPARE', nodes=nodes, event_id=event_id, start=event['start'],
-                                     period_count=event['period_count'],
-                                     channel_count=event.get('channel_count', 384))
+            states = self.parallel('PREPARE', nodes=nodes, event_id=event_id,
+                                   start=event['start'], period_count=event['period_count'],
+                                   channel_count=event.get('channel_count', 384))
             missing_by_server = dict(event.get('missing_by_server', {}))
-            needs_commit = []
-            for node, state in zip(nodes, prepared):
+            for index, (node, state) in enumerate(zip(nodes, states)):
                 if state['status'] == 'PREPARING':
                     state = self.poll_event(node, event_id, {'PREPARED'}, 120)
-                if state['status'] not in ('PREPARED', 'QUEUED', 'SENDING', 'SEND_FAILED', 'STORED', 'RELEASED'):
+                    states[index] = state
+                if state['status'] not in ('PREPARED', 'SENDING', 'SEND_FAILED', 'STORED', 'RELEASED'):
                     raise RuntimeError(f"server {node['server_id']}: {state}")
                 if 'missing_packets' in state:
                     missing_by_server[str(node['server_id'])] = state['missing_packets']
-                if state['status'] == 'PREPARED':
-                    needs_commit.append(node)
-            self.update(event_id, missing_by_server=missing_by_server)
-            self.update(event_id, status='ACCEPTED', error='')
-            # The prepare barrier is complete. Commit only nodes that still need it,
-            # in parallel; a partial failure remains recoverable via PREPARE/RESUME.
-            if needs_commit:
-                with ThreadPoolExecutor(max_workers=len(needs_commit)) as workers:
-                    futures = [workers.submit(rpc, node, self.acquisition, 'COMMIT', event_id=event_id)
-                               for node in needs_commit]
-                    for future in futures:
-                        future.result()
-            self.update(event_id, status='SENDING', active_server_ids=[n['server_id'] for n in nodes])
-            # Authorize every selected node before waiting for durable completion.
-            # Nodes transmit without an application-layer rate limit.
-            def export_node(node):
+            self.update(event_id, status='PREPARED', error='',
+                        missing_by_server=missing_by_server,
+                        active_server_ids=[node['server_id'] for node in nodes])
+
+            # Persist the phase before issuing the side effect. STORE is idempotent,
+            # so a restart can safely reconcile every node from its actual state.
+            self.update(event_id, status='STORING')
+            to_start = [node for node, state in zip(nodes, states)
+                        if state['status'] in ('PREPARED', 'SEND_FAILED')]
+            if to_start:
+                self.parallel('STORE', nodes=to_start, event_id=event_id)
+
+            def wait_stored(node):
                 state = rpc(node, self.acquisition, 'QUERY_EVENT', event_id=event_id)
-                if state['status'] in ('QUEUED', 'SEND_FAILED'):
-                    state = rpc(node, self.acquisition, 'SEND', event_id=event_id)
                 if state['status'] == 'SENDING':
-                    state = self.poll_event(node, event_id, {'STORED'}, 3600)
-                if state['status'] == 'STORED':
-                    state = rpc(node, self.acquisition, 'RELEASE', event_id=event_id)
-                if state['status'] != 'RELEASED':
-                    raise RuntimeError(f"unexpected node state: {state}")
+                    state = self.poll_event(node, event_id, {'STORED', 'RELEASED'}, 3600)
+                if state['status'] not in ('STORED', 'RELEASED'):
+                    raise RuntimeError(f"server {node['server_id']}: {state}")
+                return state
+
+            # No node is released until every selected node has durable storage.
             with ThreadPoolExecutor(max_workers=len(nodes)) as workers:
-                futures = [workers.submit(export_node, node) for node in nodes]
-                errors = []
-                for future in futures:
+                futures = [workers.submit(wait_stored, node) for node in nodes]
+                stored, errors = [], []
+                for node, future in zip(nodes, futures):
                     try:
-                        future.result()
+                        stored.append(future.result())
                     except Exception as error:
-                        errors.append(str(error))
+                        errors.append(f"server {node['server_id']}: {error}")
                 if errors:
                     raise RuntimeError('; '.join(errors))
+            for node, state in zip(nodes, stored):
+                if 'missing_packets' in state:
+                    missing_by_server[str(node['server_id'])] = state['missing_packets']
+            self.update(event_id, status='STORED', missing_by_server=missing_by_server)
+
+            self.update(event_id, status='RELEASING')
+            to_release = [node for node, state in zip(nodes, stored)
+                          if state['status'] == 'STORED']
+            if to_release:
+                released = self.parallel('RELEASE', nodes=to_release, event_id=event_id)
+                if any(state['status'] != 'RELEASED' for state in released):
+                    raise RuntimeError('one or more nodes did not release the stored event')
             self.update(event_id, status='COMPLETED', active_server_ids=[])
         except Exception as error:
             # Do not free protected data after an ambiguous UDP timeout or storage failure.
@@ -331,26 +417,15 @@ def main():
     controller = Controller(json.loads(Path(args.nodes).read_text()), args.acquisition, args.journal,
                             allow_partial=args.allow_partial, integration_per_trace=args.integration_per_trace,
                             period_microseconds=args.period_us)
+    replay = ReplayCache()
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.bind((args.bind, args.port))
         print(f'UDP trigger controller listening on {sock.getsockname()}', flush=True)
         while True:
-            data, peer = sock.recvfrom(1201)
-            if peer[0] != args.allow_source or len(data) > 1200:
+            data, peer = sock.recvfrom(MAX_CONTROL_BYTES + 1)
+            if peer[0] != args.allow_source or len(data) > MAX_CONTROL_BYTES:
                 continue
-            request_id = ''
-            try:
-                message = parse_request(data)
-                request_id = message['request_id']
-                if not ID.fullmatch(request_id):
-                    raise ValueError('invalid request_id')
-                reply = controller.dispatch(message)
-            except Exception as error:
-                reply = dict(status='ERROR', error=str(error)[:350])
-            reply.update(version=1, request_id=request_id)
-            body = json.dumps(reply, separators=(',', ':')).encode()
-            if len(body) <= 1200:
-                sock.sendto(body, peer)
+            sock.sendto(backend_reply(controller, data, peer, replay), peer)
 
 
 if __name__ == '__main__':

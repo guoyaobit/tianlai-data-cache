@@ -135,7 +135,7 @@ python3 tools/controller.py --nodes tools/nodes_example.json \
 python3 tools/trigger.py --host 192.168.200.250 --file tools/trigger_example.json
 ```
 
-在触发JSON中设置`"channel_count":288`或`384`；省略时默认384。返回PREPARING表示请求正在处理；查询事件得到ACCEPTED/SENDING后才表明所选模式全部节点已保护。
+在触发JSON中设置`"channel_count":288`或`384`；省略时默认384。返回PREPARING表示请求正在处理；查询事件得到PREPARED/STORING后才表明所选模式全部节点已保护。控制器只有确认所有节点STORED后才统一RELEASE，单节点故障不会提前释放其他节点缓存。
 QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
 本字段同时进入缓存事件和TLSTORE1元数据。升级时必须先停止触发并处理完旧事件，在维护窗口统一更新控制器、14台缓存服务和存储服务，再使用新的`acquisition_id`启动，不能混跑不含该字段的旧版进程。
 所选模式的11台或14台节点持久化完成后，C++存储服务通过UDP/JSON直接向消色散后端发送

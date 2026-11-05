@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate shared history, input bounds, and safe publication on journal failure."""
 import sys
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -11,7 +12,8 @@ import controller
 
 
 def main():
-    nodes = [dict(server_id=0, host='127.0.0.1'), dict(server_id=1, host='127.0.0.1')]
+    nodes = [dict(server_id=0, host='127.0.0.1', port=19000),
+             dict(server_id=1, host='127.0.0.1', port=19001)]
     with tempfile.TemporaryDirectory() as directory, patch('durable_json.sync_directory'):
         c = controller.Controller(nodes, 'acq', directory, allow_partial=True)
         start = dict(trace_period_id=120, integration_period_id=45000)
@@ -91,14 +93,35 @@ def main():
                 raise OSError('disk full')
             return real_atomic(path, event)
         def fake_rpc(node, acquisition, command, **fields):
-            status = {'PREPARE': 'PREPARED', 'COMMIT': 'QUEUED', 'QUERY_EVENT': 'QUEUED',
-                      'SEND': 'STORED', 'RELEASE': 'RELEASED'}[command]
+            status = {'PREPARE': 'PREPARED', 'STORE': 'STORED',
+                      'QUERY_EVENT': 'STORED', 'RELEASE': 'RELEASED'}[command]
             return dict(status=status, server_id=node['server_id'], missing_packets=0)
         with patch('controller.rpc', fake_rpc), patch('controller.atomic_json', failing_journal):
             c.run_event('event')
         assert c.events['event']['status'] == 'PAUSED'
         assert 'journal failure' in c.events['event']['error'] and c.running is None
-    print('shared-range, trigger bounds, and journal failure checks passed')
+
+        class Backend:
+            def __init__(self):
+                self.calls = 0
+            def dispatch(self, message):
+                self.calls += 1
+                return {'status': 'READY', 'call': self.calls}
+        backend = Backend()
+        cache = controller.ReplayCache(capacity=4, ttl=60)
+        request = json.dumps(dict(version=1, request_id='request-1', acquisition_id='acq',
+                                  command='QUERY_STATUS')).encode()
+        first = controller.backend_reply(backend, request, ('127.0.0.1', 1000), cache)
+        second = controller.backend_reply(backend, request, ('127.0.0.1', 2000), cache)
+        assert first == second and backend.calls == 1
+        conflict = json.dumps(dict(version=1, request_id='request-1', acquisition_id='acq',
+                                   command='QUERY_EVENT', event_id='event')).encode()
+        rejected = json.loads(controller.backend_reply(
+            backend, conflict, ('127.0.0.1', 3000), cache))
+        assert rejected['status'] == 'ERROR' and rejected['error'] == 'REQUEST_ID_CONFLICT'
+        assert controller.backend_reply(backend, request, ('127.0.0.1', 4000), cache) == first
+        assert backend.calls == 1
+    print('shared-range, replay safety, trigger bounds, and journal failure checks passed')
 
 
 if __name__ == '__main__':

@@ -20,6 +20,16 @@ def main():
             raise AssertionError('incomplete production node list accepted')
         except ValueError:
             pass
+        for invalid_nodes in (
+                [dict(server_id=True, host='127.0.0.1')],
+                [dict(server_id=0, host='127.0.0.1'),
+                 dict(server_id=1, host='127.0.0.1')],
+                [dict(server_id=0, host='', port=19000)]):
+            try:
+                controller.Controller(invalid_nodes, 'acq', directory, allow_partial=True)
+                raise AssertionError('invalid or duplicate node endpoint accepted')
+            except ValueError:
+                pass
         c = controller.Controller(nodes, 'acq', directory)
         c.events['event-1'] = dict(event_id='event-1', acquisition_id='acq', status='COMPLETED',
                                     start={'trace_period_id': 1, 'integration_period_id': 0},

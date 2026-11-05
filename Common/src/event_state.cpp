@@ -272,14 +272,8 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
         auto &e = para.event;
         if (command == "QUERY_EVENT")
             return reply(eventJson(e));
-        if (command == "COMMIT") {
-            if (e.state == EventState::Prepared) {
-                e.committed = true;
-                e.state = EventState::Queued;
-            } else if (!e.committed)
-                throw std::runtime_error("NOT_PREPARED");
-        } else if (command == "SEND") {
-            if (e.state == EventState::Queued || e.state == EventState::SendFailed) {
+        if (command == "STORE") {
+            if (e.state == EventState::Prepared || e.state == EventState::SendFailed) {
                 if (para.eventThread.joinable())
                     para.eventThread.join();
                 e.state = EventState::Sending;
@@ -294,8 +288,9 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                     e.error = "send thread creation failed";
                     throw;
                 }
-            } else if (e.state != EventState::Sending && e.state != EventState::Stored)
-                throw std::runtime_error("NOT_COMMITTED");
+            } else if (e.state != EventState::Sending && e.state != EventState::Stored &&
+                       e.state != EventState::Released)
+                throw std::runtime_error("NOT_PREPARED");
         } else if (command == "RELEASE") {
             if (e.state == EventState::Stored) {
                 for (auto &pool : para.receiveBuffers)
@@ -307,8 +302,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
         } else if (command == "CANCEL") {
             if (e.state == EventState::Preparing)
                 e.cancelRequested = true;
-            else if (e.state == EventState::Prepared || e.state == EventState::Queued ||
-                     e.state == EventState::SendFailed) {
+            else if (e.state == EventState::Prepared || e.state == EventState::SendFailed) {
                 for (auto &pool : para.receiveBuffers)
                     pool->release();
                 e.state = EventState::Cancelled;

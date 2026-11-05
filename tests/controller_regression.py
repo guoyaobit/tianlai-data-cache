@@ -52,15 +52,11 @@ class Nodes:
                         self.fail_export = False
                     else:
                         self.states[i] = 'STORED'
-            elif command == 'COMMIT':
-                assert self.protected == self.expected, 'committed before all nodes protected'
-                assert self.states[i] == 'PREPARED'
-                self.states[i] = 'QUEUED'
-            elif command == 'SEND':
-                assert self.protected == self.expected, 'sent before all selected nodes protected'
+            elif command == 'STORE':
+                assert self.protected == self.expected, 'stored before all selected nodes protected'
                 if i not in self.sent:
                     assert not any(s == 'RELEASED' for s in self.states.values()), 'waited before authorizing all senders'
-                assert self.states[i] in ('QUEUED', 'SEND_FAILED')
+                assert self.states[i] in ('PREPARED', 'SEND_FAILED')
                 self.sent.append(i)
                 self.states[i] = 'SENDING'
             elif command == 'RELEASE':
@@ -111,7 +107,8 @@ def main():
             controller.dispatch(message)
             event = finish(controller)
             assert event['status'] == 'PAUSED' and model.states[7] == 'SEND_FAILED', event
-            assert all(model.states[i] == 'RELEASED' for i in range(14) if i != 7)
+            assert all(model.states[i] == 'STORED' for i in range(14) if i != 7)
+            assert not any(state == 'RELEASED' for state in model.states.values())
             controller = Controller(config, 'shared-acquisition', path)
             controller.dispatch(dict(message, command='RESUME'))
             assert finish(controller)['status'] == 'COMPLETED'

@@ -232,8 +232,7 @@ def run(server, directory):
         except RuntimeError as error:
             assert 'NOT_DURABLY_STORED' in str(error)
         feed(200, 450)  # More than one live-half rotation while the event is frozen.
-        request('COMMIT', event_id='crossing')
-        request('SEND', event_id='crossing')
+        request('STORE', event_id='crossing')
         wait_for(lambda: request('QUERY_EVENT', event_id='crossing')['status'] == 'SEND_FAILED')
         assert request('QUERY_STATUS')['status'] == 'BUSY'
         receiver = DropFirstAckReceiver(directory / 'disk', ['127.0.0.1'])
@@ -242,13 +241,13 @@ def run(server, directory):
         for thread in threads:
             thread.start()
         time.sleep(.1)
-        request('SEND', event_id='crossing')
+        request('STORE', event_id='crossing')
         wait_for(lambda: request('QUERY_EVENT', event_id='crossing')['status'] == 'SEND_FAILED')
         assert request('QUERY_STATUS')['status'] == 'BUSY'
-        request('SEND', event_id='crossing')
+        request('STORE', event_id='crossing')
         wait_for(lambda: request('QUERY_EVENT', event_id='crossing')['status'] == 'SEND_FAILED')
         assert request('QUERY_STATUS')['status'] == 'BUSY'
-        request('SEND', event_id='crossing')
+        request('STORE', event_id='crossing')
         wait_for(lambda: request('QUERY_EVENT', event_id='crossing')['status'] == 'STORED')
         request('RELEASE', event_id='crossing')
         assert request('RELEASE', event_id='crossing')['status'] == 'RELEASED'

@@ -26,7 +26,6 @@ enum class EventState {
     Idle,
     Preparing,
     Prepared,
-    Queued,
     Sending,
     SendFailed,
     Stored,
@@ -40,7 +39,6 @@ inline const char *eventStateName(EventState state) {
     case EventState::Idle: return "IDLE";
     case EventState::Preparing: return "PREPARING";
     case EventState::Prepared: return "PREPARED";
-    case EventState::Queued: return "QUEUED";
     case EventState::Sending: return "SENDING";
     case EventState::SendFailed: return "SEND_FAILED";
     case EventState::Stored: return "STORED";
@@ -52,8 +50,8 @@ inline const char *eventStateName(EventState state) {
 }
 inline bool isActiveEventState(EventState state) {
     return state == EventState::Preparing || state == EventState::Prepared ||
-           state == EventState::Queued || state == EventState::Sending ||
-           state == EventState::SendFailed || state == EventState::Stored;
+           state == EventState::Sending || state == EventState::SendFailed ||
+           state == EventState::Stored;
 }
 
 struct EventInfo {
@@ -64,7 +62,7 @@ struct EventInfo {
     uint64_t freezeMilliseconds = 0, sendMilliseconds = 0;
     uint64_t transitionPeakPeriods = 0, transitionCapacityPeriods = 0;
     uint64_t sendRateBitsPerSecond = 0;
-    bool committed = false, cancelRequested = false;
+    bool cancelRequested = false;
 };
 struct CacheRuntime {
     YamlConfig *config = nullptr;

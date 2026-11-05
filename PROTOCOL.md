@@ -47,7 +47,8 @@ ID 字段只能使用 ASCII 字母、数字、下划线、短横线，长度 1�
 
 request_id 用于请求/回复匹配，event_id 用于执行去重。同一事件编号只能对应同一区间。
 超时重发同一请求；收到 PREPARING 后改用 QUERY_EVENT 轮询，不反复创建新事件。
-节点状态不会因为重复 COMMIT/SEND/RELEASE 而倒退。先收到 CANCEL 的未知事件会留下
+控制器会在5分钟内缓存最多1024个后端回复；同一来源IP使用相同request_id和相同报文重试时返回完全相同的回复，即使源端口变化也不会重复调度。相同request_id携带不同内容会返回REQUEST_ID_CONFLICT。控制器重启后仍由持久化event_id和节点幂等状态保证安全续作。
+节点状态不会因为重复 STORE/RELEASE 而倒退。先收到 CANCEL 的未知事件会留下
 取消记录，防止迟到 PREPARE 再次启动该事件。
 
 ### 外部 → 控制器（默认 UDP 18999）
@@ -80,8 +81,8 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
 | RESUME | event_id | 对 PAUSED 事件查询节点实际状态后继续 |
 | CANCEL | event_id | 明确放弃已暂停事件；正在发送的节点不能直接取消 |
 
-流程：PREPARING → ACCEPTED → SENDING → COMPLETED；任何不确定的失败转 PAUSED。
-ACCEPTED 可能短暂存在，查询得到 SENDING 也表示全部节点已保护。
+流程：PREPARING → PREPARED → STORING → STORED → RELEASING → COMPLETED；任何不确定的失败转 PAUSED。
+进入STORING前，所选节点必须全部PREPARED；进入RELEASING前，所选节点必须全部STORED。
 COMPLETED 只表示事件保存完成，不代表已经恢复完整 100 秒历史；再次触发应先查 READY。
 部分节点失败或超时，不自动假定那些节点没有执行过请求，也不自动删除其他节点的数据。
 控制器 `QUERY_STATUS` 只有在所有节点可触发且共同区间 `oldest_period < settled_end` 时才返回 READY；即使 READY，目标区间仍需落在共同区间内，节点可能因区间过期或未定稿而拒绝。控制器先检查包头计数的位宽，节点再按实际 `integrationPerTrace` 检查积分编号和范围。
@@ -112,21 +113,20 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
 | command | 额外字段 | 允许行为 |
 |---|---|---|
 | PREPARE | event_id、channel_count、start、period_count | 检查模式和历史区间并异步保护，返回PREPARING/PREPARED |
-| COMMIT | event_id | 全部节点准备后，由控制器转为 QUEUED |
-| SEND | event_id | QUEUED或SEND_FAILED时并行启动两个不限速ZeroMQ lane；忙时不重复启动 |
+| STORE | event_id | PREPARED或SEND_FAILED时并行启动两个不限速ZeroMQ lane；SENDING/STORED时幂等返回 |
 | QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、过渡区峰值和 error |
 | RELEASE | event_id | 只有该节点全部接收口数据可靠落盘后，即 STORED 状态，才允许释放冻结区 |
 | CANCEL | event_id | 未发送或发送失败时放弃事件；PREPARING 时延后安全释放 |
 | QUERY_STATUS | 无 | READY/BUSY/WARMING、共同周期范围、最繁忙口过渡区占用/容量/警告、最近冻结耗时等 |
 | QUERY_PORT | port | 单口周期范围、收包计数、过渡区占用/容量/峰值/警告、最近冻结耗时和冻结次数 |
 
-节点主要状态：PREPARING → PREPARED → QUEUED → SENDING → STORED → RELEASED。
+节点主要状态：PREPARING → PREPARED → SENDING → STORED → RELEASED。
 发送失败为 SEND_FAILED，仍保护数据；准备失败为 REJECTED；明确取消为 CANCELLED。
 释放后历史不足时节点 QUERY_STATUS 返回 WARMING，而不是 READY。
 
-控制器只有在所选模式全部节点PREPARED后才授权发送。288路并行11个节点，384路并行14个节点；每节点使用两个ZeroMQ连接，任一lane失败都会使节点进入SEND_FAILED并继续保护数据。
-默认 RPC 重试间隔 200 ms、5 次；准备/发送长任务通过查询等待。
-调度器重启时读取日志，未完成事件先 PAUSED；RESUME 根据节点现状继续，不盲目重放 SEND。
+控制器只有在所选模式全部节点PREPARED后才并行发出STORE；全部节点STORED后才并行发出RELEASE。288路使用11个节点，384路使用14个节点；每节点使用两个ZeroMQ连接，任一lane失败都会使节点进入SEND_FAILED，其他已落盘节点也暂不释放缓存。
+节点RPC使用同一request_id进行6次指数退避重试；准备和写盘长任务通过QUERY_EVENT等待。
+调度器重启时读取日志，未完成事件先PAUSED；RESUME根据节点实际状态继续，STORE和RELEASE均可安全重复。
 
 ## ZeroMQ 数据协议 TLSTORE1
 
@@ -134,7 +134,7 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
 
 每个 ZeroMQ 请求是一条消息：先发送带 4 字节长度的 JSON 元数据，然后逐条发送 40 字节块头和正文，最后发送 40 字节 END。通常除 END 外每条消息由存储端成功校验并写入后回复 ASCII OK；该 OK 不是持久化确认。存储端累计 256 MiB 或经过 1 秒后批量 `fdatasync`，END 在全部文件及完成标记持久化后回复 4 字节长度前缀的 STORED JSON。若相同元数据对应的持久化标记已经存在，首条元数据消息直接返回 STORED，发送端不再重传数据。发送端验证事件、采集编号、节点和 lane 后才进入 STORED。消息排队、块级 OK、TCP ACK 或 ZeroMQ send 成功均不代表完整落盘。
 
-每次SEND为两个lane分别建立新会话。未完成lane从头重传；已有持久化标记的lane直接返回STORED。同一server/lane不可并发写，但同一server的两个lane可以并行写入互不重叠的端口文件。
+每次STORE为两个lane分别建立新会话。未完成lane从头重传；已有持久化标记的lane直接返回STORED。同一server/lane不可并发写，但同一server的两个lane可以并行写入互不重叠的端口文件。
 
 发送端不做应用层限速，两个lane竞争同一物理网口的可用带宽。TCP负责拥塞控制和重传；部署时仍需验证14台节点汇聚到单100G接收口及磁盘阵列时的持续吞吐。
 
