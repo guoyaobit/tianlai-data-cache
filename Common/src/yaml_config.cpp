@@ -61,7 +61,7 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     chunkPeriods = number(cfg, "chunkPeriods", 1, 64);
     socketTimeoutSeconds = number(cfg, "socketTimeoutSeconds", 1, 300);
     if (cfg["sendRateBitsPerSecond"])
-        sendRateBitsPerSecond = number(cfg, "sendRateBitsPerSecond", 2000000, 18000000000ULL);
+        throw std::runtime_error("sendRateBitsPerSecond is obsolete; storage transfer is unlimited");
     if (cfg["udpFragmentBytes"])
         throw std::runtime_error("udpFragmentBytes is obsolete; remove it for ZeroMQ storage transport");
     prefaultMemory = number(cfg, "prefaultMemory", 0, 1) != 0;
@@ -99,13 +99,14 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
         }
         receivePorts.push_back(port);
     }
-    for (unsigned p = 0; p < 2; ++p) {
-        auto suffix = std::to_string(p);
-        sendPorts[p].ethName = field(node, "sendEthName" + suffix);
-        sendPorts[p].sourceIp = ip(node, "sendSourceIp" + suffix);
-        sendPorts[p].destinationIp = ip(node, "sendDestinationIp" + suffix);
-        sendPorts[p].destinationPort = number(node, "sendDestinationPort" + suffix, 1024, 65535);
-    }
+    sendLink.ethName = field(node, "sendEthName");
+    sendLink.sourceIp = ip(node, "sendSourceIp");
+    sendLink.destinationIp = ip(node, "sendDestinationIp");
+    for (unsigned lane = 0; lane < 2; ++lane)
+        sendLink.destinationPorts[lane] =
+            number(node, "sendDestinationPort" + std::to_string(lane), 1024, 65535);
+    if (sendLink.destinationPorts[0] == sendLink.destinationPorts[1])
+        throw std::runtime_error("storage lane destination ports must be distinct");
     if (reorderPeriods >= halfPeriods() || transitionPeriods() < reorderPeriods * 2ULL)
         throw std::runtime_error("transition buffer/half buffer too small for reorder window");
 }

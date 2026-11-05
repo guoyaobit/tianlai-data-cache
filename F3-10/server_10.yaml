@@ -35,16 +35,12 @@ serverCfg:
   cpuId3: -1
   # Local UDP port for simulation only.
   simulationPort3: 20103
-  # Storage-network transmit interface; must match source IP.
-  sendEthName0: "CHANGE_ME_SEND_0"
+  # Single storage-network transmit interface; both lanes share it.
+  sendEthName: "CHANGE_ME_SEND"
   # Local storage-network source IP.
-  sendSourceIp0: "192.168.210.110"
+  sendSourceIp: "192.168.210.110"
   # Storage receiver data-network IP.
-  sendDestinationIp0: "192.168.210.250"
-  # Storage receiver ZeroMQ/TCP port.
+  sendDestinationIp: "192.168.210.250"
+  # Logical lane ports on the same physical link.
   sendDestinationPort0: 20010
-  # Second storage-network interface on the untagged lane-1 subnet.
-  sendEthName1: "CHANGE_ME_SEND_1"
-  sendSourceIp1: "192.168.211.110"
-  sendDestinationIp1: "192.168.211.250"
   sendDestinationPort1: 20110

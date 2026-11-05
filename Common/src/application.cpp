@@ -40,8 +40,8 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
         std::cout << "server=" << config.serverId << " receivePorts=" << config.receivePorts.size()
                   << " estimatedBytes=" << config.allocationBytes()
                   << " transitionPeriods=" << config.transitionPeriods() << "\n";
-        std::cout << "transport=ZeroMQ lanes=2 sendRateBitsPerSecond="
-                  << config.sendRateBitsPerSecond << "\n";
+        std::cout << "transport=ZeroMQ lanes=2 sendInterface=" << config.sendLink.ethName
+                  << " rateLimit=none\n";
         for (unsigned p = 0; p < config.receivePorts.size(); ++p) {
             const auto &port = config.receivePorts[p];
             std::cout << "port=" << p << " packetId=" << port.packetId
@@ -64,17 +64,10 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
                 if (port.deviceName.find("CHANGE_ME") != std::string::npos)
                     throw std::runtime_error(
                         "configure actual receive PCI addresses before running");
-            for (const auto &port : config.sendPorts)
-                if (port.ethName == "-" || port.ethName.find("CHANGE_ME") != std::string::npos ||
-                    port.sourceIp == "0.0.0.0" || port.destinationIp == "0.0.0.0")
-                    throw std::runtime_error("configure dedicated send interfaces before running");
-            const auto &lane0 = config.sendPorts[0];
-            const auto &lane1 = config.sendPorts[1];
-            if (lane0.ethName == lane1.ethName || lane0.sourceIp == lane1.sourceIp ||
-                lane0.destinationIp == lane1.destinationIp ||
-                lane0.destinationPort == lane1.destinationPort)
-                throw std::runtime_error(
-                    "dual send lanes require distinct interfaces, addresses and ports");
+            const auto &link = config.sendLink;
+            if (link.ethName == "-" || link.ethName.find("CHANGE_ME") != std::string::npos ||
+                link.sourceIp == "0.0.0.0" || link.destinationIp == "0.0.0.0")
+                throw std::runtime_error("configure the storage send interface before running");
         }
         initLogOut(config.logFilePath);
         LOG("Cache data is memory-only; a process or host restart discards all buffered events.",

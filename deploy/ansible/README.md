@@ -8,7 +8,7 @@
 - 每个缓存节点事先安装对应的 `ixcap_lib.h` 和 `libixcap.a` 或 `libixcap.so`；默认在 `/usr/local/include`、`/usr/local/lib`，可在清单覆盖 `tianlai_ixcap_include`、`tianlai_ixcap_lib`。
 - 真实地址、链路、网卡 PCI 地址、光模块、驱动、NUMA、MTU 及存储挂载由现场先完成验证。`tianlai_storage_directory` 必须指向目标机已有且正确挂载的存储路径下的目录；脚本只创建目录，不验证其所在磁盘或容量。
 - 清单可使用 YAML 或 INI：复制 `inventory_example.yml` 为 `inventory.yml`，或复制 `inventory_example.ini` 为 `inventory.ini`。两份示例都包含缓存服务器 1～14（节点 0～13）及同机部署的存储/控制器；选择一种维护即可。须现场核对 SSH 地址，并补齐各节点的接收 PCI 地址、万兆发送接口和地址。`controller` 与 `storage` 组必须使用同一个存储服务器主机名。
-- 在清单中填写两个发送接口/源IP及存储100G口上的两个无标签子网IP。两个子网共享同一个物理100G接口，不配置VLAN；数据接口不设置默认网关。管理网仍使用`tianlai_controller_ip`。
+- 在清单中填写单个发送接口/源IP及存储100G口上的单个无标签IP。不配置VLAN，数据接口不设置默认网关；管理网仍使用`tianlai_controller_ip`。
 - 消色散后端须在 `tianlai_backend_ip:tianlai_notify_port` 监听 UDP。存储服务从 `tianlai_controller_ip` 发送 `CAPTURE_RESULT`；后端持久化结果后向该报文的来源地址回复 `ACK_RESULT`。Playbook 不部署后端，也不修改相关防火墙。
 - 如果目标上安装的 ixcap 是共享库，确保运行时动态链接器可找到该库。脚本只检查文件存在，不负责驱动、权限或网卡初始化。
 
@@ -54,13 +54,13 @@ ansible-playbook -i inventory.yml inspect_nics.yml
 | 输出项 | 用途 |
 | --- | --- |
 | `expected_cache_receive_ports` | 缓存服务器 1～3 各需 8 个接收端口，4～14 各需 4 个；其他角色不适用。 |
-| `expected_cache_send_interfaces` | 每个缓存节点使用物理5/6口，共2个发送接口。 |
-| `configured_receive_devices`、`configured_send_interfaces`、`configured_send_ips`、`configured_control_ip` | 显示清单中已有值，便于与现场盘点结果核对。 |
+| `expected_cache_send_interfaces` | 每个缓存节点使用1个存储数据发送接口。 |
+| `configured_receive_devices`、`configured_send_interface`、`configured_send_ip`、`configured_control_ip` | 显示清单中已有值，便于与现场盘点结果核对。 |
 | `interfaces` | 系统网络接口的名称、MAC、IP、MTU、状态、链路速率、PCI 地址、驱动和 NUMA 节点。 |
 | `pci_network_devices` | PCI 网络设备的地址、厂商和设备编号、驱动、NUMA 节点及其系统接口；没有系统接口的设备也会列出。 |
 | `warnings` | 无法读取 IP 或系统设备信息时的提示。 |
 
-现场确认物理接线后，将接收PCI地址填入`tianlai_receive_devices`，将物理5/6口的Linux接口名依次填入`tianlai_send_interfaces`，两个子网地址依次填入`tianlai_send_ips`。存储服务器同一个100G接口必须已配置`tianlai_storage_ip0/1`两个地址。Playbook只校验和生成报告，不自动修改主机网络。
+现场确认物理接线后，将接收PCI地址填入`tianlai_receive_devices`，将单个存储数据口的Linux接口名填入`tianlai_send_interface`，地址填入`tianlai_send_ip`。存储服务器100G接口配置`tianlai_storage_ip`一个地址。Playbook只校验和生成报告，不自动修改主机网络。
 
 ## 执行
 
@@ -97,4 +97,4 @@ systemctl status tianlai-controller.service
 
 分别在对应机器执行上述命令，并按[部署与联调手册](../../部署与联调手册.md)检查 14 台收包、计数同步、触发、落盘、缺包、通知和真实吞吐。服务启动不等于缓存已 READY，也不表示真实设备验收通过。
 
-默认每节点两个lane合计限速5.6 Gbit/s。存储服务为14台节点生成28个监听端点：lane 0使用20000～20013，lane 1使用20100～20113，并以4个ZeroMQ I/O线程服务单100G物理口。修改端口基数时应同时更新节点与存储服务。
+每节点不做应用层限速，两个逻辑lane共享一个物理网口。存储服务为14台节点生成28个监听端点：lane 0使用20000～20013，lane 1使用20100～20113。每个端点线程同时负责协议和写盘，默认使用2个ZeroMQ I/O线程，应用可见线程数约32个，libzmq可能另有内部管理线程。修改端口基数时应同时更新节点与存储服务。

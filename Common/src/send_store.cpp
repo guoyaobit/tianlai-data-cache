@@ -4,10 +4,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <memory>
 #include <stdexcept>
 #include <thread>
-#include <zlib.h>
 
 static void sendJson(StoreConnection &socket, const std::string &json) {
     std::vector<unsigned char> message;
@@ -24,8 +22,8 @@ static void set32(std::vector<unsigned char> &buffer, size_t offset, uint32_t va
 }
 
 // Assemble event data blocks by receive port and period, send each block, and validate the final persistence acknowledgement.
-static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event, StorePacer &pacer) {
-    StoreConnection socket(para, lane, pacer);
+static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event) {
+    StoreConnection socket(para, lane);
     const auto &c = *para.config;
     // Remote input has two FFT halves per board. Require explicit metadata at the receiver;
     // keep the existing two profiles' preamble and binary record layout unchanged.
@@ -81,13 +79,11 @@ static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event, 
             put64(message, start);
             put64(message, count);
             put32(message, 0); // Body length, filled after the event frames are appended.
-            put32(message, 0); // Body CRC32.
+            put32(message, 0); // Reserved; must be zero.
             for (uint64_t i = 0; i < count; ++i)
                 para.receiveBuffers[p]->appendEventFrame(start + i, message);
             const size_t bodyBytes = message.size() - 40;
-            const uint32_t checksum = crc32(0, message.data() + 40, bodyBytes);
             set32(message, 32, static_cast<uint32_t>(bodyBytes));
-            set32(message, 36, checksum);
             socket.sendMessage(message);
             {
                 std::lock_guard<std::mutex> lock(para.eventMutex);
@@ -111,10 +107,6 @@ void InitSendStoreThread(CacheRuntime *para) {
         std::lock_guard<std::mutex> lock(para->eventMutex);
         event = para->event;
     }
-    const uint64_t laneRate = para->config->sendRateBitsPerSecond / 2;
-    std::array<std::unique_ptr<StorePacer>, 2> pacers{
-        std::unique_ptr<StorePacer>(new StorePacer(laneRate)),
-        std::unique_ptr<StorePacer>(new StorePacer(laneRate))};
     const auto started = std::chrono::steady_clock::now();
     std::array<std::string, 2> laneErrors;
     std::array<std::thread, 2> workers;
@@ -122,7 +114,7 @@ void InitSendStoreThread(CacheRuntime *para) {
         for (unsigned lane = 0; lane < 2; ++lane) {
             workers[lane] = std::thread([&, lane] {
                 try {
-                    sendLane(*para, lane, event, *pacers[lane]);
+                    sendLane(*para, lane, event);
                 } catch (const std::exception &caught) {
                     laneErrors[lane] = caught.what();
                 }

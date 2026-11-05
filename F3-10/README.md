@@ -11,6 +11,6 @@ make -j4
 sudo ./tianlai-store-f3-10 server_03.yaml receive_config.yaml
 ```
 
-运行前须填写实际PCI地址、物理5/6口两个发送接口、管理/发送IP及全局采集编号。
+运行前须填写实际PCI地址、单个存储发送接口、管理/发送IP及全局采集编号。
 沿用 GPU 程序命名的收包、缓存、配置和线程模块位于 `../Common/`，与另一组共用。
 内存、触发、调度、存储格式和测试说明见 [总说明](../README.md)。

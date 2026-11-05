@@ -18,9 +18,9 @@ struct ReceivePortConfig {
     int cpuId = -1;
     unsigned simulationPort = 0;
 };
-struct SendPortConfig {
+struct SendLinkConfig {
     std::string ethName, sourceIp, destinationIp;
-    unsigned destinationPort = 0;
+    unsigned destinationPorts[2]{};
 };
 class YamlConfig {
   public:
@@ -48,12 +48,10 @@ class YamlConfig {
     unsigned reorderPeriods = 50, settleMilliseconds = 20, transitionWarnPercent = 80;
     unsigned chunkPeriods = 64;
     unsigned controlPort = 19000, socketTimeoutSeconds = 15;
-    // ZeroMQ application-byte rate limit; excludes network overhead and retransmissions.
-    uint64_t sendRateBitsPerSecond = 5600000000ULL;
     uint64_t transitionBytes = 32ULL << 30, reserveMemoryBytes = 48ULL << 30;
     bool prefaultMemory = true;
     std::string acquisitionId, controlBindIp, controlPeerIp, logFilePath;
     std::vector<ReceivePortConfig> receivePorts;
-    SendPortConfig sendPorts[2];
+    SendLinkConfig sendLink;
 };
 #endif

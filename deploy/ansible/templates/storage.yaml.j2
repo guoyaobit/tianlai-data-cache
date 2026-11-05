@@ -4,20 +4,20 @@ storage:
   directory: {{ tianlai_storage_directory | to_json }}
   # ZeroMQ I/O workers for the single 100 GbE interface.
   ioThreads: {{ tianlai_storage_io_threads | int }}
-  # Both untagged IP subnets terminate on the same physical interface.
+  # Both logical lanes terminate on the same physical interface and IP.
   receivers:
 {% for server_id in range(0, 14) %}
 {% for host in groups['cache_nodes'] if (hostvars[host].tianlai_server_id | int) == server_id %}
     - serverId: {{ server_id }}
       lane: 0
-      bindAddress: {{ tianlai_storage_ip0 | to_json }}
+      bindAddress: {{ tianlai_storage_ip | to_json }}
       port: {{ (tianlai_storage_port | int) + server_id }}
-      allowedSource: {{ hostvars[host].tianlai_send_ips[0] | to_json }}
+      allowedSource: {{ hostvars[host].tianlai_send_ip | to_json }}
     - serverId: {{ server_id }}
       lane: 1
-      bindAddress: {{ tianlai_storage_ip1 | to_json }}
+      bindAddress: {{ tianlai_storage_ip | to_json }}
       port: {{ (tianlai_storage_lane1_port | int) + server_id }}
-      allowedSource: {{ hostvars[host].tianlai_send_ips[1] | to_json }}
+      allowedSource: {{ hostvars[host].tianlai_send_ip | to_json }}
 {% endfor %}
 {% endfor %}
 backend:

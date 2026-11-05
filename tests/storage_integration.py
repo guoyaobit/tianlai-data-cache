@@ -10,7 +10,6 @@ import struct
 import subprocess
 import tempfile
 import time
-import zlib
 
 import zmq
 
@@ -73,7 +72,7 @@ def send_event(context, port, root, server, lane):
             header = (15 << 60) | (1 << 40) | (board_begin << 8) | packet_id
             struct.pack_into('!Q', body, FRAME.size, header)
             body[FRAME.size + 8:FRAME.size + 16] = b'FPGA-123'
-            message = CHUNK.pack(1, p, packet_id, board_begin, 100, 1, len(body), zlib.crc32(body)) + body
+            message = CHUNK.pack(1, p, packet_id, board_begin, 100, 1, len(body), 0) + body
             sock.send(message)
             assert sock.recv() == b'OK'
             expected.append(body)
@@ -89,7 +88,6 @@ def send_event(context, port, root, server, lane):
     for p, body in zip(range(lane, ports, 2), expected):
         assert (directory / f'port-{p}.bin').read_bytes() == body
         assert marker['missing_packets'][str(p)] == boards - 1
-        assert marker['file_crc32'][str(p)] == zlib.crc32(body)
 
 
 def main():
@@ -121,10 +119,10 @@ def main():
             receivers = '\n'.join(
                 f'    - serverId: {server}\n      lane: {lane}\n      bindAddress: "127.0.0.1"\n'
                 f'      port: {port + lane * 14 + server}\n'
-                f'      allowedSource: "127.0.0.{server + 1 + lane * 14}"'
+                f'      allowedSource: "127.0.0.{server + 1}"'
                 for server in range(14) for lane in range(2))
             config.write_text(
-                f'storage:\n  directory: "{root.as_posix()}"\n  ioThreads: 4\n'
+                f'storage:\n  directory: "{root.as_posix()}"\n  ioThreads: 2\n'
                 f'  receivers:\n{receivers}\n'
                 f'backend:\n  address: "127.0.0.1"\n  port: {notify_port}\n'
                 '  bindAddress: "127.0.0.1"\n', encoding='utf-8')

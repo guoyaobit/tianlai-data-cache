@@ -25,7 +25,7 @@
 
 ## 构建和启动
 
-依赖 Linux、g++、Boost 头文件、zlib、yaml-cpp、libzmq 和 spdlog 开发库（含其 fmt 依赖），以及缓存节点现有 `ixcap_lib.h/libixcap.a`。C++ 存储服务另外需要 C++17 和 nlohmann-json 开发包。构建默认用 `pkg-config` 查询 spdlog、libzmq 和 yaml-cpp；部署前在目标环境安装对应开发包并重新构建。
+依赖Linux、g++、Boost头文件、yaml-cpp、libzmq和spdlog开发库（含其fmt依赖），以及缓存节点现有`ixcap_lib.h/libixcap.a`。C++存储服务另外需要C++17和nlohmann-json开发包。构建默认用`pkg-config`查询spdlog、libzmq和yaml-cpp；部署前在目标环境安装对应开发包并重新构建。
 
 ```bash
 make -j4 production                  # 编译三类缓存程序和落盘服务
@@ -43,7 +43,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 先修改每台对应的 `server_XX.yaml` 和该组的 `receive_config.yaml`：
 
 - 将 `deviceName0..7` 或 `deviceName0..3` 改为实际接收 PCI 地址。
-- 填写物理5/6口对应的 `sendEthName0/1`、两个无标签子网的本地IPv4及存储端地址/端口。
+- 填写单个存储网口对应的 `sendEthName`、本地IPv4、存储端IPv4及两个逻辑lane端口。
 - `controlBindIp/controlPort` 是管理网 UDP 监听地址；`controlPeerIp` 只允许调度机地址。
 - 所有节点及调度程序使用同一个实际 `acquisitionId`；前端复位后重新建立任务。
 - `transitionWarnPercent` 默认 80；过渡区达到该占用比例时记录一次 WARN，并在查询结果中置警告标志。
@@ -152,11 +152,13 @@ QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
 
 ## ZeroMQ 回传与存储
 
-存储服务始终为14台服务器保留28个监听入口。288路事件只有节点0～10回传22个lane；384路事件由节点0～13回传28个lane。每台通过物理5/6口建立两个基于TCP的ZeroMQ连接，lane 0发送偶数接收口，lane 1发送奇数接收口，数据不复制。两个发送口使用不同的无标签IP子网；存储服务器同一个100G物理口配置两个IP。每个活动lane另有独立写盘线程。发送端要求libzmq支持ZMQ_BINDTODEVICE，且源IP必须属于指定接口。
+存储服务始终为14台服务器保留28个监听入口。288路事件只有节点0～10回传22个lane；384路事件由节点0～13回传28个lane。每个入口由一个线程顺序完成收包、校验和写盘，不再额外创建写盘线程；协议本身逐块确认，因此仍可在不同lane之间并行。每台缓存服务器只使用一个物理网口和一个源IP，两个基于TCP的ZeroMQ连接共享该网口；lane 0发送偶数接收口，lane 1发送奇数接收口，数据不复制。存储服务器使用一个100G物理口和一个IP。发送端要求libzmq支持ZMQ_BINDTODEVICE，且源IP必须属于指定接口。
 
-`sendRateBitsPerSecond`是单节点两个lane合计的应用层限速，默认5.6 Gbit/s；程序平均分配为每lane约2.8 Gbit/s。288路共11台、约61.6 Gbit/s；384路共14台、约78.4 Gbit/s，为单100G接收口预留协议和重传余量。该值不是线速保证，必须结合存储阵列持续写入能力实测。
+发送端不设置应用层速率上限，两个lane会共同使用单个物理网口的可用带宽。实际吞吐由缓存服务器网卡、交换机、存储服务器100G网口和磁盘阵列中最慢的一环决定，必须实测持续写入能力和拥塞表现。
 
-每条 ZeroMQ 消息由存储端检查并处理；数据块校验、写入页缓存后返回 OK，再发送下一块。存储端累计 256 MiB 或经过 1 秒后批量 `fdatasync`，收到 END 后强制同步全部数据文件，再持久化完成标记并返回 STORED。块级 OK 只表示已校验并写入，不表示断电安全；节点只有验证最终 STORED 后才允许释放事件。连接、超时或写盘失败时节点保留冻结数据并报告 SEND_FAILED。
+每条ZeroMQ消息由存储端检查并处理；数据块结构检查、写入页缓存后返回OK，再发送下一块。存储端累计256 MiB或经过1秒后批量`fdatasync`，收到END后强制同步全部数据文件，再持久化完成标记并返回STORED。块级OK只表示结构检查通过并已写入，不表示断电安全；节点只有验证最终STORED后才允许释放事件。连接、超时或写盘失败时节点保留冻结数据并报告SEND_FAILED。
+
+缓存到存储链路不计算应用层CRC，40字节块头的末4字节为0。传输可靠性依赖TCP校验与重传；存储端仍校验消息长度、周期范围、端口映射和原始包头，但不检测内存、PCIe或磁盘静默位翻转。
 
 在存储服务器编译并运行 C++ 接收器（地址按现场替换）：
 
@@ -166,11 +168,11 @@ make storage
 ./Storage/tianlai-storage --config Storage/storage.yaml
 ```
 
-`sendDestinationIp0/1`分别指向100G口上的两个IP，端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。最终确认丢失时，已完成lane在元数据阶段直接返回STORED；288路需要22个lane、384路需要28个lane持久化标记一致，才生成`storage-complete.json`并通知后端。
+`sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。最终确认丢失时，已完成lane在元数据阶段直接返回STORED；288路需要22个lane、384路需要28个lane持久化标记一致，才生成`storage-complete.json`并通知后端。
 
 ZeroMQ 数据通道不使用 UDP 分片参数；旧配置中的 udpFragmentBytes 必须删除。TCP/IP MTU 仍须按实际网络配置。ZeroMQ 不会补回 FPGA 到缓存服务器之间丢失的 UDP 包；旧 UDP/TCP 存储发送端与 ZeroMQ 接收器不兼容，需协调同时更新。
 
-78.4 Gbit/s是默认应用速率总和，不是已验证的持续落盘能力。28个监听线程和4个ZeroMQ I/O线程不会自动增加网卡、PCIe或磁盘阵列带宽；100G网卡RSS、中断亲和性、NUMA和磁盘持续写入仍须实机验收。
+程序不主动限速，因此不能把网口线速当作已验证的持续落盘能力。默认线程结构为1个主线程、28个lane线程、2个ZeroMQ I/O线程和1个完成通知线程，应用可见合计约32个，不再动态增加28个写盘线程；libzmq可能另有内部管理线程。100G网卡RSS、中断亲和性、NUMA、交换机拥塞和磁盘持续写入仍须实机验收；若2个I/O线程成为瓶颈，可实测后提高`ioThreads`。
 
 ## 缓存进程异常退出与恢复
 
@@ -182,7 +184,7 @@ ZeroMQ 数据通道不使用 UDP 分片参数；旧配置中的 udpFragmentBytes
 make test
 ```
 
-`make test` 通过统一入口构建模拟版后运行回归和联调；可通过 `PYTHON`、`CXX` 指定解释器和编译器，例如 `make test PYTHON=python3 CXX=g++`。测试仍需 Boost、yaml-cpp、spdlog、zlib 和支持 ASan/UBSan 的编译器，不需要 ixcap。`make clean` 会删除三个类型的构建目录、可执行文件及落盘服务构建产物；`make clean PROFILE=F3-10` 只清理指定类型，运行前请确认不需要保留相关产物。
+`make test`通过统一入口构建模拟版后运行回归和联调；可通过`PYTHON`、`CXX`指定解释器和编译器，例如`make test PYTHON=python3 CXX=g++`。测试仍需Boost、yaml-cpp、spdlog和支持ASan/UBSan的编译器，不需要ixcap。`make clean`会删除三个类型的构建目录、可执行文件及落盘服务构建产物；`make clean PROFILE=F3-10`只清理指定类型，运行前请确认不需要保留相关产物。
 
 测试另需系统 Python 的 pyzmq、libzmq 和 nlohmann-json 开发库。测试使用 ASan/UBSan 检查真实缓冲实现，覆盖跨 A/B、非零起始周期、循环覆盖、缺包、
 整周期缺失、并发收包、过渡溢出、冻结及恢复。回环联调运行三类真实程序的 `--simulate`，

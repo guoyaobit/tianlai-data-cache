@@ -16,9 +16,7 @@
           - "'CHANGE_ME' not in tianlai_acquisition_id"
           - tianlai_controller_ip is match('^[0-9.]+$')
           - tianlai_backend_ip is match('^[0-9.]+$')
-          - tianlai_storage_ip0 is match('^[0-9.]+$')
-          - tianlai_storage_ip1 is match('^[0-9.]+$')
-          - tianlai_storage_ip0 != tianlai_storage_ip1
+          - tianlai_storage_ip is match('^[0-9.]+$')
           - tianlai_storage_directory is match('^/[^ ]+$')
           - "'CHANGE_ME' not in tianlai_storage_directory"
           - tianlai_root is match('^/[^ ]+$')
@@ -45,15 +43,9 @@
           - hostvars[item].tianlai_server_id | int >= 0
           - hostvars[item].tianlai_server_id | int <= 13
           - hostvars[item].tianlai_control_ip | default('') is match('^[0-9.]+$')
-          - hostvars[item].tianlai_send_ips | default([]) | length == 2
-          - hostvars[item].tianlai_send_interfaces | default([]) | length == 2
-          - hostvars[item].tianlai_send_ips | default([]) | unique | list | length == 2
-          - hostvars[item].tianlai_send_interfaces | default([]) | unique | list | length == 2
-          - (hostvars[item].tianlai_send_ips | default([]) | first | default('')) is match('^[0-9.]+$')
-          - (hostvars[item].tianlai_send_ips | default([]) | last | default('')) is match('^[0-9.]+$')
-          - (hostvars[item].tianlai_send_interfaces | default([]) | first | default('')) is match('^[A-Za-z0-9_.:-]+$')
-          - (hostvars[item].tianlai_send_interfaces | default([]) | last | default('')) is match('^[A-Za-z0-9_.:-]+$')
-          - "'CHANGE_ME' not in (hostvars[item].tianlai_send_interfaces | default([]) | join(' '))"
+          - hostvars[item].tianlai_send_ip | default('') is match('^[0-9.]+$')
+          - hostvars[item].tianlai_send_interface | default('') is match('^[A-Za-z0-9_.:-]+$')
+          - "'CHANGE_ME' not in (hostvars[item].tianlai_send_interface | default('CHANGE_ME'))"
           - hostvars[item].tianlai_receive_devices | default([]) | length == (8 if hostvars[item].tianlai_server_id | int < 3 else 4)
           - "'CHANGE_ME' not in (hostvars[item].tianlai_receive_devices | default([]) | join(' '))"
           - hostvars[item].tianlai_receive_devices | default([]) | unique | list | length == hostvars[item].tianlai_receive_devices | default([]) | length
@@ -65,8 +57,7 @@
         that:
           - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_server_id') | map('int') | sort == range(0, 14) | list
           - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_control_ip') | unique | list | length == 14
-          - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_send_ips') | map('first') | unique | list | length == 14
-          - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_send_ips') | map('last') | unique | list | length == 14
+          - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_send_ip') | unique | list | length == 14
     - name: Require controller and storage SSH targets
       ansible.builtin.assert:
         that: "'CHANGE_ME' not in (hostvars[item].ansible_host | default('CHANGE_ME'))"
@@ -89,7 +80,7 @@
         that: ansible_facts.os_family == 'Debian'
     - name: Install storage build dependencies
       ansible.builtin.apt:
-        name: [build-essential, pkg-config, libzmq3-dev, libyaml-cpp-dev, nlohmann-json3-dev, zlib1g-dev]
+        name: [build-essential, pkg-config, libzmq3-dev, libyaml-cpp-dev, nlohmann-json3-dev]
         state: present
         update_cache: true
         cache_valid_time: 3600
@@ -186,7 +177,7 @@
           - ixcap_files.results[1].stat.exists or ixcap_files.results[2].stat.exists
     - name: Install build dependencies
       ansible.builtin.apt:
-        name: [build-essential, pkg-config, libboost-dev, zlib1g-dev, libspdlog-dev, libyaml-cpp-dev, libzmq3-dev]
+        name: [build-essential, pkg-config, libboost-dev, libspdlog-dev, libyaml-cpp-dev, libzmq3-dev]
         state: present
         update_cache: true
         cache_valid_time: 3600

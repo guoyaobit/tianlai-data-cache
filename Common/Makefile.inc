@@ -4,7 +4,7 @@ CXXFLAGS ?= -O3 -g
 CXXFLAGS += -std=c++14 -Wall -Wextra -Wpedantic -pthread
 IXCAP_INCLUDE ?= /usr/local/include
 IXCAP_LIB ?= /usr/local/lib
-LDLIBS += -pthread -lz
+LDLIBS += -pthread
 # Override for installations without pkg-config, e.g. SPDLOG_LIBS='-lspdlog -lfmt'.
 SPDLOG_CFLAGS ?= $(shell pkg-config --cflags spdlog 2>/dev/null)
 SPDLOG_LIBS ?= $(shell pkg-config --libs spdlog 2>/dev/null || echo '-lspdlog -lfmt')

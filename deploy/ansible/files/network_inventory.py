@@ -104,7 +104,7 @@ def collect(sysfs=Path('/sys'), address_reader=ip_addresses):
 
 
 def build_report(inventory, request):
-    """Match configured receive PCI addresses and both send interfaces to observations."""
+    """Match configured receive PCI addresses and send interfaces to observations."""
     if not isinstance(request, dict) or not isinstance(request.get('configured'), dict):
         raise ValueError('report request must contain a configured object')
     configured = request['configured']

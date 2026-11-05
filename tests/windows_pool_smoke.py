@@ -77,17 +77,6 @@ uint64_t getNumber(const boost::property_tree::ptree&, const std::string& key) {
             subprocess.run([str(binary)], check=True, timeout=60)
         (tmp / 'netinet').mkdir()
         (tmp / 'netinet/in.h').write_text('struct sockaddr_in {};\n')
-        (tmp / 'zlib.h').write_text('''#pragma once
-#include <cstdint>
-inline unsigned long crc32(unsigned long value, const unsigned char* data, unsigned int count) {
-    uint32_t crc = static_cast<uint32_t>(value) ^ 0xffffffffU;
-    for (unsigned int i=0; i<count; ++i) {
-        crc ^= data[i];
-        for (int j=0; j<8; ++j) crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320U : 0);
-    }
-    return crc ^ 0xffffffffU;
-}
-''')
         subprocess.run([args.cxx, '-std=c++14', '-pthread', '-fsyntax-only', '-I' + str(tmp),
                         '-I' + str(ROOT / 'Common/include'),
                         str(ROOT / 'Common/src/send_store.cpp')], check=True, timeout=90)

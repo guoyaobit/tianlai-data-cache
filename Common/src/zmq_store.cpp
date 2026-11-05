@@ -24,7 +24,7 @@ void setIntOption(void *socket, int option, int value) {
         throw zmqError("ZeroMQ socket option failed");
 }
 
-void validateSource(const SendPortConfig &config) {
+void validateSource(const SendLinkConfig &config) {
     in_addr source{}, destination{};
     if (inet_pton(AF_INET, config.sourceIp.c_str(), &source) != 1 ||
         inet_pton(AF_INET, config.destinationIp.c_str(), &destination) != 1 ||
@@ -80,29 +80,10 @@ struct Message {
 };
 } // namespace
 
-// Limit the average send rate by application message size and allow a stop signal to interrupt the wait.
-void StorePacer::wait(size_t bytes, const ThreadFlags *flags) {
-    // A complete ZeroMQ message is queued at once. This limits average
-    // application bytes, not short bursts, TCP retransmissions or link overhead.
-    std::lock_guard<std::mutex> guard(mutex);
-    auto now = std::chrono::steady_clock::now();
-    while (next > now) {
-        if (flags && !flags->ifControl)
-            throw std::runtime_error("ZeroMQ transfer interrupted; event remains protected");
-        const auto remaining = next - now;
-        if (remaining > std::chrono::milliseconds(50))
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        else if (remaining > std::chrono::microseconds(100))
-            std::this_thread::sleep_until(next - std::chrono::microseconds(50));
-        now = std::chrono::steady_clock::now();
-    }
-    next = now + std::chrono::nanoseconds((bytes * 8000000000ULL + rate - 1) / rate);
-}
-
 // Validate the source interface and address, then create a bounded, timeout-enabled ZeroMQ request connection.
-StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane, StorePacer &limit)
-    : para(p), pacer(limit), laneIndex(lane) {
-    const auto &config = para.config->sendPorts[lane];
+StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane)
+    : para(p), laneIndex(lane) {
+    const auto &config = para.config->sendLink;
     validateSource(config);
     context = zmq_ctx_new();
     if (!context)
@@ -130,7 +111,7 @@ StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane, StorePacer &lim
         }
         // ZeroMQ's TCP source endpoint binds the source IPv4 and an ephemeral port.
         const std::string endpoint = "tcp://" + config.sourceIp + ":0;" + config.destinationIp + ":" +
-                                     std::to_string(config.destinationPort);
+                                     std::to_string(config.destinationPorts[lane]);
         if (zmq_connect(socket, endpoint.c_str()) != 0)
             throw zmqError("ZeroMQ connect failed");
     } catch (...) {
@@ -155,7 +136,6 @@ void StoreConnection::sendMessage(const std::vector<unsigned char> &message, boo
                                   bool allowStored) {
     if (message.empty() || message.size() > MAX_MESSAGE)
         throw std::runtime_error("ZeroMQ message size invalid");
-    pacer.wait(message.size(), para.flags);
     auto deadline = std::chrono::steady_clock::now() +
                     std::chrono::seconds(para.config->socketTimeoutSeconds);
     while (para.flags->ifControl) {
@@ -176,13 +156,9 @@ void StoreConnection::sendMessage(const std::vector<unsigned char> &message, boo
     if (!para.flags->ifControl)
         throw std::runtime_error("ZeroMQ transfer interrupted; event remains protected");
     // zmq_send queues the whole block; the receiver cannot acknowledge until
-    // it has traversed the network and been written. Allow for configured
-    // slow transfer rates in addition to the disk/feedback timeout.
-    const uint64_t transferSeconds =
-        (message.size() * 8ULL + pacer.bitsPerSecond() - 1) /
-        pacer.bitsPerSecond();
+    // it has traversed the network and been written.
     deadline = std::chrono::steady_clock::now() +
-               std::chrono::seconds(para.config->socketTimeoutSeconds + 2 * transferSeconds);
+               std::chrono::seconds(para.config->socketTimeoutSeconds);
     Message reply;
     while (para.flags->ifControl) {
         const int received = zmq_msg_recv(&reply.value, socket, ZMQ_DONTWAIT);

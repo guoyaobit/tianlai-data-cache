@@ -6,10 +6,10 @@
       roles: "{{ group_names | intersect(['cache_nodes', 'storage', 'controller']) }}"
       configured:
         receive_pci_addresses: "{{ tianlai_receive_devices | default([]) }}"
-        send_interfaces: "{{ tianlai_send_interfaces | default([]) }}"
-        send_ips: "{{ tianlai_send_ips | default([]) }}"
+        send_interfaces: "{{ [tianlai_send_interface] if tianlai_send_interface is defined else [] }}"
+        send_ips: "{{ [tianlai_send_ip] if tianlai_send_ip is defined else [] }}"
         control_ip: "{{ tianlai_control_ip | default(tianlai_controller_ip if 'controller' in group_names else none) }}"
-        storage_ips: "{{ [tianlai_storage_ip0, tianlai_storage_ip1] }}"
+        storage_ips: "{{ [tianlai_storage_ip] }}"
         storage_port_bases: "{{ [tianlai_storage_port | int, tianlai_storage_lane1_port | int] }}"
         storage_receiver_count: 28
         assigned_storage_ports: "{{ [((tianlai_storage_port | int) + (tianlai_server_id | int)), ((tianlai_storage_lane1_port | int) + (tianlai_server_id | int))] if 'cache_nodes' in group_names else [] }}"

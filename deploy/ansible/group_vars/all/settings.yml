@@ -12,9 +12,8 @@ tianlai_acquisition_id: CHANGE_ME
 tianlai_controller_ip: CHANGE_ME
 # Backend IP for triggers and completion notices.
 tianlai_backend_ip: CHANGE_ME
-# Two untagged data IPs on the storage server's single 100 GbE interface.
-tianlai_storage_ip0: CHANGE_ME
-tianlai_storage_ip1: CHANGE_ME
+# Data IP on the storage server's 100 GbE interface.
+tianlai_storage_ip: CHANGE_ME
 # Event path under the mounted storage directory.
 tianlai_storage_directory: CHANGE_ME
 # Integration period (us); must match acquisition.
@@ -32,7 +31,7 @@ tianlai_storage_port: 20000
 # First lane-1 ZeroMQ/TCP storage port.
 tianlai_storage_lane1_port: 20100
 # ZeroMQ I/O workers serving the 100 GbE interface.
-tianlai_storage_io_threads: 4
+tianlai_storage_io_threads: 2
 # Directory containing ixcap_lib.h.
 tianlai_ixcap_include: /usr/local/include
 # Directory containing libixcap.a or libixcap.so.

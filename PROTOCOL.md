@@ -113,7 +113,7 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
 |---|---|---|
 | PREPARE | event_id、channel_count、start、period_count | 检查模式和历史区间并异步保护，返回PREPARING/PREPARED |
 | COMMIT | event_id | 全部节点准备后，由控制器转为 QUEUED |
-| SEND | event_id | QUEUED或SEND_FAILED时并行启动两个限速ZeroMQ lane；忙时不重复启动 |
+| SEND | event_id | QUEUED或SEND_FAILED时并行启动两个不限速ZeroMQ lane；忙时不重复启动 |
 | QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、过渡区峰值和 error |
 | RELEASE | event_id | 只有该节点全部接收口数据可靠落盘后，即 STORED 状态，才允许释放冻结区 |
 | CANCEL | event_id | 未发送或发送失败时放弃事件；PREPARING 时延后安全释放 |
@@ -130,13 +130,13 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
 
 ## ZeroMQ 数据协议 TLSTORE1
 
-数据通道和管理网UDP控制通道独立。每台缓存服务器建立lane 0和lane 1两个ZeroMQ REQ连接，分别绑定物理5/6口。lane 0只发送偶数接收口，lane 1只发送奇数接收口。`storage.receivers`必须显式列出28个`serverId/lane/bindAddress/port/allowedSource`组合；存储端据此启动28个ROUTER监听线程。默认端口为20000～20013和20100～20113。任一端点不匹配都会拒绝会话。
+数据通道和管理网UDP控制通道独立。每台缓存服务器建立lane 0和lane 1两个ZeroMQ REQ连接，两个连接绑定同一个物理网口和源IP。lane 0只发送偶数接收口，lane 1只发送奇数接收口。`storage.receivers`必须显式列出28个`serverId/lane/bindAddress/port/allowedSource`组合；存储端据此启动28个ROUTER监听线程。默认端口为20000～20013和20100～20113。任一端点不匹配都会拒绝会话。
 
 每个 ZeroMQ 请求是一条消息：先发送带 4 字节长度的 JSON 元数据，然后逐条发送 40 字节块头和正文，最后发送 40 字节 END。通常除 END 外每条消息由存储端成功校验并写入后回复 ASCII OK；该 OK 不是持久化确认。存储端累计 256 MiB 或经过 1 秒后批量 `fdatasync`，END 在全部文件及完成标记持久化后回复 4 字节长度前缀的 STORED JSON。若相同元数据对应的持久化标记已经存在，首条元数据消息直接返回 STORED，发送端不再重传数据。发送端验证事件、采集编号、节点和 lane 后才进入 STORED。消息排队、块级 OK、TCP ACK 或 ZeroMQ send 成功均不代表完整落盘。
 
 每次SEND为两个lane分别建立新会话。未完成lane从头重传；已有持久化标记的lane直接返回STORED。同一server/lane不可并发写，但同一server的两个lane可以并行写入互不重叠的端口文件。
 
-`sendRateBitsPerSecond`控制单节点两个lane合计速率，默认5.6 Gbit/s，平均分配到两个lane；288路的11台合计61.6 Gbit/s，384路的14台合计78.4 Gbit/s。该值不含协议开销，须为单100G接收口和磁盘阵列保留余量。
+发送端不做应用层限速，两个lane竞争同一物理网口的可用带宽。TCP负责拥塞控制和重传；部署时仍需验证14台节点汇聚到单100G接收口及磁盘阵列时的持续吞吐。
 
 ### TLSTORE1 消息内容
 
@@ -175,9 +175,10 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
 | 16 | uint64 | 本块 startPeriod |
 | 24 | uint64 | 本块 periodCount |
 | 32 | uint32 | bodyBytes |
-| 36 | uint32 | bodyCRC32，zlib CRC32，初值 0 |
+| 36 | uint32 | 保留字段，必须为0；不计算应用层CRC |
 
 type=2 时其余 36 B 必须为零，没有 body，表示该 lane 所有数据已发完。
+数据正文不计算应用层CRC，依赖TCP校验、重传和ZeroMQ消息边界保证传输完整性；程序仍严格校验消息长度、周期、端口映射和原始包头。内存、PCIe或磁盘静默损坏不在本协议检测范围内。
 数据块 body 是连续的积分记录，每个记录为：
 
 | 大小 | 内容 |
@@ -221,9 +222,9 @@ port_count=4。三类节点共用本 ZeroMQ 协议；原积分记录文件结构
 
 ### 落盘确认
 
-C++ 存储接收器检查 CRC、区间、映射、每个有效包的头字段及每个缺包位置的零填充；Python 实现保留为协议参考。
+C++ 存储接收器检查长度、区间、映射、每个有效包的头字段及每个缺包位置的零填充；Python 实现保留为协议参考。
 数据按 `acquisition/event/server-N/port-P.bin` 存储，文件内容是上述积分记录连续排列。
-旁边保存 lane 元数据和 `.stored.json`，包含各文件 CRC32 和缺包数量。
+旁边保存lane元数据和`.stored.json`，记录各端口缺包数量，不计算或保存文件CRC。
 只有 lane 所有文件内容和目录持久化完成后，才通过 ZeroMQ 回复长度前缀 JSON：
 
 ```json

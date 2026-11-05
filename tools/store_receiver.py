@@ -8,7 +8,6 @@ import re
 import struct
 import threading
 import time
-import zlib
 
 CHUNK = struct.Struct('!IIIIQQII')
 FRAME = struct.Struct('!QQII')
@@ -165,7 +164,6 @@ class StoreReceiver:
                 stored_path.unlink()
                 sync_directory(path)
             progress = {p: start for p in selected_ports}
-            checksums = {p: 0 for p in progress}
             missing = {p: 0 for p in progress}
             stride = FRAME.size + boards * packet_bytes
             for p in progress:
@@ -179,9 +177,9 @@ class StoreReceiver:
                 # A new message grants credit for the preceding validated write.
                 # Only the final STORED reply confirms durability.
                 sock.start_message()
-                kind, port, packet_id, board_begin, first, n, size, crc = CHUNK.unpack(exact(sock, CHUNK.size))
+                kind, port, packet_id, board_begin, first, n, size, reserved = CHUNK.unpack(exact(sock, CHUNK.size))
                 if kind == 2:
-                    if any((port, packet_id, board_begin, first, n, size, crc)):
+                    if any((port, packet_id, board_begin, first, n, size, reserved)):
                         raise ValueError('invalid END record')
                     sock.finish_message()
                     break
@@ -191,12 +189,10 @@ class StoreReceiver:
                                2 * ((server - 11) * 4 + port) if remote else 24 + (server - 3) * 2 + port // 2)
                 expected_begin = 0 if server < 3 else 36 if remote else (port % 2) * 18
                 if (packet_id != expected_id or board_begin != expected_begin or first != progress[port] or
-                        not 1 <= n <= 64 or first + n > start + count or size != n * stride):
+                        not 1 <= n <= 64 or first + n > start + count or size != n * stride or reserved):
                     raise ValueError('invalid chunk range/layout')
                 body = sock.read_view(size)
                 sock.finish_message()
-                if zlib.crc32(body) != crc:
-                    raise ValueError('chunk checksum mismatch')
                 missing[port] += validate_frames(body, first, n, stride, boards, packet_bytes,
                                                  per_trace, board_begin, packet_id, packets_per_board)
                 view = memoryview(body)
@@ -207,7 +203,6 @@ class StoreReceiver:
                         raise OSError('zero-length disk write')
                     view = view[written:]
                     offset += written
-                checksums[port] = zlib.crc32(body, checksums[port])
                 progress[port] += n
                 unsynced_bytes += size
                 now = time.monotonic()
@@ -223,8 +218,7 @@ class StoreReceiver:
                 sync_data(fd)
             ack = {'version': 1, 'status': 'STORED', 'event_id': event,
                    'acquisition_id': acquisition, 'server_id': server, 'lane': lane}
-            atomic_json(stored_path,
-                        dict(ack, missing_packets=missing, file_crc32=checksums))
+            atomic_json(stored_path, dict(ack, missing_packets=missing))
             send_json(sock, ack)
         except Exception as error:
             print(f'receiver {address}: {error}', flush=True)

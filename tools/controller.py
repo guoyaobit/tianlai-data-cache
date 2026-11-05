@@ -230,7 +230,7 @@ class Controller:
                         future.result()
             self.update(event_id, status='SENDING', active_server_ids=[n['server_id'] for n in nodes])
             # Authorize every selected node before waiting for durable completion.
-            # Per-node rate limits are not redistributed when fewer nodes participate.
+            # Nodes transmit without an application-layer rate limit.
             def export_node(node):
                 state = rpc(node, self.acquisition, 'QUERY_EVENT', event_id=event_id)
                 if state['status'] in ('QUEUED', 'SEND_FAILED'):

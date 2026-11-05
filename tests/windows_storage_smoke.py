@@ -89,17 +89,6 @@ inline int pwrite(int fd, const void* data, size_t n, off_t offset) {
     return _write(fd, data, static_cast<unsigned>(n));
 }
 ''')
-        (tmp / 'zlib.h').write_text(r'''#pragma once
-#include <cstdint>
-inline unsigned long crc32(unsigned long value, const unsigned char* data, unsigned int n) {
-    uint32_t crc = static_cast<uint32_t>(value) ^ 0xffffffffU;
-    while (n--) {
-        crc ^= *data++;
-        for (int i = 0; i < 8; ++i) crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320U : 0);
-    }
-    return crc ^ 0xffffffffU;
-}
-''')
         binary = tmp / 'storage_test.exe'
         subprocess.run([args.cxx, '-std=c++17', '-O2', '-pthread', '-ffunction-sections',
                         '-fdata-sections', '-I' + str(tmp),

@@ -28,7 +28,7 @@ static Bytes block(unsigned port, bool bad_missing = false) {
     Bytes result;
     put32(result, 1); put32(result, port); put32(result, 24 + port / 2);
     put32(result, (port % 2) * 18); put64(result, 100); put64(result, 1);
-    put32(result, static_cast<uint32_t>(body.size())); put32(result, ::crc32(0, body.data(), body.size()));
+    put32(result, static_cast<uint32_t>(body.size())); put32(result, 0);
     result.insert(result.end(), body.begin(), body.end());
     return result;
 }
@@ -55,8 +55,8 @@ int main(int argc, char **argv) {
         EventWriter concurrent(root, shared);
         rejects([&] { concurrent.begin(metadata("other")); }, "already receiving");
         rejects([&] { writer.block(block(0, true)); }, "missing packet slot");
-        auto bad_crc = block(0); bad_crc.back() = 1;
-        rejects([&] { writer.block(bad_crc); }, "checksum mismatch");
+        auto bad_reserved = block(0); bad_reserved[39] = 1;
+        rejects([&] { writer.block(bad_reserved); }, "invalid chunk range/layout");
         for (unsigned p : {0U, 2U}) writer.block(block(p));
         for (unsigned p : {1U, 3U}) lane1.block(block(p));
         auto result = writer.finish(end_message());
@@ -130,31 +130,18 @@ int main(int argc, char **argv) {
     const auto notice288 = build_completion_notice(complete288);
     assert(notice288 && notice288->at("channel_count") == 288);
     assert(notice288->at("missing_by_server").size() == 11);
-    // Exercise the actual worker's request/response ordering without a network socket.
-    Responses responses;
-    Session session("session-1");
-    session.worker = std::thread(run_session, &session, std::cref(root), std::ref(shared),
-                                 std::ref(responses), 3, 0);
-    auto exchange = [&](Bytes message) {
-        assert(session.put(std::move(message)));
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (std::chrono::steady_clock::now() < deadline) {
-            {
-                std::lock_guard<std::mutex> lock(responses.mutex);
-                if (!responses.ready.empty()) {
-                    auto response = std::move(responses.ready.front()); responses.ready.pop();
-                    return response;
-                }
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        throw std::runtime_error("session reply timeout");
-    };
-    assert(exchange(metadata("session")).body == Bytes({'O', 'K'}));
-    for (unsigned p : {0U, 2U}) assert(exchange(block(p)).body == Bytes({'O', 'K'}));
-    auto result = exchange(end_message());
-    assert(result.finished && json::parse(result.body.begin() + 4, result.body.end()).at("status") == "STORED");
-    session.worker.join();
-    assert(fs::exists(root / "acq/session/server-3/lane-0.stored.json"));
-    std::cout << "C++ storage: dual-lane mapping, validation and idempotent retry passed\n";
+    // The lane thread processes metadata, blocks and END without a second worker.
+    std::map<std::string, ActiveTransfer> sessions;
+    auto response = process_transfer(sessions, "client", metadata("session"), root, shared, 3, 0);
+    assert(response.first == Bytes({'O', 'K'}) && !response.second);
+    for (unsigned p : {0U, 2U}) {
+        response = process_transfer(sessions, "client", block(p), root, shared, 3, 0);
+        assert(response.first == Bytes({'O', 'K'}) && !response.second);
+    }
+    response = process_transfer(sessions, "client", end_message(), root, shared, 3, 0);
+    assert(response.second && sessions.empty());
+    assert(json::parse(response.first.begin() + 4, response.first.end()).at("status") == "STORED");
+    response = process_transfer(sessions, "retry", metadata("session"), root, shared, 3, 0);
+    assert(response.second && sessions.empty());
+    std::cout << "C++ storage: channel modes, dual-lane mapping and idempotent retry passed\n";
 }

@@ -6,7 +6,6 @@
 #include <mutex>
 #include <stdexcept>
 #include <vector>
-#include <zlib.h>
 
 // The sender is real; the network socket is replaced with a capture sink.
 static std::vector<std::vector<unsigned char>> messages[2];
@@ -14,8 +13,8 @@ static std::mutex messagesMutex;
 static bool fail_final_ack = false;
 static bool fail_data_ack = false;
 static bool already_stored = false;
-StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane, StorePacer &limit)
-    : para(p), pacer(limit), laneIndex(lane) {}
+StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane)
+    : para(p), laneIndex(lane) {}
 StoreConnection::~StoreConnection() = default;
 void StoreConnection::sendMessage(const std::vector<unsigned char> &message, bool final, bool allowStored) {
     std::lock_guard<std::mutex> lock(messagesMutex);
@@ -42,7 +41,6 @@ static uint64_t readNumber(const std::vector<unsigned char> &data, size_t offset
 }
 
 int main() {
-    assert(crc32(0, reinterpret_cast<const unsigned char *>("123456789"), 9) == 0xcbf43926UL);
     YamlConfig config("", "", StoreMode::F0_2);
     config.serverId = 0;
     config.acquisitionId = "acq1";
@@ -98,7 +96,7 @@ int main() {
         assert(readNumber(wire, 8, 4) == 24 && readNumber(wire, 12, 4) == 0);
         assert(readNumber(wire, 16, 8) == start && readNumber(wire, 24, 8) == count);
         assert(readNumber(wire, 32, 4) == body.size());
-        assert(readNumber(wire, 36, 4) == crc32(0, body.data(), body.size()));
+        assert(readNumber(wire, 36, 4) == 0);
         assert(std::memcmp(wire.data() + 40, body.data(), body.size()) == 0);
         expectedBytes += body.size();
     }

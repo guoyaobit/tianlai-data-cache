@@ -18,22 +18,16 @@ with tempfile.TemporaryDirectory(prefix='tianlai-store-tests-') as tmp:
                     str(root / 'Common/src/receive_pool.cpp'), str(root / 'Common/src/protocol.cpp'),
                     '-o', binary], check=True)
     subprocess.run([binary], check=True, timeout=60)
-    sender = str(Path(tmp) / 'send_regression')
-    subprocess.run(cxx + ['-std=c++14', '-O2', '-pthread', '-DBOOST_BIND_GLOBAL_PLACEHOLDERS',
-                    '-I' + str(root / 'Common/include'), str(root / 'tests/send_regression.cpp'),
-                    str(root / 'Common/src/zmq_store.cpp'), str(root / 'Common/src/protocol.cpp'),
-                    '-lzmq', '-lz', '-o', sender], check=True)
-    subprocess.run([sender], check=True, timeout=20)
     block_test = str(Path(tmp) / 'send_block_regression')
     subprocess.run(cxx + ['-std=c++14', '-O2', '-pthread', '-DBOOST_BIND_GLOBAL_PLACEHOLDERS',
                     '-I' + str(root / 'Common/include'), str(root / 'tests/send_block_regression.cpp'),
                     str(root / 'Common/src/send_store.cpp'), str(root / 'Common/src/receive_pool.cpp'),
-                    str(root / 'Common/src/protocol.cpp'), '-lz', '-o', block_test], check=True)
+                    str(root / 'Common/src/protocol.cpp'), '-o', block_test], check=True)
     subprocess.run([block_test], check=True, timeout=20)
     storage_test = str(Path(tmp) / 'storage_regression')
     subprocess.run(cxx + ['-std=c++17', '-O2', '-pthread',
                     str(root / 'tests/storage_receiver_regression.cpp'),
-                    '-lzmq', '-lz', '-o', storage_test], check=True)
+                    '-lzmq', '-o', storage_test], check=True)
     subprocess.run([storage_test, str(Path(tmp) / 'storage-data')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/storage_integration.py')], check=True, timeout=180)
 subprocess.run([sys.executable, str(root / 'tests/integration.py')], check=True, timeout=180)

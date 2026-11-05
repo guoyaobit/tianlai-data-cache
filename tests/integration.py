@@ -118,10 +118,10 @@ def run(server, directory):
     values = dict(controlBindIp='127.0.0.1', controlPeerIp='127.0.0.1', controlPort=control_port)
     for p in range(ports):
         values[f'simulationPort{p}'] = simulation[p]
+    values.update({'sendEthName': '-', 'sendSourceIp': '127.0.0.1',
+                   'sendDestinationIp': '127.0.0.1'})
     for lane in range(2):
-        values.update({f'sendEthName{lane}': '-', f'sendSourceIp{lane}': '127.0.0.1',
-                       f'sendDestinationIp{lane}': '127.0.0.1',
-                       f'sendDestinationPort{lane}': destinations[lane]})
+        values[f'sendDestinationPort{lane}'] = destinations[lane]
     for key, value in values.items():
         node_config['serverCfg'][key] = value
     write_config(directory / 'node.yaml', node_config)
@@ -267,8 +267,8 @@ def run(server, directory):
         event_path = directory / 'disk/test-acq/crossing' / f'server-{server}'
         stored = [json.loads((event_path / f'lane-{lane}.stored.json').read_text())
                   for lane in range(2)]
-        assert set(stored[0]['file_crc32']) == {str(p) for p in range(0, ports, 2)}
-        assert set(stored[1]['file_crc32']) == {str(p) for p in range(1, ports, 2)}
+        assert set(stored[0]['missing_packets']) == {str(p) for p in range(0, ports, 2)}
+        assert set(stored[1]['missing_packets']) == {str(p) for p in range(1, ports, 2)}
         if remote:
             meta = json.loads((directory / 'disk/test-acq/crossing' /
                                f'server-{server}/lane-0.meta.json').read_text())
@@ -344,7 +344,8 @@ def main():
                                     check=True, capture_output=True, text=True)
             server = int(cfg.stem.split('_')[-1])
             assert f'server={server}' in result.stdout
-            assert 'transport=ZeroMQ lanes=2 sendRateBitsPerSecond=5600000000' in result.stdout
+            assert 'transport=ZeroMQ lanes=2' in result.stdout
+            assert 'rateLimit=none' in result.stdout
             if server < 3:
                 for port in range(8):
                     assert f'port={port} packetId={server * 8 + port} boards=0..35' in result.stdout
@@ -362,17 +363,16 @@ def main():
                             f'frequencyBegin={global_port * 86} frequencyCount=86 '
                             f'validFrequencyCount={78 if global_port == 11 else 86}') in result.stdout
     with tempfile.TemporaryDirectory(prefix='tianlai-store-loopback-') as temp:
-        # Reject any per-node configuration that could oversubscribe the 14-node budget.
+        # Reject the removed limiter so deployments cannot silently retain old behavior.
         for variant, server in (('F0-2', 0), ('F3-10', 3), ('F11-13', 11)):
-            for key, value in (('sendRateBitsPerSecond', 18000000001), ('sendRateBitsPerSecond', 0)):
-                cfg = read_config(ROOT / variant / 'receive_config.yaml')
-                cfg['recvCfg'][key] = value
-                bad = Path(temp) / 'invalid.yaml'
-                write_config(bad, cfg)
-                result = subprocess.run([str(ROOT / variant / ('tianlai-store-' + variant.lower() + '-simulation')),
-                    str(ROOT / variant / f'server_{server:02d}.yaml'), str(bad), '--check-config'],
-                    capture_output=True, text=True)
-                assert result.returncode != 0 and key in result.stderr, result
+            cfg = read_config(ROOT / variant / 'receive_config.yaml')
+            cfg['recvCfg']['sendRateBitsPerSecond'] = 5600000000
+            bad = Path(temp) / 'invalid.yaml'
+            write_config(bad, cfg)
+            result = subprocess.run([str(ROOT / variant / ('tianlai-store-' + variant.lower() + '-simulation')),
+                str(ROOT / variant / f'server_{server:02d}.yaml'), str(bad), '--check-config'],
+                capture_output=True, text=True)
+            assert result.returncode != 0 and 'sendRateBitsPerSecond' in result.stderr, result
         for server in (0, 3, 11, 13):
             path = Path(temp) / f'server-{server}'
             path.mkdir()

@@ -67,9 +67,9 @@ def main():
         assert len(devices) == 3 and devices[address3]['interfaces'] == []
         assert devices[address2]['numa_node'] is None
         configured = {'receive_pci_addresses': [address1.upper(), '0000:99:00.0'],
-                      'send_interfaces': ['eth0', 'eth1'],
-                      'send_ips': ['172.0.0.1', '172.0.1.1'],
-                      'control_ip': '172.0.0.2', 'storage_ips': ['172.0.0.3', '172.0.1.3']}
+                      'send_interfaces': ['eth0'],
+                      'send_ips': ['172.0.0.1'],
+                      'control_ip': '172.0.0.2', 'storage_ips': ['172.0.0.3']}
         request = {'host': 'cache1', 'roles': ['cache_nodes'], 'configured': configured}
         deployment_report = inventory.build_report(report, request)
         assert deployment_report['host'] == 'cache1' and deployment_report['roles'] == ['cache_nodes']
@@ -78,13 +78,12 @@ def main():
             {'pci_address': address1.upper(), 'observed': devices[address1]},
             {'pci_address': '0000:99:00.0', 'observed': None},
         ]
-        assert deployment_report['matched_send_interfaces'] == [interfaces['eth0'], interfaces['eth1']]
-        assert deployment_report['matched_send_interfaces'][1]['speed_mbps'] is None
+        assert deployment_report['matched_send_interfaces'] == [interfaces['eth0']]
         assert deployment_report['interfaces'] == report['interfaces']
         assert deployment_report['pci_network_devices'] == report['pci_network_devices']
         assert deployment_report['warnings'] == report['warnings']
-        missing_send = dict(request, configured=dict(configured, send_interfaces=['eth0', 'missing0']))
-        assert inventory.build_report(report, missing_send)['matched_send_interfaces'][1] is None
+        missing_send = dict(request, configured=dict(configured, send_interfaces=['missing0']))
+        assert inventory.build_report(report, missing_send)['matched_send_interfaces'][0] is None
         # Verify the old command-line mode and the new report mode both emit JSON.
         for arguments, expected in [([], report), (['--report', json.dumps(request)], deployment_report)]:
             stdout = io.StringIO()

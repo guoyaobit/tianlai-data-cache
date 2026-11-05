@@ -1,11 +1,10 @@
-// TLSTORE1 ZeroMQ disk receiver. Each server/lane has a dedicated ROUTER/network
-// thread, a bounded queue and an independent native disk worker thread.
+// TLSTORE1 ZeroMQ disk receiver. Each server/lane has one ROUTER thread that
+// validates and writes its sequential request stream without an extra disk thread.
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #endif
 #include <zmq.h>
-#include <zlib.h>
 #include <nlohmann/json.hpp>
 #ifndef STORAGE_RECEIVER_NO_MAIN
 #include <yaml-cpp/yaml.h>
@@ -28,7 +27,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <queue>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -149,7 +147,6 @@ class EventWriter {
     bool claimed = false;
     std::vector<int> files;
     std::vector<uint64_t> progress, missing;
-    std::vector<uint32_t> checksums;
     std::vector<bool> selected;
     uint64_t unsynced_bytes = 0;
     std::chrono::steady_clock::time_point last_data_sync;
@@ -257,7 +254,7 @@ class EventWriter {
             claimed = true;
         }
         atomic_json(meta_path, metadata);
-        progress.assign(ports, start); missing.assign(ports, 0); checksums.assign(ports, 0);
+        progress.assign(ports, start); missing.assign(ports, 0);
         files.assign(ports, -1);
         for (unsigned p = 0; p < ports; ++p) {
             if (!selected[p]) continue;
@@ -275,16 +272,15 @@ class EventWriter {
         const auto *p = message.data();
         auto kind = read32(p), port = read32(p + 4), packet = read32(p + 8), board = read32(p + 12);
         auto first = read64(p + 16), n = read64(p + 24);
-        auto size = read32(p + 32), checksum = read32(p + 36);
+        auto size = read32(p + 32), reserved = read32(p + 36);
         require(kind == 1 && port < ports && selected[port], "invalid chunk type/port");
         unsigned expected_packet = server < 3 ? server * 8 + port : server >= 11 ?
             2 * ((server - 11) * 4 + port) : 24 + (server - 3) * 2 + port / 2;
         unsigned expected_board = server < 3 ? 0 : server >= 11 ? 36 : (port % 2) * 18;
         require(packet == expected_packet && board == expected_board && first == progress[port] &&
-                n >= 1 && n <= 64 && first + n <= start + count && size == n * stride &&
+                n >= 1 && n <= 64 && first + n <= start + count && size == n * stride && reserved == 0 &&
                 message.size() == CHUNK_HEADER + size, "invalid chunk range/layout");
         const auto *body = p + CHUNK_HEADER;
-        require(::crc32(0, body, size) == checksum, "chunk checksum mismatch");
         uint64_t absent = 0;
         for (uint64_t i = 0; i < n; ++i) {
             const auto *frame = body + i * stride;
@@ -307,7 +303,6 @@ class EventWriter {
             }
         }
         write_all(files[port], body, size, (first - start) * stride);
-        checksums[port] = ::crc32(checksums[port], body, size);
         unsynced_bytes += size;
         sync_data(false);
         progress[port] += n; missing[port] += absent;
@@ -322,97 +317,15 @@ class EventWriter {
         sync_data(true);
         json ack = {{"version", 1}, {"status", "STORED"}, {"event_id", event},
                     {"acquisition_id", acquisition}, {"server_id", server}, {"lane", lane}};
-        json marker = ack; marker["missing_packets"] = json::object(); marker["file_crc32"] = json::object();
+        json marker = ack; marker["missing_packets"] = json::object();
         for (unsigned p = 0; p < ports; ++p) {
             if (!selected[p]) continue;
             marker["missing_packets"][std::to_string(p)] = missing[p];
-            marker["file_crc32"][std::to_string(p)] = checksums[p];
         }
         atomic_json(directory / ("lane-" + std::to_string(lane) + ".stored.json"), marker);
         return framed_json(ack);
     }
 };
-
-struct Response {
-    std::string identity;
-    Bytes body;
-    bool finished = false;
-    bool send = true;
-};
-struct Responses {
-    std::mutex mutex;
-    std::queue<Response> ready;
-    void post(Response response) {
-        std::lock_guard<std::mutex> lock(mutex);
-        ready.push(std::move(response));
-    }
-};
-struct Session {
-    std::string identity;
-    std::mutex mutex;
-    std::condition_variable condition;
-    std::unique_ptr<Bytes> incoming;
-    bool stopped = false;
-    bool in_flight = true; // Only the ROUTER thread accesses this field.
-    std::thread worker;
-    explicit Session(std::string id) : identity(std::move(id)) {}
-    bool take(Bytes &message) {
-        std::unique_lock<std::mutex> lock(mutex);
-        if (!condition.wait_for(lock, std::chrono::seconds(120), [&] { return stopped || incoming; }) || stopped)
-            return false;
-        message = std::move(*incoming);
-        incoming.reset();
-        return true;
-    }
-    bool put(Bytes message) {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (stopped || incoming) return false;
-        incoming.reset(new Bytes(std::move(message)));
-        condition.notify_one();
-        return true;
-    }
-    void stop() {
-        std::lock_guard<std::mutex> lock(mutex);
-        stopped = true;
-        condition.notify_one();
-    }
-};
-
-static void run_session(Session *session, const fs::path &root, Shared &shared, Responses &out,
-                        unsigned server, unsigned lane) {
-    bool pending = false;
-    try {
-        EventWriter writer(root, shared, server, lane);
-        Bytes message;
-        if (!session->take(message)) { out.post({session->identity, {}, true, false}); return; }
-        pending = true;
-        auto existing = writer.begin(message);
-        if (!existing.empty()) {
-            out.post({session->identity, std::move(existing), true, true});
-            return;
-        }
-        out.post({session->identity, Bytes{'O', 'K'}, false, true});
-        pending = false;
-        while (session->take(message)) {
-            pending = true;
-            require(message.size() >= 4, "truncated message");
-            if (read32(message.data()) == 2) {
-                auto result = writer.finish(message);
-                out.post({session->identity, std::move(result), true, true});
-                return;
-            }
-            writer.block(message);
-            out.post({session->identity, Bytes{'O', 'K'}, false, true});
-            pending = false;
-        }
-        out.post({session->identity, {}, true, false});
-    } catch (const std::exception &error) {
-        std::cerr << "receiver: " << error.what() << '\n';
-        std::string text = std::string("ERROR:") + error.what();
-        if (text.size() > 996) text.resize(996);
-        out.post({session->identity, Bytes(text.begin(), text.end()), true, pending});
-    }
-}
 
 struct ZmqMessage {
     zmq_msg_t value;
@@ -663,16 +576,48 @@ struct ReceiverEndpoint {
           allowed_source(std::move(source)) {}
 };
 
-// Each configured server/lane owns one ROUTER socket and one network thread, while its
-// validation and disk work stay on a separate session worker.
+struct ActiveTransfer {
+    std::unique_ptr<EventWriter> writer;
+    std::chrono::steady_clock::time_point last_activity;
+};
+
+// Process one REQ message synchronously. The protocol grants only one message
+// at a time per identity, so a second disk thread would add a context switch
+// without creating more lane-level parallelism.
+static std::pair<Bytes, bool> process_transfer(
+        std::map<std::string, ActiveTransfer> &sessions, const std::string &identity,
+        const Bytes &body, const fs::path &root, Shared &shared, unsigned server, unsigned lane) {
+    auto it = sessions.find(identity);
+    if (it == sessions.end()) {
+        require(sessions.size() < MAX_SESSIONS_PER_PORT, "receiver port busy");
+        require(body.size() <= 1204, "metadata exceeds limit");
+        auto writer = std::unique_ptr<EventWriter>(new EventWriter(root, shared, server, lane));
+        auto existing = writer->begin(body);
+        if (!existing.empty()) return {std::move(existing), true};
+        sessions.emplace(identity, ActiveTransfer{std::move(writer),
+                                                  std::chrono::steady_clock::now()});
+        return {Bytes{'O', 'K'}, false};
+    }
+    require(body.size() >= 4, "truncated message");
+    if (read32(body.data()) == 2) {
+        auto result = it->second.writer->finish(body);
+        sessions.erase(it);
+        return {std::move(result), true};
+    }
+    it->second.writer->block(body);
+    it->second.last_activity = std::chrono::steady_clock::now();
+    return {Bytes{'O', 'K'}, false};
+}
+
+// Each server/lane thread owns one ROUTER socket and performs its sequential
+// validation and pwrite work before returning the per-message credit.
 static void serve_port(void *context, const fs::path &root, const std::string &address, unsigned port,
                        unsigned server, unsigned lane,
                        const std::string &allowed_source, Shared &shared,
                        CompletionNotifier &notifier, const std::atomic<bool> &shutdown) {
     void *router = zmq_socket(context, ZMQ_ROUTER);
     if (!router) throw std::runtime_error("ZeroMQ ROUTER creation failed");
-    Responses responses;
-    std::map<std::string, std::unique_ptr<Session>> sessions;
+    std::map<std::string, ActiveTransfer> sessions;
     try {
         option(router, ZMQ_LINGER, 0); option(router, ZMQ_ROUTER_MANDATORY, 1);
         option(router, ZMQ_SNDHWM, 1); option(router, ZMQ_RCVHWM, 1);
@@ -685,21 +630,15 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
         std::cout << "storage server " << server << " lane " << lane << " listening on "
                   << endpoint << std::endl;
         while (!stopping && !shutdown.load(std::memory_order_relaxed)) {
-            std::queue<Response> ready;
-            { std::lock_guard<std::mutex> lock(responses.mutex); std::swap(ready, responses.ready); }
-            while (!ready.empty()) {
-                auto response = std::move(ready.front()); ready.pop();
-                auto it = sessions.find(response.identity);
-                if (it == sessions.end()) continue;
-                if (response.send) reply(router, response.identity, response.body);
-                if (response.finished) {
-                    if (it->second->worker.joinable()) it->second->worker.join();
-                    sessions.erase(it);
-                    notifier.wake();
-                } else it->second->in_flight = false;
+            const auto now = std::chrono::steady_clock::now();
+            for (auto it = sessions.begin(); it != sessions.end();) {
+                if (now - it->second.last_activity >= std::chrono::seconds(120))
+                    it = sessions.erase(it);
+                else
+                    ++it;
             }
             zmq_pollitem_t item{router, 0, ZMQ_POLLIN, 0};
-            int rc = zmq_poll(&item, 1, 1);
+            int rc = zmq_poll(&item, 1, 100);
             if (rc < 0) { if (zmq_errno() == EINTR) continue; throw std::runtime_error("ZeroMQ poll failed"); }
             if (!(item.revents & ZMQ_POLLIN)) continue;
             std::string identity, peer;
@@ -729,33 +668,21 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
                 reply(router, identity, error_reply("source address does not match receiver port"));
                 continue;
             }
-            auto it = sessions.find(identity);
-            if (it == sessions.end()) {
-                if (sessions.size() >= MAX_SESSIONS_PER_PORT) {
-                    reply(router, identity, error_reply("receiver port busy"));
-                    continue;
-                }
-                if (body.size() > 1204) { reply(router, identity, error_reply("metadata exceeds limit")); continue; }
-                auto entry = std::unique_ptr<Session>(new Session(identity));
-                auto *session = entry.get();
-                session->put(std::move(body));
-                sessions.emplace(identity, std::move(entry));
-                try {
-                    session->worker = std::thread(run_session, session, std::cref(root), std::ref(shared),
-                                                  std::ref(responses), server, lane);
-                }
-                catch (...) { sessions.erase(identity); throw; }
-            } else if (it->second->in_flight || !it->second->put(std::move(body))) {
-                reply(router, identity, error_reply("unexpected concurrent message"));
-            } else it->second->in_flight = true;
+            try {
+                auto result = process_transfer(sessions, identity, body, root, shared, server, lane);
+                reply(router, identity, result.first);
+                if (result.second) notifier.wake();
+            } catch (const std::exception &error) {
+                sessions.erase(identity);
+                std::cerr << "receiver: " << error.what() << '\n';
+                std::string reason = error.what();
+                if (reason.size() > 990) reason.resize(990);
+                reply(router, identity, error_reply(reason));
+            }
         }
     } catch (...) {
-        for (auto &entry : sessions) entry.second->stop();
-        for (auto &entry : sessions) if (entry.second->worker.joinable()) entry.second->worker.join();
         zmq_close(router); throw;
     }
-    for (auto &entry : sessions) entry.second->stop();
-    for (auto &entry : sessions) if (entry.second->worker.joinable()) entry.second->worker.join();
     zmq_close(router);
 }
 
@@ -806,7 +733,7 @@ static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &end
 struct StorageConfig {
     fs::path directory;
     std::string backend_address, backend_bind_address;
-    unsigned backend_port = 0, io_threads = 4;
+    unsigned backend_port = 0, io_threads = 2;
     std::vector<ReceiverEndpoint> receivers;
 };
 
@@ -841,7 +768,8 @@ static StorageConfig load_storage_config(const fs::path &path) {
             "receivers must contain exactly 28 entries");
     std::set<std::pair<unsigned, unsigned>> unique_endpoints;
     std::set<unsigned> unique_ports;
-    std::set<std::string> unique_sources;
+    std::map<std::string, unsigned> source_owners;
+    std::map<unsigned, std::string> server_sources;
     for (const auto &receiver : receivers) {
         require_yaml_keys(receiver, {"serverId", "lane", "bindAddress", "port", "allowedSource"},
                           "storage.receivers[]");
@@ -852,9 +780,14 @@ static StorageConfig load_storage_config(const fs::path &path) {
         const auto source = receiver["allowedSource"].as<std::string>();
         require(server < CACHE_NODE_COUNT && lane < LANE_COUNT && port >= 1024 && port <= 65535,
                 "invalid receiver serverId, lane or port");
-        require(unique_endpoints.insert({server, lane}).second && unique_ports.insert(port).second &&
-                    unique_sources.insert(source).second,
-                "receiver server/lane, port and allowedSource must be unique");
+        require(unique_endpoints.insert({server, lane}).second && unique_ports.insert(port).second,
+                "receiver server/lane and port must be unique");
+        const auto owner = source_owners.emplace(source, server);
+        require(owner.second || owner.first->second == server,
+                "allowedSource cannot be shared by different servers");
+        const auto server_source = server_sources.emplace(server, source);
+        require(server_source.second || server_source.first->second == source,
+                "both lanes for a server must share one allowedSource");
         config.receivers.push_back({server, lane, port, address, source});
     }
 
