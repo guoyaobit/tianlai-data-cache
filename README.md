@@ -108,7 +108,7 @@ sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
 
 控制器等配套工具使用 Python 3.10+：
 
-- `tools/controller.py`：外部 UDP 触发入口、全部节点先保护、14 台并行、每台固定限速回传。
+- `tools/controller.py`：外部UDP触发入口；288路调度节点0～10，384路调度节点0～13。
 - `tools/trigger.py`：发送一条控制消息并匹配回复。
 - `Storage/tianlai-storage`：生产部署使用的 C++ ZeroMQ 接收与落盘服务。
 - `Storage/storage.yaml`：C++ 落盘服务的完整示例配置；Ansible 会按现场清单生成正式配置。
@@ -135,11 +135,12 @@ python3 tools/controller.py --nodes tools/nodes_example.json \
 python3 tools/trigger.py --host 192.168.200.250 --file tools/trigger_example.json
 ```
 
-返回 PREPARING 表示请求正在处理；查询事件得到 ACCEPTED/SENDING 后才表明所有节点已保护。
+在触发JSON中设置`"channel_count":288`或`384`；省略时默认384。返回PREPARING表示请求正在处理；查询事件得到ACCEPTED/SENDING后才表明所选模式全部节点已保护。
 QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
-14 台节点持久化完成后，C++ 存储服务通过 UDP/JSON 直接向消色散后端发送
+本字段同时进入缓存事件和TLSTORE1元数据。升级时必须先停止触发并处理完旧事件，在维护窗口统一更新控制器、14台缓存服务和存储服务，再使用新的`acquisition_id`启动，不能混跑不含该字段的旧版进程。
+所选模式的11台或14台节点持久化完成后，C++存储服务通过UDP/JSON直接向消色散后端发送
 `CAPTURE_RESULT`；后端持久化结果后向报文来源地址回复 `ACK_RESULT`。未确认结果会落盘保存并在重启后继续重试。示例接收器为 `tools/result_listener.py`，协议和缺包含义见 `PROTOCOL.md`。默认要求配置全部
-14 台，单节点联调用 `--allow-partial`，不能用该模式表示 384 路全部完成。
+14台，单节点联调用`--allow-partial`，不能用该模式表示288或384路全部完成。
 原始输入头的 `ifTrace` 不充当触发位，也不修改保留字节。
 协议字段和状态详见 [PROTOCOL.md](PROTOCOL.md)。
 
@@ -151,9 +152,9 @@ QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
 
 ## ZeroMQ 回传与存储
 
-14 台缓存服务器并行回传，每台通过物理5/6口建立两个基于TCP的ZeroMQ连接。lane 0发送偶数接收口，lane 1发送奇数接收口，数据不复制。两个发送口使用不同的无标签IP子网；存储服务器同一个100G物理口配置两个IP。C++存储服务启动28个网络接收线程：lane 0监听20000～20013，lane 1监听20100～20113。每个活动lane另有独立写盘线程。发送端要求libzmq支持ZMQ_BINDTODEVICE，且源IP必须属于指定接口。
+存储服务始终为14台服务器保留28个监听入口。288路事件只有节点0～10回传22个lane；384路事件由节点0～13回传28个lane。每台通过物理5/6口建立两个基于TCP的ZeroMQ连接，lane 0发送偶数接收口，lane 1发送奇数接收口，数据不复制。两个发送口使用不同的无标签IP子网；存储服务器同一个100G物理口配置两个IP。每个活动lane另有独立写盘线程。发送端要求libzmq支持ZMQ_BINDTODEVICE，且源IP必须属于指定接口。
 
-`sendRateBitsPerSecond` 是单节点两个lane合计的应用层限速，默认5.6 Gbit/s；程序平均分配为每lane约2.8 Gbit/s，14台合计78.4 Gbit/s，为单100G接收口预留协议和重传余量。该值不是线速保证，必须结合存储阵列持续写入能力实测。
+`sendRateBitsPerSecond`是单节点两个lane合计的应用层限速，默认5.6 Gbit/s；程序平均分配为每lane约2.8 Gbit/s。288路共11台、约61.6 Gbit/s；384路共14台、约78.4 Gbit/s，为单100G接收口预留协议和重传余量。该值不是线速保证，必须结合存储阵列持续写入能力实测。
 
 每条 ZeroMQ 消息由存储端检查并处理；数据块校验、写入页缓存后返回 OK，再发送下一块。存储端累计 256 MiB 或经过 1 秒后批量 `fdatasync`，收到 END 后强制同步全部数据文件，再持久化完成标记并返回 STORED。块级 OK 只表示已校验并写入，不表示断电安全；节点只有验证最终 STORED 后才允许释放事件。连接、超时或写盘失败时节点保留冻结数据并报告 SEND_FAILED。
 
@@ -165,7 +166,7 @@ make storage
 ./Storage/tianlai-storage --config Storage/storage.yaml
 ```
 
-`sendDestinationIp0/1`分别指向100G口上的两个IP，端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。最终确认丢失时，已完成lane在元数据阶段直接返回STORED；只有28个lane持久化标记一致时才生成`storage-complete.json`并通知后端。
+`sendDestinationIp0/1`分别指向100G口上的两个IP，端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。最终确认丢失时，已完成lane在元数据阶段直接返回STORED；288路需要22个lane、384路需要28个lane持久化标记一致，才生成`storage-complete.json`并通知后端。
 
 ZeroMQ 数据通道不使用 UDP 分片参数；旧配置中的 udpFragmentBytes 必须删除。TCP/IP MTU 仍须按实际网络配置。ZeroMQ 不会补回 FPGA 到缓存服务器之间丢失的 UDP 包；旧 UDP/TCP 存储发送端与 ZeroMQ 接收器不兼容，需协调同时更新。
 

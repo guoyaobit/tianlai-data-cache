@@ -83,6 +83,8 @@ int main() {
     InitSendStoreThread(&params);
     assert(params.event.state == EventState::Stored);
     assert(messages[0].size() == 4 && messages[1].size() == 4);
+    const std::string metadata(messages[0][0].begin() + 4, messages[0][0].end());
+    assert(metadata.find("\"channel_count\":384") != std::string::npos);
     size_t expectedBytes = 0;
     for (size_t block = 0; block < 2; ++block) {
         const uint64_t start = block == 0 ? 8 : 11;

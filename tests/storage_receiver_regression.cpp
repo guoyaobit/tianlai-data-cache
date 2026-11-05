@@ -11,6 +11,7 @@ static void put64(Bytes &out, uint64_t value) {
 static Bytes metadata(const std::string &event, unsigned lane = 0, unsigned count = 1) {
     return framed_json(json{{"version", 1}, {"format", "TLSTORE1"}, {"event_id", event},
         {"acquisition_id", "acq"}, {"server_id", 3}, {"lane", lane}, {"port_count", 4},
+        {"channel_count", 384},
         {"ports", lane == 0 ? json{0, 2} : json{1, 3}},
         {"start_period", 100}, {"period_count", count}, {"integration_per_trace", 100},
         {"period_microseconds", 10000}, {"packet_bytes", 8848}});
@@ -84,7 +85,7 @@ int main(int argc, char **argv) {
         assert(json::parse(retry_result.begin() + 4, retry_result.end()).at("status") == "STORED");
     }
     assert(fs::exists(directory / "lane-0.stored.json"));
-    // Event-level completion requires both durable lanes from all 14 servers.
+    // A 384-channel event requires both durable lanes from all 14 servers.
     const auto complete = root / "acq/complete";
     for (unsigned server = 0; server < CACHE_NODE_COUNT; ++server) {
         const auto node = complete / ("server-" + std::to_string(server));
@@ -93,6 +94,7 @@ int main(int argc, char **argv) {
             const auto prefix = "lane-" + std::to_string(lane);
             json meta = {{"version", 1}, {"format", "TLSTORE1"}, {"acquisition_id", "acq"},
                          {"event_id", "complete"}, {"server_id", server}, {"lane", lane},
+                         {"channel_count", 384},
                          {"start_period", 100}, {"period_count", 1},
                          {"integration_per_trace", 100}, {"period_microseconds", 10000}};
             json stored = {{"version", 1}, {"status", "STORED"}, {"acquisition_id", "acq"},
@@ -104,8 +106,30 @@ int main(int argc, char **argv) {
     }
     const auto notice = build_completion_notice(complete);
     assert(notice && notice->at("status") == "STORED");
+    assert(notice->at("channel_count") == 384);
     assert(notice->at("missing_by_server").at("0") == 3);
     assert(fs::exists(complete / "storage-complete.json"));
+    // A 288-channel event is complete after both lanes from servers 0-10.
+    const auto complete288 = root / "acq/complete-288";
+    for (unsigned server = 0; server < 11; ++server) {
+        const auto node = complete288 / ("server-" + std::to_string(server));
+        fs::create_directories(node);
+        for (unsigned lane = 0; lane < LANE_COUNT; ++lane) {
+            const auto prefix = "lane-" + std::to_string(lane);
+            json meta = {{"version", 1}, {"format", "TLSTORE1"}, {"acquisition_id", "acq"},
+                         {"event_id", "complete-288"}, {"server_id", server}, {"lane", lane},
+                         {"channel_count", 288}, {"start_period", 100}, {"period_count", 1},
+                         {"integration_per_trace", 100}, {"period_microseconds", 10000}};
+            json stored = {{"version", 1}, {"status", "STORED"}, {"acquisition_id", "acq"},
+                           {"event_id", "complete-288"}, {"server_id", server}, {"lane", lane},
+                           {"missing_packets", {{std::to_string(lane), 0}}}};
+            atomic_json(node / (prefix + ".meta.json"), meta);
+            atomic_json(node / (prefix + ".stored.json"), stored);
+        }
+    }
+    const auto notice288 = build_completion_notice(complete288);
+    assert(notice288 && notice288->at("channel_count") == 288);
+    assert(notice288->at("missing_by_server").size() == 11);
     // Exercise the actual worker's request/response ordering without a network socket.
     Responses responses;
     Session session("session-1");

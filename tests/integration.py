@@ -204,10 +204,13 @@ def run(server, directory):
                     invalid[byte] = value
                     sock.sendto(invalid, ('127.0.0.1', simulation[port]))
             wait_for(lambda: request('QUERY_STATUS')['ignored_packets'] == ports * 4)
-        trigger = dict(event_id='crossing', start=dict(trace_period_id=0, integration_period_id=95), period_count=10)
+        channels = 384 if remote else 288
+        trigger = dict(event_id='crossing', start=dict(trace_period_id=0, integration_period_id=95),
+                       period_count=10, channel_count=channels)
         assert request('PREPARE', **trigger)['status'] == 'PREPARING'
         wait_for(lambda: request('QUERY_EVENT', event_id='crossing')['status'] == 'PREPARED')
         event = request('QUERY_EVENT', event_id='crossing')
+        assert event['channel_count'] == channels
         assert event['missing_packets'] == sum(
             boards - len(expected_slots(period, port)) for port in range(ports) for period in range(95, 105))
         assert event['freeze_ms'] >= 0 and event['transition_capacity_periods'] > 0
@@ -217,6 +220,12 @@ def run(server, directory):
             raise AssertionError('conflicting duplicate trigger accepted')
         except RuntimeError as error:
             assert 'EVENT_ID_CONFLICT' in str(error)
+        try:
+            request('PREPARE', **dict(trigger, channel_count=384 if channels == 288 else 288))
+            raise AssertionError('conflicting channel mode accepted')
+        except RuntimeError as error:
+            assert ('EVENT_ID_CONFLICT' in str(error) or
+                    'CHANNEL_MODE_EXCLUDES_NODE' in str(error))
         try:
             request('RELEASE', event_id='crossing')
             raise AssertionError('release before durable storage accepted')

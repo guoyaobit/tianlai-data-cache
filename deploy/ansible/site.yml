@@ -10,6 +10,8 @@
           - groups.get('controller', []) | length == 1
           - groups.get('storage', []) | length == 1
           - groups['controller'][0] == groups['storage'][0]
+          - ansible_user | default('') == 'ubuntu'
+          - ansible_ssh_private_key_file | default('') | length > 0
           - tianlai_acquisition_id is match('^[A-Za-z0-9_-]{1,64}$')
           - "'CHANGE_ME' not in tianlai_acquisition_id"
           - tianlai_controller_ip is match('^[0-9.]+$')

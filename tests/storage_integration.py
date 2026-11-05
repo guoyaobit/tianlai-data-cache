@@ -42,7 +42,8 @@ def send_event(context, port, root, server, lane):
                                   (4, 24, 8272) if remote else (4, 18, 8848))
     per_board = 2 if remote else 1
     meta = dict(version=1, format='TLSTORE1', acquisition_id='acq', event_id='event',
-                server_id=server, lane=lane, port_count=ports, ports=list(range(lane, ports, 2)), start_period=100,
+                server_id=server, lane=lane, channel_count=384, port_count=ports,
+                ports=list(range(lane, ports, 2)), start_period=100,
                 period_count=1, integration_per_trace=100, period_microseconds=10000,
                 packet_bytes=packet_bytes)
     if remote:
@@ -154,6 +155,7 @@ def main():
             body, source = backend.recvfrom(1201)
             notice = json.loads(body)
             assert notice['command'] == 'CAPTURE_RESULT' and notice['status'] == 'STORED'
+            assert notice['channel_count'] == 384
             assert notice['acquisition_id'] == 'acq' and notice['event_id'] == 'event'
             assert notice['start'] == {'trace_period_id': 1, 'integration_period_id': 0}
             assert notice['end_exclusive'] == {'trace_period_id': 1, 'integration_period_id': 1}

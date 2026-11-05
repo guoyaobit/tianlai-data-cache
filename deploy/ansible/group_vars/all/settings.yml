@@ -1,5 +1,9 @@
 ---
-# Replace all CHANGE_ME values before deployment.
+# Replace every CHANGE_ME value before deployment.
+# SSH account shared by all target servers.
+ansible_user: ubuntu
+# Private key on the Ansible control host.
+ansible_ssh_private_key_file: "{{ lookup('env', 'TIANLAI_SSH_PRIVATE_KEY') | default('~/.ssh/tianlai_ansible', true) }}"
 # Install root on target servers.
 tianlai_root: /opt/tianlai-store
 # Acquisition ID shared by all components.

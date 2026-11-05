@@ -12,9 +12,29 @@
 - 消色散后端须在 `tianlai_backend_ip:tianlai_notify_port` 监听 UDP。存储服务从 `tianlai_controller_ip` 发送 `CAPTURE_RESULT`；后端持久化结果后向该报文的来源地址回复 `ACK_RESULT`。Playbook 不部署后端，也不修改相关防火墙。
 - 如果目标上安装的 ixcap 是共享库，确保运行时动态链接器可找到该库。脚本只检查文件存在，不负责驱动、权限或网卡初始化。
 
+## SSH密钥和sudo密码
+
+所有目标服务器使用`ubuntu`账户。控制机默认使用`~/.ssh/tianlai_ansible`私钥；需要使用其他路径时设置环境变量`TIANLAI_SSH_PRIVATE_KEY`。不要把私钥放进项目目录。SSH公钥已经安装时无需再次执行`ssh-copy-id`。新服务器首次准备方法为：
+
+```bash
+umask 077
+ssh-keygen -t ed25519 -f ~/.ssh/tianlai_ansible -C tianlai-ansible
+ssh-copy-id -i ~/.ssh/tianlai_ansible.pub ubuntu@SERVER_IP
+```
+
+第二条命令对14台缓存服务器和存储服务器各执行一次，首次执行时使用服务器现有密码。完成后用`ssh -i ~/.ssh/tianlai_ansible ubuntu@SERVER_IP`确认可以免密登录，再继续部署。
+
+部署不保存SSH或sudo密码。直接运行一键部署脚本，按提示输入一次所有服务器共用的sudo密码：
+
+```bash
+bash deploy.sh
+```
+
+`deploy.sh`先检查清单和语法，再执行完整部署；可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。
+
 ## 部署前盘点网卡
 
-`inspect_nics.yml` 可以在完整部署配置准备好之前单独运行。准备 `inventory.yml` 或 `inventory.ini`，填写 `ansible_user` 并核对要连接的服务器的 `ansible_host`；缓存节点的 `tianlai_server_id` 使用示例中的编号。以下命令以 YAML 清单为例，使用 INI 时将 `inventory.yml` 替换为 `inventory.ini`。控制机需要 Ansible 和 SSH 连接，目标服务器需要 `/usr/bin/python3`；安装 `iproute2` 后才能列出接口 IP。盘点不需要 sudo，不修改网络配置、驱动或服务。Ansible 会在目标机临时传送并执行盘点脚本。
+`inspect_nics.yml` 可以在完整部署配置准备好之前单独运行。所有目标服务器默认使用 `ubuntu` 账户和上述SSH密钥登录；请核对要连接的服务器的 `ansible_host`，缓存节点的 `tianlai_server_id` 使用示例中的编号。以下命令以 YAML 清单为例，使用 INI 时将 `inventory.yml` 替换为 `inventory.ini`。控制机需要 Ansible 和 SSH 连接，目标服务器需要 `/usr/bin/python3`；安装 `iproute2` 后才能列出接口 IP。盘点不需要 sudo，不修改网络配置、驱动或服务。Ansible 会在目标机临时传送并执行盘点脚本。
 
 从本目录执行：
 
@@ -47,8 +67,12 @@ ansible-playbook -i inventory.yml inspect_nics.yml
 从本目录执行（以下以 YAML 清单为例；INI 清单把文件名改为 `inventory.ini`。切勿提交包含现场地址、凭据或私钥的清单）：
 
 ```bash
-ansible-playbook -i inventory.yml site.yml --syntax-check
-ansible-playbook -i inventory.yml site.yml --ask-become-pass
+# Recommended: validates configuration and then deploys.
+bash deploy.sh
+
+# Equivalent manual commands.
+ansible-playbook -i inventory.yml --syntax-check site.yml
+ansible-playbook -i inventory.yml --ask-become-pass site.yml
 ```
 
 完整清单通过校验后，部署会自动在每台缓存服务器和兼任控制器的存储服务器生成 `{{ tianlai_root }}/config/network-report.yaml`（默认 `/opt/tianlai-store/config/network-report.yaml`），并在存储服务器生成 `/opt/tianlai-store/config/storage.yaml`。重复部署时更新。可在对应服务器上查看：
@@ -61,7 +85,7 @@ sudo cat /opt/tianlai-store/config/network-report.yaml
 
 报告仅记录配置和观察结果，不会自动选择物理端口、设置系统 IP 或修改驱动。部署前仍需按上一节完成端口对应关系和清单填写；如果完整清单校验未通过，部署及自动报告生成均不会开始，可先单独运行 `inspect_nics.yml` 盘点。
 
-若使用免密 sudo 或其他标准 Ansible 提权方式，可省略 `--ask-become-pass`。部署会安装 apt 软件包、复制源码及工具，通过项目统一的 `make production PROFILE=...` 入口编译缓存节点、生成 YAML 和控制器节点清单；缓存节点运行 `tianlai-cache`，存储服务器同时运行 `tianlai-storage` 和 `tianlai-controller`。重跑时，源码、配置或服务变化会触发对应服务重启。**缓存服务重启会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。重启后必须等待约100秒重新预热，若控制器仍记录旧的未完成事件，应查询全部节点并取消无法恢复的事件，使用新的 `event_id` 重新触发。
+SSH登录使用私钥，sudo密码仅在本次部署进程内使用，不写入磁盘。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单；缓存节点运行`tianlai-cache`，存储服务器同时运行`tianlai-storage`和`tianlai-controller`。重跑时，源码、配置或服务变化会触发对应服务重启。**缓存服务重启会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。重启后必须等待约100秒重新预热，若控制器仍记录旧的未完成事件，应查询全部节点并取消无法恢复的事件，使用新的`event_id`重新触发。
 
 服务默认使用 root，节点通过 ixcap 收包；脚本没有配置防火墙或服务用户隔离，需结合现场权限和网络策略审查。软件包安装、服务重启和数据保存路径均由执行 playbook 的操作者负责确认。首次部署或配置变更会重启服务，完成后检查：
 

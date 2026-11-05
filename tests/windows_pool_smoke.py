@@ -56,7 +56,7 @@ void put64(std::vector<unsigned char>& v, uint64_t n) {
     for (int i=7; i>=0; --i) v.push_back((n>>(8*i))&255);
 }
 std::string quoteJson(const std::string& value) { return "\\\"" + value + "\\\""; }
-static uint64_t parsed_lane = 0;
+static thread_local uint64_t parsed_lane = 0;
 boost::property_tree::ptree parseControl(const std::string& value) {
     parsed_lane = value.find("\\\"lane\\\":1") != std::string::npos ? 1 : 0;
     return {};
@@ -99,7 +99,8 @@ inline unsigned long crc32(unsigned long value, const unsigned char* data, unsig
                         '-I' + str(ROOT / 'Common/include'), str(ROOT / 'tests/send_block_regression.cpp'),
                         str(ROOT / 'Common/src/send_store.cpp'), str(ROOT / 'Common/src/receive_pool.cpp'),
                         str(tmp / 'protocol_stub.cpp'), '-o', str(block_binary)], check=True, timeout=90)
-        subprocess.run([str(block_binary)], check=True, timeout=60)
+        for _ in range(5):
+            subprocess.run([str(block_binary)], check=True, timeout=60)
         print('portable send block regression passed')
 
 

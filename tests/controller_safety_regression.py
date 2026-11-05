@@ -36,6 +36,11 @@ def main():
                 raise AssertionError('changed event range accepted')
             except ValueError:
                 pass
+            try:
+                replay.dispatch(dict(base, period_count=15000, channel_count=288))
+                raise AssertionError('changed channel count accepted for an existing event')
+            except ValueError:
+                pass
         for invalid in (dict(start=start, duration_ms=0), dict(start=start, duration_ms=5001),
                         dict(start=start, duration_ms=1, period_count=5), dict(start=start),
                         dict(start=start, duration_ms=True), dict(start=start, period_count=1.0),
@@ -49,6 +54,14 @@ def main():
             try:
                 controller.parse_request(payload)
                 raise AssertionError('invalid JSON accepted')
+            except ValueError:
+                pass
+        for channels in (0, 287, 385, True, '288'):
+            request = dict(version=1, acquisition_id='acq', command='CAPTURE', event_id='bad-mode',
+                           start=start, period_count=1, channel_count=channels)
+            try:
+                c.dispatch(request)
+                raise AssertionError('invalid channel count accepted')
             except ValueError:
                 pass
         with patch.object(c, 'parallel', return_value=[

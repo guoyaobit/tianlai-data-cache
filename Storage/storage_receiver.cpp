@@ -143,7 +143,8 @@ class EventWriter {
     unsigned expected_server = UINT_MAX, expected_lane = UINT_MAX;
     json metadata;
     std::string event, acquisition;
-    unsigned server = 0, lane = 0, ports = 0, boards = 0, packet_bytes = 0, packets_per_board = 1;
+    unsigned server = 0, lane = 0, ports = 0, boards = 0;
+    unsigned packet_bytes = 0, packets_per_board = 1;
     uint64_t start = 0, count = 0, per_trace = 0, stride = 0;
     bool claimed = false;
     std::vector<int> files;
@@ -187,10 +188,12 @@ class EventWriter {
         acquisition = metadata.at("acquisition_id").get<std::string>();
         require(valid_id(event) && valid_id(acquisition), "invalid event/acquisition identifier");
         auto node = integer(metadata, "server_id"), lane_value = integer(metadata, "lane");
+        auto channels = integer(metadata, "channel_count");
         start = integer(metadata, "start_period"); count = integer(metadata, "period_count");
         per_trace = integer(metadata, "integration_per_trace"); auto period_us = integer(metadata, "period_microseconds");
         require(integer(metadata, "version") == 1 && metadata.at("format") == "TLSTORE1" &&
-                node < CACHE_NODE_COUNT && lane_value < LANE_COUNT &&
+                (channels == 288 || channels == 384) &&
+                node < (channels == 288 ? 11U : CACHE_NODE_COUNT) && lane_value < LANE_COUNT &&
                 period_us >= 1 && period_us <= 1000000 &&
                 1000000 % period_us == 0 && per_trace >= 1 && per_trace <= 0x800000 &&
                 start < (1ULL << 20) * per_trace && count >= 1 && count <= 5000000 / period_us &&
@@ -442,12 +445,17 @@ static json read_json_file(const fs::path &path) {
     return value;
 }
 
-// Builds one event-level result only after both lanes from all 14 nodes are durable.
+// Builds one result after both lanes from all nodes selected by channel_count are durable.
 // The result itself is persisted before it can be sent to the backend.
 static std::optional<json> build_completion_notice(const fs::path &event_directory) {
-    json first;
+    const auto first_path = event_directory / "server-0" / "lane-0.meta.json";
+    if (!fs::is_regular_file(first_path)) return std::nullopt;
+    const json first = read_json_file(first_path);
+    const auto channel_count = integer(first, "channel_count");
+    require(channel_count == 288 || channel_count == 384, "invalid event channel count");
+    const unsigned expected_nodes = channel_count == 288 ? 11U : CACHE_NODE_COUNT;
     json missing = json::object();
-    for (unsigned server = 0; server < CACHE_NODE_COUNT; ++server) {
+    for (unsigned server = 0; server < expected_nodes; ++server) {
         const auto directory = event_directory / ("server-" + std::to_string(server));
         uint64_t absent = 0;
         for (unsigned lane = 0; lane < LANE_COUNT; ++lane) {
@@ -465,10 +473,10 @@ static std::optional<json> build_completion_notice(const fs::path &event_directo
                     integer(marker, "lane") == lane && marker.at("event_id") == meta.at("event_id") &&
                     marker.at("acquisition_id") == meta.at("acquisition_id"),
                     "node completion marker mismatch");
-            if (server == 0 && lane == 0) first = meta;
-            else {
+            if (server != 0 || lane != 0) {
                 for (const char *field : {"format", "acquisition_id", "event_id", "start_period",
-                                          "period_count", "integration_per_trace", "period_microseconds"})
+                                          "period_count", "integration_per_trace", "period_microseconds",
+                                          "channel_count"})
                     require(meta.at(field) == first.at(field), "node event metadata mismatch");
             }
             const auto &by_port = marker.at("missing_packets");
@@ -490,6 +498,7 @@ static std::optional<json> build_completion_notice(const fs::path &event_directo
     const auto end = start + count;
     json notice = {{"version", 1}, {"command", "CAPTURE_RESULT"}, {"status", "STORED"},
                    {"acquisition_id", first.at("acquisition_id")}, {"event_id", first.at("event_id")},
+                   {"channel_count", channel_count},
                    {"start", {{"trace_period_id", start / per_trace},
                               {"integration_period_id", start % per_trace}}},
                    {"end_exclusive", {{"trace_period_id", end / per_trace},

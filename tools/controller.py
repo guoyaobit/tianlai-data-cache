@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UDP controller: protect ALL nodes first, then export concurrently at fixed node rates."""
+"""UDP controller: protect every node selected by the channel mode, then export concurrently."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -60,6 +60,7 @@ class Controller:
     def __init__(self, nodes, acquisition, journal, allow_partial=False,
                  integration_per_trace=50000, period_microseconds=200):
         self.nodes = sorted(nodes, key=lambda n: n['server_id'])
+        self.allow_partial = allow_partial
         if (len({n['server_id'] for n in nodes}) != len(nodes) or not nodes or
                 any(not 0 <= n['server_id'] <= 13 for n in nodes) or not ID.fullmatch(acquisition)):
             raise ValueError('invalid node list/acquisition ID')
@@ -80,6 +81,7 @@ class Controller:
         for path in self.journal.glob('*.json'):
             record = json.loads(path.read_text())
             if record.get('acquisition_id') == acquisition:
+                record.setdefault('channel_count', 384)
                 if (record.get('integration_per_trace', integration_per_trace) != integration_per_trace or
                         record.get('period_microseconds', period_microseconds) != period_microseconds):
                     raise ValueError('journal acquisition timing mismatch')
@@ -95,9 +97,20 @@ class Controller:
             atomic_json(self.journal / f'{event_id}.json', updated)
             event.update(updated)
 
-    def parallel(self, command, **fields):
-        with ThreadPoolExecutor(max_workers=len(self.nodes)) as workers:
-            futures = [workers.submit(rpc, n, self.acquisition, command, **fields) for n in self.nodes]
+    def event_nodes(self, channel_count):
+        """Return the complete node set for a 288- or 384-channel event."""
+        if type(channel_count) is not int or channel_count not in (288, 384):
+            raise ValueError('channel_count must be 288 or 384')
+        expected = set(range(11 if channel_count == 288 else 14))
+        selected = [node for node in self.nodes if node['server_id'] in expected]
+        if not selected or ({node['server_id'] for node in selected} != expected and not self.allow_partial):
+            raise ValueError(f'{channel_count}-channel node set is incomplete')
+        return selected
+
+    def parallel(self, command, nodes=None, **fields):
+        selected = self.nodes if nodes is None else nodes
+        with ThreadPoolExecutor(max_workers=len(selected)) as workers:
+            futures = [workers.submit(rpc, n, self.acquisition, command, **fields) for n in selected]
             results = []
             error = None
             for future in futures:
@@ -151,11 +164,15 @@ class Controller:
         event_id = message['event_id']
         if not ID.fullmatch(event_id):
             raise ValueError('invalid event_id')
+        channel_count = None if resume else message.get('channel_count', 384)
+        if not resume:
+            self.event_nodes(channel_count)
         normalized = None if resume else self.capture_range(message)
         with self.lock:
             existing = self.events.get(event_id)
             if existing and not resume:
-                if existing['start'] != normalized[0] or existing['period_count'] != normalized[1]:
+                if (existing['start'] != normalized[0] or existing['period_count'] != normalized[1] or
+                        existing.get('channel_count', 384) != channel_count):
                     raise ValueError('EVENT_ID_CONFLICT')
                 return dict(existing)
             if self.running is not None or any(e['status'] not in ('COMPLETED', 'CANCELLED')
@@ -168,6 +185,7 @@ class Controller:
                 start, count, end = normalized
                 self.events[event_id] = dict(event_id=event_id, acquisition_id=self.acquisition,
                     start=start, end_exclusive=end, period_count=count,
+                    channel_count=channel_count,
                     period_microseconds=self.period_microseconds, integration_per_trace=self.integration_per_trace,
                     status='PREPARING', active_server_ids=[])
             self.running = event_id
@@ -184,12 +202,14 @@ class Controller:
         """Wait for all nodes to become ready, send in parallel, then confirm persistence and release each node."""
         try:
             event = self.events[event_id]
+            nodes = self.event_nodes(event.get('channel_count', 384))
             # PREPARE is idempotent. Reconciliation also works after controller restart.
-            prepared = self.parallel('PREPARE', event_id=event_id, start=event['start'],
-                                     period_count=event['period_count'])
+            prepared = self.parallel('PREPARE', nodes=nodes, event_id=event_id, start=event['start'],
+                                     period_count=event['period_count'],
+                                     channel_count=event.get('channel_count', 384))
             missing_by_server = dict(event.get('missing_by_server', {}))
             needs_commit = []
-            for node, state in zip(self.nodes, prepared):
+            for node, state in zip(nodes, prepared):
                 if state['status'] == 'PREPARING':
                     state = self.poll_event(node, event_id, {'PREPARED'}, 120)
                 if state['status'] not in ('PREPARED', 'QUEUED', 'SENDING', 'SEND_FAILED', 'STORED', 'RELEASED'):
@@ -208,9 +228,9 @@ class Controller:
                                for node in needs_commit]
                     for future in futures:
                         future.result()
-            self.update(event_id, status='SENDING', active_server_ids=[n['server_id'] for n in self.nodes])
-            # Authorize every node before waiting for any durable completion. Fixed 1/14
-            # rate shares are never redistributed, including while reconciling after restart.
+            self.update(event_id, status='SENDING', active_server_ids=[n['server_id'] for n in nodes])
+            # Authorize every selected node before waiting for durable completion.
+            # Per-node rate limits are not redistributed when fewer nodes participate.
             def export_node(node):
                 state = rpc(node, self.acquisition, 'QUERY_EVENT', event_id=event_id)
                 if state['status'] in ('QUEUED', 'SEND_FAILED'):
@@ -221,8 +241,8 @@ class Controller:
                     state = rpc(node, self.acquisition, 'RELEASE', event_id=event_id)
                 if state['status'] != 'RELEASED':
                     raise RuntimeError(f"unexpected node state: {state}")
-            with ThreadPoolExecutor(max_workers=len(self.nodes)) as workers:
-                futures = [workers.submit(export_node, node) for node in self.nodes]
+            with ThreadPoolExecutor(max_workers=len(nodes)) as workers:
+                futures = [workers.submit(export_node, node) for node in nodes]
                 errors = []
                 for future in futures:
                     try:
@@ -266,7 +286,8 @@ class Controller:
                 if event_id not in self.events:
                     raise ValueError('EVENT_NOT_FOUND')
             # Resolve terminal states first; never cancel a node still sending.
-            for node in self.nodes:
+            event = self.events[event_id]
+            for node in self.event_nodes(event.get('channel_count', 384)):
                 try:
                     state = rpc(node, self.acquisition, 'QUERY_EVENT', event_id=event_id)
                 except RuntimeError as error:
@@ -284,12 +305,14 @@ class Controller:
         if command == 'QUERY_STATUS':
             with self.lock:
                 busy = any(e['status'] not in ('COMPLETED', 'CANCELLED') for e in self.events.values())
-            states = self.parallel('QUERY_STATUS')
+            channel_count = message.get('channel_count', 384)
+            nodes = self.event_nodes(channel_count)
+            states = self.parallel('QUERY_STATUS', nodes=nodes)
             oldest = max(s['oldest_period'] for s in states)
             end = min(s['settled_end'] for s in states)
             ready = not busy and oldest < end and all(s['accept_trigger'] for s in states)
             return dict(status='READY' if ready else 'BUSY_OR_WARMING', accept_trigger=ready,
-                        oldest_period=oldest, settled_end=end)
+                        channel_count=channel_count, oldest_period=oldest, settled_end=end)
         raise ValueError('unknown controller command')
 
 

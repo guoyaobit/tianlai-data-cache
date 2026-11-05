@@ -59,13 +59,14 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
   "acquisition_id": "acq-20260918-001",
   "command": "CAPTURE",
   "event_id": "event-000001",
+  "channel_count": 288,
   "start": {"trace_period_id": 120, "integration_period_id": 45000},
   "period_count": 15000
 }
 ```
 
-示例保存 3 秒，包含 `(120,45000)` 到 `(121,9999)`，不包含 `(121,10000)`。
-无 GPU/板卡筛选参数；保存节点清单涵盖的全部数据流。生产配置应列出全部 14 台。
+示例以288路模式保存3秒，包含`(120,45000)`到`(121,9999)`，不包含`(121,10000)`。
+`channel_count`只能为288或384：288使用节点0～10，384使用节点0～13。省略该字段时按384处理，以兼容旧触发端。同一`event_id`不能改变通道数。
 
 也可用 `"duration_ms":3000` 代替 `"period_count":15000`；**必须且只能提供其中一个**。毫秒时长须为正整数，换算后恰好是整数个积分周期；例如默认 200 微秒时，1 毫秒为 5 个周期。最大时长 5 秒；节点若配置更小的 `maxEventSeconds` 则按节点限制拒绝。控制器将请求规范化为 `period_count`，因此相同事件 ID、起点和等价长度可以重传，范围变化则冲突。
 
@@ -73,9 +74,9 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
 
 | command | 额外字段 | 含义 |
 |---|---|---|
-| CAPTURE | event_id、start、period_count | 创建事件，后台通知全部节点保护数据 |
+| CAPTURE | event_id、channel_count、start、period_count | 创建288或384路事件，通知对应节点保护数据 |
 | QUERY_EVENT | event_id | 查询事件准备/传输/完成状态 |
-| QUERY_STATUS | 无 | 查询全体节点共同的可用时间范围和 accept_trigger |
+| QUERY_STATUS | channel_count（可选，默认384） | 查询所选模式节点共同的可用时间范围和 accept_trigger |
 | RESUME | event_id | 对 PAUSED 事件查询节点实际状态后继续 |
 | CANCEL | event_id | 明确放弃已暂停事件；正在发送的节点不能直接取消 |
 
@@ -88,13 +89,13 @@ COMPLETED 只表示事件保存完成，不代表已经恢复完整 100 秒历�
 
 ### 写盘完成主动通知
 
-C++存储服务确认0～13号节点各自的`lane-0.stored.json`和`lane-1.stored.json`全部持久化且事件元数据一致后，先写入事件级`storage-complete.json`，再通过UDP通知消色散后端：
+C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～13（384路）各自两个lane全部持久化且元数据一致后，先写入事件级`storage-complete.json`，再通过UDP通知消色散后端：
 
 ```json
-{"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"acq-20260918-001","event_id":"event-000001","start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0,"11":0,"12":0,"13":0}}
+{"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"acq-20260918-001","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0}}
 ```
 
-`STORED` 精确表示 14 台数据均已写盘并形成持久化标记；它不表示控制器已经完成缓存释放。缺包数量见 `missing_by_server`，因此该通知也不是零丢包保证。
+`STORED`精确表示所选模式的11台或14台数据均已写盘并形成持久化标记；它不表示控制器已经完成缓存释放。缺包数量见`missing_by_server`，因此该通知也不是零丢包保证。
 
 后端应按 `(acquisition_id,event_id)` 幂等地持久化并处理结果，再使用监听通知的同一个 UDP 套接字，向收到报文的来源 IP 和临时端口回复：
 
@@ -106,11 +107,11 @@ C++存储服务确认0～13号节点各自的`lane-0.stored.json`和`lane-1.stor
 
 ### 控制器 → 节点（默认 UDP 19000）
 
-PREPARE 字段与 CAPTURE 相同，仅 command 不同。
+PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式包含的节点发送。
 
 | command | 额外字段 | 允许行为 |
 |---|---|---|
-| PREPARE | event_id、start、period_count | 检查历史区间并异步保护，返回 PREPARING/PREPARED |
+| PREPARE | event_id、channel_count、start、period_count | 检查模式和历史区间并异步保护，返回PREPARING/PREPARED |
 | COMMIT | event_id | 全部节点准备后，由控制器转为 QUEUED |
 | SEND | event_id | QUEUED或SEND_FAILED时并行启动两个限速ZeroMQ lane；忙时不重复启动 |
 | QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、过渡区峰值和 error |
@@ -123,7 +124,7 @@ PREPARE 字段与 CAPTURE 相同，仅 command 不同。
 发送失败为 SEND_FAILED，仍保护数据；准备失败为 REJECTED；明确取消为 CANCELLED。
 释放后历史不足时节点 QUERY_STATUS 返回 WARMING，而不是 READY。
 
-控制器只有在全部节点PREPARED后才授权发送。14个节点并行，每节点两个ZeroMQ连接；任一lane失败都会使节点进入SEND_FAILED并继续保护数据。
+控制器只有在所选模式全部节点PREPARED后才授权发送。288路并行11个节点，384路并行14个节点；每节点使用两个ZeroMQ连接，任一lane失败都会使节点进入SEND_FAILED并继续保护数据。
 默认 RPC 重试间隔 200 ms、5 次；准备/发送长任务通过查询等待。
 调度器重启时读取日志，未完成事件先 PAUSED；RESUME 根据节点现状继续，不盲目重放 SEND。
 
@@ -135,7 +136,7 @@ PREPARE 字段与 CAPTURE 相同，仅 command 不同。
 
 每次SEND为两个lane分别建立新会话。未完成lane从头重传；已有持久化标记的lane直接返回STORED。同一server/lane不可并发写，但同一server的两个lane可以并行写入互不重叠的端口文件。
 
-`sendRateBitsPerSecond`控制单节点两个lane合计速率，默认5.6 Gbit/s，平均分配到两个lane；14台合计78.4 Gbit/s。该值不含协议开销，须为单100G接收口和磁盘阵列保留余量。
+`sendRateBitsPerSecond`控制单节点两个lane合计速率，默认5.6 Gbit/s，平均分配到两个lane；288路的11台合计61.6 Gbit/s，384路的14台合计78.4 Gbit/s。该值不含协议开销，须为单100G接收口和磁盘阵列保留余量。
 
 ### TLSTORE1 消息内容
 
@@ -149,6 +150,7 @@ PREPARE 字段与 CAPTURE 相同，仅 command 不同。
   "acquisition_id": "acq-20260918-001",
   "server_id": 3,
   "lane": 0,
+  "channel_count": 288,
   "port_count": 4,
   "ports": [0, 2],
   "start_period": 6045000,
@@ -159,7 +161,7 @@ PREPARE 字段与 CAPTURE 相同，仅 command 不同。
 }
 ```
 
-`port_count`仍表示节点接收口总数；`ports`列出本lane实际发送的端口，lane 0必须为偶数口，lane 1必须为奇数口。两个列表互斥且并集覆盖全部接收口。
+`channel_count`必须与触发一致。288路只允许server 0～10，384路允许server 0～13。`port_count`仍表示节点接收口总数；`ports`列出本lane实际发送的端口，lane 0必须为偶数口，lane 1必须为奇数口。两个列表互斥且并集覆盖全部接收口。
 
 随后逐接收口发送数据块，每块默认 64 个积分周期，最后一块可以不足 64 个。
 块头共 40 B，所有整数大端，禁止直接发送带本机填充的 C++ struct：

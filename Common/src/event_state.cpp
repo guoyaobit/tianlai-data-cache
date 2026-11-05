@@ -8,6 +8,7 @@
 static std::string eventJson(const EventInfo &e) {
     return "\"event_id\":" + quoteJson(e.id) + ",\"status\":" +
            quoteJson(eventStateName(e.state)) +
+           ",\"channel_count\":" + std::to_string(e.channelCount) +
            ",\"start_period\":" + std::to_string(e.start) +
            ",\"period_count\":" + std::to_string(e.count) +
            ",\"missing_packets\":" + std::to_string(e.missing) +
@@ -200,7 +201,12 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             uint64_t trace = getNumber(msg, "start.trace_period_id");
             uint64_t integration = getNumber(msg, "start.integration_period_id");
             uint64_t count = getNumber(msg, "period_count");
+            uint64_t channels = hasField(msg, "channel_count") ? getNumber(msg, "channel_count") : 384;
             uint64_t epochEnd = (1ULL << 20) * para.config->integrationPerTrace;
+            if (channels != 288 && channels != 384)
+                throw std::runtime_error("INVALID_CHANNEL_COUNT");
+            if (channels == 288 && para.config->serverId >= 11)
+                throw std::runtime_error("CHANNEL_MODE_EXCLUDES_NODE");
             if (trace >= (1ULL << 20) || integration >= para.config->integrationPerTrace ||
                 !count || count > para.config->maxEventPeriods())
                 throw std::runtime_error("INVALID_RANGE");
@@ -213,7 +219,8 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             else if (para.history.count(id))
                 existing = &para.history.at(id);
             if (existing) {
-                if (existing->start != start || existing->count != count)
+                if (existing->start != start || existing->count != count ||
+                    existing->channelCount != channels)
                     throw std::runtime_error("EVENT_ID_CONFLICT");
                 return reply(eventJson(*existing));
             }
@@ -234,6 +241,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                 para.eventThread.join();
             para.event = EventInfo{};
             para.event.id = id;
+            para.event.channelCount = static_cast<unsigned>(channels);
             para.event.start = start;
             para.event.count = count;
             para.event.state = EventState::Preparing;

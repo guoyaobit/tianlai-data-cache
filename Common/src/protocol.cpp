@@ -61,6 +61,12 @@ boost::property_tree::ptree parseControl(const std::string &s) {
         throw std::runtime_error("unsupported protocol version");
     return tree;
 }
+bool hasField(const boost::property_tree::ptree &tree, const std::string &key) {
+    for (const auto &field : tree)
+        if (field.first == key)
+            return true;
+    return false;
+}
 std::string getId(const boost::property_tree::ptree &tree, const std::string &key) {
     auto id = tree.get<std::string>(key);
     if (!validId(id) || !tree.get_child(key).empty())

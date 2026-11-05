@@ -12,6 +12,7 @@ uint64_t parseUnsigned(const std::string &s);
 bool validId(const std::string &s);
 std::string quoteJson(const std::string &s);
 boost::property_tree::ptree parseControl(const std::string &s);
+bool hasField(const boost::property_tree::ptree &tree, const std::string &key);
 std::string getId(const boost::property_tree::ptree &tree, const std::string &key);
 uint64_t getNumber(const boost::property_tree::ptree &tree, const std::string &key);
 void put32(std::vector<unsigned char> &v, uint32_t n);

@@ -46,6 +46,7 @@ static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event, 
              "{\"version\":1,\"format\":\"TLSTORE1\",\"event_id\":" + quoteJson(event.id) +
                  ",\"acquisition_id\":" + quoteJson(c.acquisitionId) + ",\"server_id\":" +
                  std::to_string(c.serverId) + ",\"lane\":" + std::to_string(lane) +
+                 ",\"channel_count\":" + std::to_string(event.channelCount) +
                  ",\"port_count\":" + std::to_string(c.receivePorts.size()) + ",\"start_period\":" +
                  std::to_string(event.start) + ",\"period_count\":" + std::to_string(event.count) +
                  ",\"ports\":" + portList +
