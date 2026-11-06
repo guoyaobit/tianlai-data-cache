@@ -60,9 +60,9 @@ int main() {
     params.event.count = 4;
     params.event.state = EventState::Sending;
     params.receiveBuffers.emplace_back(
-        new ReceiveRingBuffer(0, 10, 20, 5, 2, 32, 2, 100000, 80, false));
+        new ReceiveRingBuffer(0, 10, 20, 5, 2, 1, 32, 2, 100000, 80, false));
     params.receiveBuffers.emplace_back(
-        new ReceiveRingBuffer(1, 10, 20, 5, 2, 32, 2, 100000, 80, false));
+        new ReceiveRingBuffer(1, 10, 20, 5, 2, 1, 32, 2, 100000, 80, false));
     auto &pool = *params.receiveBuffers[0];
     auto &pool1 = *params.receiveBuffers[1];
     for (unsigned period = 0; period < 20; ++period) {

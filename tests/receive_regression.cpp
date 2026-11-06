@@ -46,7 +46,7 @@ static void check(ReceiveRingBuffer &pool, uint64_t p, unsigned mask = 3) {
 }
 int main() {
     for (unsigned shift : {0U, 3U, 9U}) {
-        ReceiveRingBuffer pool(0, 10, 20, 5, 2, 32, 2, 100000, 25, false);
+        ReceiveRingBuffer pool(0, 10, 20, 5, 2, 1, 32, 2, 100000, 25, false);
         for (unsigned p = shift; p < shift + 20; ++p) feed(pool, p);
         assert(pool.status().ready);
         rejects([&] { pool.beginFreeze(shift + 19, 1); });
@@ -71,7 +71,7 @@ int main() {
         pool.release();
     }
     // Missing whole periods, missing boards, duplicates, out-of-order and conflicting flags.
-    ReceiveRingBuffer pool(0, 10, 20, 5, 2, 32, 2, 100000, 80, false);
+    ReceiveRingBuffer pool(0, 10, 20, 5, 2, 1, 32, 2, 100000, 80, false);
     for (unsigned p = 0; p < 20; ++p) {
         if (p != 9) feed(pool, p, p == 10 ? 1 : 3);
     }
@@ -98,25 +98,48 @@ int main() {
     assert(pool.missingPackets() == 3);
     pool.release();
     // A reused slot may contain bytes from an old cycle: missing packets still export zeros.
-    ReceiveRingBuffer reused(0, 10, 20, 5, 2, 32, 2, 100000, 80, false);
+    ReceiveRingBuffer reused(0, 10, 20, 5, 2, 1, 32, 2, 100000, 80, false);
     for (unsigned p = 0; p < 40; ++p) feed(reused, p, p == 20 ? 1 : 3);
     reused.beginFreeze(20, 1);
     reused.finishFreeze();
     check(reused, 20, 1);
     reused.release();
     // Reject a transition area that cannot hold the current unsettled tail.
-    ReceiveRingBuffer undersized(0, 10, 1, 5, 2, 32, 2, 100000, 80, false);
+    ReceiveRingBuffer undersized(0, 10, 1, 5, 2, 1, 32, 2, 100000, 80, false);
     for (unsigned p = 0; p < 20; ++p) feed(undersized, p);
     rejects([&] { undersized.beginFreeze(8, 4); });
     assert(!undersized.isFrozen());
     // Exercise concurrent ingress during the transition and while exporting the frozen bank.
-    ReceiveRingBuffer concurrent(0, 1000, 4000, 500, 2, 32, 2, 100000, 80, false);
+    ReceiveRingBuffer concurrent(0, 1000, 4000, 500, 2, 1, 32, 2, 100000, 80, false);
     for (unsigned p = 0; p < 2000; ++p) feed(concurrent, p);
     concurrent.beginFreeze(900, 300);
     std::thread producer([&] { for (unsigned p = 2000; p < 5000; ++p) feed(concurrent, p); });
     concurrent.finishFreeze(); producer.join();
     for (unsigned p = 900; p < 1200; ++p) check(concurrent, p);
     concurrent.release();
+    // A remote receive port exposes one BoardBuffer view per physical board.
+    // Each physical board contributes two adjacent FFT-half packet slots.
+    ReceiveRingBuffer remote(0, 10, 20, 5, 4, 2, 32, 2, 100000, 80, false);
+    assert(remote.packetSlotCount() == 4);
+    assert(remote.packetsPerPhysicalBoard() == 2);
+    assert(remote.physicalBoardCount() == 2);
+    for (unsigned period = 0; period < 20; ++period) {
+        for (unsigned packetSlot = 0; packetSlot < 4; ++packetSlot) {
+            auto data = packet(period, packetSlot);
+            assert(remote.receive(period, packetSlot, 0, data.data()));
+        }
+    }
+    remote.beginFreeze(8, 1);
+    remote.finishFreeze();
+    std::vector<unsigned char> remoteFrame;
+    remote.appendEventFrame(8, remoteFrame);
+    assert(remoteFrame.size() == 24 + 4 * 32);
+    assert(number(remoteFrame, 8, 8) == 0x0f);
+    for (unsigned packetSlot = 0; packetSlot < 4; ++packetSlot) {
+        auto expected = packet(8, packetSlot);
+        assert(!std::memcmp(remoteFrame.data() + 24 + packetSlot * 32,
+                            expected.data(), expected.size()));
+    }
     // Header bits and strict JSON fields.
     auto p = packet(120ULL * 50000 + 45000, 35);
     auto h = decodeInput(p.data());

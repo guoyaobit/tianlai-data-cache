@@ -5,14 +5,10 @@
 #include <stdexcept>
 #include <sys/mman.h>
 
-struct ReceiveRingBuffer::Buffer {
-    size_t capacity;
-    size_t stride;
+struct ReceiveRingBuffer::Allocation {
     size_t bytes;
     unsigned char *data;
-    std::vector<RcvFrameHeader> headers;
-    Buffer(size_t count, size_t frameBytes, bool prefault)
-        : capacity(count), stride(frameBytes), bytes(count * frameBytes), headers(count) {
+    Allocation(size_t size, bool prefault) : bytes(size) {
         data = static_cast<unsigned char *>(
             mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
         if (data == MAP_FAILED)
@@ -22,8 +18,39 @@ struct ReceiveRingBuffer::Buffer {
         if (prefault)
             std::memset(data, 0, bytes);
     }
-    ~Buffer() {
-        munmap(data, bytes);
+    ~Allocation() { munmap(data, bytes); }
+};
+
+struct ReceiveRingBuffer::BoardBuffer {
+    unsigned char *base;
+    size_t capacity, periodStride, packetBytes, packetsPerPeriod;
+    BoardBuffer(unsigned char *address, size_t count, size_t stride, size_t bytes,
+                size_t packets)
+        : base(address), capacity(count), periodStride(stride), packetBytes(bytes),
+          packetsPerPeriod(packets) {}
+    unsigned char *packet(uint64_t period, unsigned packetIndex) {
+        return base + (period % capacity) * periodStride + packetIndex * packetBytes;
+    }
+    const unsigned char *packet(uint64_t period, unsigned packetIndex) const {
+        return base + (period % capacity) * periodStride + packetIndex * packetBytes;
+    }
+};
+
+struct ReceiveRingBuffer::Buffer {
+    size_t capacity, stride;
+    unsigned packetsPerBoard;
+    unsigned char *data;
+    std::vector<RcvFrameHeader> headers;
+    std::vector<BoardBuffer> boardViews;
+    Buffer(unsigned char *address, size_t count, size_t frameBytes,
+           unsigned packetSlots, unsigned packetsPerPhysicalBoard, size_t packetBytes)
+        : capacity(count), stride(frameBytes), packetsPerBoard(packetsPerPhysicalBoard),
+          data(address), headers(count) {
+        const unsigned physicalBoards = packetSlots / packetsPerBoard;
+        boardViews.reserve(physicalBoards);
+        for (unsigned board = 0; board < physicalBoards; ++board)
+            boardViews.emplace_back(data + board * packetsPerBoard * packetBytes,
+                                    count, frameBytes, packetBytes, packetsPerBoard);
     }
     RcvFrameHeader &header(uint64_t p) {
         return headers[p % capacity];
@@ -37,22 +64,38 @@ struct ReceiveRingBuffer::Buffer {
     const unsigned char *frame(uint64_t p) const {
         return data + (p % capacity) * stride;
     }
+    unsigned char *packet(uint64_t p, unsigned packetSlot) {
+        return boardViews[packetSlot / packetsPerBoard].packet(
+            p, packetSlot % packetsPerBoard);
+    }
+    const unsigned char *packet(uint64_t p, unsigned packetSlot) const {
+        return boardViews[packetSlot / packetsPerBoard].packet(
+            p, packetSlot % packetsPerBoard);
+    }
     void reset() {
         std::fill(headers.begin(), headers.end(), RcvFrameHeader{});
     }
 };
 ReceiveRingBuffer::ReceiveRingBuffer(unsigned index, size_t h, size_t t, size_t maxEvent,
-                                     unsigned b, unsigned pb, unsigned r, unsigned ms,
+                                     unsigned b, unsigned ppb, unsigned pb, unsigned r, unsigned ms,
                                      unsigned warnPercent, bool prefault)
-    : portIndex(index), half(h), transitionCapacity(t), eventLimit(maxEvent), boards(b),
-      packetBytes(pb), reorder(r), settleMs(ms), transitionWarnPercent(warnPercent),
+    : portIndex(index), half(h), transitionCapacity(t), eventLimit(maxEvent), packetSlots(b),
+      packetsPerBoard(ppb), physicalBoards(ppb ? b / ppb : 0), packetBytes(pb), reorder(r),
+      settleMs(ms), transitionWarnPercent(warnPercent),
       frameBytes(size_t(b) * pb) {
-    if (!h || !t || !b || b > 36 || pb < 16 || !r || r >= h || maxEvent > h ||
+    if (!h || !t || !b || b > 36 || !ppb || ppb > 2 || b % ppb || b / ppb > 36 ||
+        pb < 16 || !r || r >= h || maxEvent > h ||
         !warnPercent || warnPercent >= 100)
         throw std::runtime_error("invalid receive pool dimensions");
-    bank[0].reset(new Buffer(h, frameBytes, prefault));
-    bank[1].reset(new Buffer(h, frameBytes, prefault));
-    transition.reset(new Buffer(t, frameBytes, prefault));
+    const size_t bankBytes = h * frameBytes;
+    const size_t transitionBytes = t * frameBytes;
+    allocation.reset(new Allocation(2 * bankBytes + transitionBytes, prefault));
+    bank[0].reset(new Buffer(allocation->data, h, frameBytes, packetSlots,
+                             packetsPerBoard, packetBytes));
+    bank[1].reset(new Buffer(allocation->data + bankBytes, h, frameBytes, packetSlots,
+                             packetsPerBoard, packetBytes));
+    transition.reset(new Buffer(allocation->data + 2 * bankBytes, t, frameBytes,
+                                packetSlots, packetsPerBoard, packetBytes));
 }
 ReceiveRingBuffer::~ReceiveRingBuffer() = default;
 uint64_t ReceiveRingBuffer::settledEndUnlocked() const {
@@ -99,12 +142,14 @@ const ReceiveRingBuffer::Buffer *ReceiveRingBuffer::find(uint64_t p) const {
 }
 void ReceiveRingBuffer::copySlot(const Buffer &src, Buffer &dst, uint64_t p) {
     dst.header(p) = src.header(p);
-    std::memcpy(dst.frame(p), src.frame(p), frameBytes);
+    for (unsigned packetSlot = 0; packetSlot < packetSlots; ++packetSlot)
+        std::memcpy(dst.packet(p, packetSlot), src.packet(p, packetSlot), packetBytes);
 }
 // Write one packet to the rolling or transition area, deduplicate by period and packet position, and count late arrivals and conflicts.
-bool ReceiveRingBuffer::receive(uint64_t p, unsigned b, unsigned ifTrace, const unsigned char *packet) {
+bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrace,
+                                const unsigned char *packet) {
     std::lock_guard<std::mutex> lock(mutex);
-    if (b >= boards || p == UINT64_MAX)
+    if (packetSlot >= packetSlots || p == UINT64_MAX)
         throw std::runtime_error("invalid receive index");
     // A single timestamp defines both finalization and last-receive time for this packet.
     const auto now = std::chrono::steady_clock::now();
@@ -158,12 +203,12 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned b, unsigned ifTrace, const 
         ++conflicting;
         return false;
     }
-    uint64_t bit = 1ULL << b;
+    uint64_t bit = 1ULL << packetSlot;
     if (h.boardMask & bit) {
         ++duplicate;
         return false;
     }
-    std::memcpy(dst->frame(p) + b * packetBytes, packet, packetBytes);
+    std::memcpy(dst->packet(p, packetSlot), packet, packetBytes);
     h.boardMask |= bit;
     ++received;
     return true;
@@ -262,11 +307,10 @@ void ReceiveRingBuffer::finishFreeze() {
                 ++conflicting;
                 continue;
             }
-            for (unsigned b = 0; b < boards; ++b) {
+            for (unsigned b = 0; b < packetSlots; ++b) {
                 uint64_t bit = 1ULL << b;
                 if ((srcHeader.boardMask & bit) && !(h.boardMask & bit)) {
-                    std::memcpy(live.frame(p) + b * packetBytes,
-                                transition->frame(p) + b * packetBytes, packetBytes);
+                    std::memcpy(live.packet(p, b), transition->packet(p, b), packetBytes);
                     h.boardMask |= bit;
                 }
             }
@@ -303,7 +347,7 @@ uint64_t ReceiveRingBuffer::missingPackets() const {
     // Called only after finishFreeze; release cannot run while export is active.
     uint64_t missing = 0;
     for (uint64_t p = eventStart; p < eventStart + eventCount; ++p)
-        missing += boards - __builtin_popcountll(bank[target]->header(p).boardMask);
+        missing += packetSlots - __builtin_popcountll(bank[target]->header(p).boardMask);
     return missing;
 }
 // Export one period and its missing-packet bitmap; zero-fill missing positions and preserve received payload packets unchanged.
@@ -315,8 +359,8 @@ void ReceiveRingBuffer::appendEventFrame(uint64_t p, std::vector<unsigned char> 
     put64(out, p);
     put64(out, h.boardMask);
     put32(out, packetBytes);
-    put32(out, boards);
-    if (h.boardMask == (1ULL << boards) - 1) {
+    put32(out, packetSlots);
+    if (h.boardMask == (1ULL << packetSlots) - 1) {
         // Complete frames need no zero fill: append the contiguous packet block once.
         const auto *frame = src.frame(p);
         out.insert(out.end(), frame, frame + frameBytes);
@@ -324,8 +368,7 @@ void ReceiveRingBuffer::appendEventFrame(uint64_t p, std::vector<unsigned char> 
     }
     size_t offset = out.size();
     out.resize(offset + frameBytes, 0);
-    for (unsigned b = 0; b < boards; ++b)
+    for (unsigned b = 0; b < packetSlots; ++b)
         if (h.boardMask & (1ULL << b))
-            std::memcpy(out.data() + offset + b * packetBytes, src.frame(p) + b * packetBytes,
-                        packetBytes);
+            std::memcpy(out.data() + offset + b * packetBytes, src.packet(p, b), packetBytes);
 }

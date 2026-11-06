@@ -130,7 +130,8 @@ static void Prepare(CacheRuntime &para) {
         para.receiveBuffers.emplace_back(
             new ReceiveRingBuffer(index, c.halfPeriods(), c.transitionPeriods(),
                                   c.maxEventPeriods(), port.packetSlots(),
-                                  c.inputDataBytes + INPUT_HEADER_BYTES, c.reorderPeriods,
+                                  port.packetsPerBoard, c.inputDataBytes + INPUT_HEADER_BYTES,
+                                  c.reorderPeriods,
                                   c.settleMilliseconds, c.transitionWarnPercent,
                                   c.prefaultMemory));
     }

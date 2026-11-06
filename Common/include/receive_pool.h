@@ -29,7 +29,8 @@ struct PoolStatus {
     bool ready = false;
 };
 // One instance per receive port; its mutex protects the active receive state.
-// "boards"/"board" count packet slots, including both halves for the remote profile.
+// A packet slot identifies one packet position in a period. A remote physical
+// board owns two adjacent slots, one for each FFT half.
 //
 // Normal: A and B hold two consecutive halfPeriods of rolling data.
 // beginFreeze: redirect incoming packets to the bounded transition buffer.
@@ -39,11 +40,13 @@ struct PoolStatus {
 class ReceiveRingBuffer {
   public:
     ReceiveRingBuffer(unsigned portIndex, size_t halfPeriods, size_t transitionPeriods,
-                      size_t maxEventPeriods, unsigned boards, unsigned packetBytes,
+                      size_t maxEventPeriods, unsigned packetSlots, unsigned packetsPerBoard,
+                      unsigned packetBytes,
                       unsigned reorderPeriods, unsigned settleMilliseconds,
                       unsigned transitionWarnPercent, bool prefault);
     ~ReceiveRingBuffer();
-    bool receive(uint64_t period, unsigned board, unsigned ifTrace, const unsigned char *packet);
+    bool receive(uint64_t period, unsigned packetSlot, unsigned ifTrace,
+                 const unsigned char *packet);
     PoolStatus status() const;
     void beginFreeze(uint64_t start, uint64_t count);
     void finishFreeze();
@@ -51,8 +54,13 @@ class ReceiveRingBuffer {
     uint64_t missingPackets() const;
     void appendEventFrame(uint64_t period, std::vector<unsigned char> &out) const;
     bool isFrozen() const;
+    unsigned packetSlotCount() const { return packetSlots; }
+    unsigned packetsPerPhysicalBoard() const { return packetsPerBoard; }
+    unsigned physicalBoardCount() const { return physicalBoards; }
 
   private:
+    struct Allocation;
+    struct BoardBuffer;
     struct Buffer;
     enum Mode {
         NORMAL,     // Both banks participate in the rolling history.
@@ -66,8 +74,12 @@ class ReceiveRingBuffer {
     void copySlot(const Buffer &src, Buffer &dst, uint64_t p);
     const unsigned portIndex;
     const size_t half, transitionCapacity, eventLimit;
-    const unsigned boards, packetBytes, reorder, settleMs, transitionWarnPercent;
+    const unsigned packetSlots, packetsPerBoard, physicalBoards, packetBytes;
+    const unsigned reorder, settleMs, transitionWarnPercent;
     const size_t frameBytes;
+    // One payload allocation is partitioned into A/B/transition slabs. Each
+    // BoardBuffer is a non-owning strided view into one slab.
+    std::unique_ptr<Allocation> allocation;
     std::unique_ptr<Buffer> bank[2], transition;
     mutable std::mutex mutex;
     Mode mode = NORMAL;
