@@ -71,6 +71,11 @@ class ReceiveRingBuffer {
     uint64_t settledEndUnlocked(std::chrono::steady_clock::time_point now) const;
     PoolStatus statusUnlocked() const;
     const Buffer *find(uint64_t p) const;
+    void detectPacketLoss(std::chrono::steady_clock::time_point now,
+                          uint64_t previousLatest);
+    void addPacketLoss(uint64_t firstPeriod, uint64_t lastPeriod,
+                       uint64_t missingPackets, uint64_t affectedPeriods);
+    void logPacketLoss(std::chrono::steady_clock::time_point now);
     void copySlot(const Buffer &src, Buffer &dst, uint64_t p);
     const unsigned portIndex;
     const size_t half, transitionCapacity, eventLimit;
@@ -100,8 +105,14 @@ class ReceiveRingBuffer {
     uint64_t transitionPeak = 0;
     uint64_t lastFreezeMilliseconds = 0;
     uint64_t freezeCount = 0;
+    uint64_t nextLossCheck = 0;
+    uint64_t pendingMissingPackets = 0;
+    uint64_t pendingMissingPeriods = 0;
+    uint64_t pendingFirstMissingPeriod = 0;
+    uint64_t pendingLastMissingPeriod = 0;
     bool transitionWarningLogged = false;
     std::chrono::steady_clock::time_point freezeStarted;
     std::chrono::steady_clock::time_point lastReceive;
+    std::chrono::steady_clock::time_point lastLossWarning;
 };
 #endif

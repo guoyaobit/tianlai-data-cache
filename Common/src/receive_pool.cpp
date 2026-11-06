@@ -135,10 +135,62 @@ PoolStatus ReceiveRingBuffer::status() const {
     return statusUnlocked();
 }
 const ReceiveRingBuffer::Buffer *ReceiveRingBuffer::find(uint64_t p) const {
+    if (mode == TRANSITION && p >= transitionStart &&
+        transition->header(p).absolutePeriod == p)
+        return transition.get();
     for (const auto &b : bank)
         if (b->header(p).absolutePeriod == p)
             return b.get();
     return nullptr;
+}
+void ReceiveRingBuffer::addPacketLoss(uint64_t firstPeriod, uint64_t lastPeriod,
+                                      uint64_t missing, uint64_t affected) {
+    if (!affected)
+        return;
+    if (!pendingMissingPeriods)
+        pendingFirstMissingPeriod = firstPeriod;
+    pendingLastMissingPeriod = lastPeriod;
+    pendingMissingPackets += missing;
+    pendingMissingPeriods += affected;
+}
+void ReceiveRingBuffer::logPacketLoss(std::chrono::steady_clock::time_point now) {
+    if (!pendingMissingPeriods)
+        return;
+    constexpr auto interval = std::chrono::seconds(1);
+    if (lastLossWarning.time_since_epoch().count() && now - lastLossWarning < interval)
+        return;
+    LOG("Receive port " + std::to_string(portIndex) +
+            " packet loss: missing_packets=" + std::to_string(pendingMissingPackets) +
+            " affected_periods=" + std::to_string(pendingMissingPeriods) +
+            " period_range=" + std::to_string(pendingFirstMissingPeriod) + ".." +
+            std::to_string(pendingLastMissingPeriod),
+        WARN);
+    pendingMissingPackets = 0;
+    pendingMissingPeriods = 0;
+    lastLossWarning = now;
+}
+// Check only periods beyond the reorder window. A large sequence jump is
+// counted as a range instead of scanning every absent period.
+void ReceiveRingBuffer::detectPacketLoss(std::chrono::steady_clock::time_point now,
+                                         uint64_t previousLatest) {
+    const uint64_t settledEnd = settledEndUnlocked(now);
+    const uint64_t scanEnd = std::min(settledEnd, previousLatest + 1);
+    const uint64_t expectedMask = (1ULL << packetSlots) - 1;
+    while (nextLossCheck < scanEnd) {
+        const auto *buffer = find(nextLossCheck);
+        const uint64_t receivedMask = buffer ? buffer->header(nextLossCheck).boardMask : 0;
+        const uint64_t missing =
+            packetSlots - static_cast<uint64_t>(__builtin_popcountll(receivedMask & expectedMask));
+        if (missing)
+            addPacketLoss(nextLossCheck, nextLossCheck, missing, 1);
+        ++nextLossCheck;
+    }
+    if (nextLossCheck < settledEnd) {
+        const uint64_t affected = settledEnd - nextLossCheck;
+        addPacketLoss(nextLossCheck, settledEnd - 1, affected * packetSlots, affected);
+        nextLossCheck = settledEnd;
+    }
+    logPacketLoss(now);
 }
 void ReceiveRingBuffer::copySlot(const Buffer &src, Buffer &dst, uint64_t p) {
     dst.header(p) = src.header(p);
@@ -161,8 +213,10 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
         oldest = p;
         anchor = p;
         latest = p;
+        nextLossCheck = p;
         haveData = true;
     }
+    const uint64_t previousLatest = latest;
     if (mode == TRANSITION) {
         if (p >= transitionStart + transitionCapacity)
             throw std::runtime_error("transition buffer overflow; event cannot be guaranteed");
@@ -211,6 +265,7 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
     std::memcpy(dst->packet(p, packetSlot), packet, packetBytes);
     h.boardMask |= bit;
     ++received;
+    detectPacketLoss(now, previousLatest);
     return true;
 }
 // Validate the event range and redirect subsequent packets to the transition area so data pending storage is not overwritten during collation.

@@ -1,13 +1,22 @@
 #include "receive_pool.h"
 #include "protocol.h"
 #include "log_output.h"
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <mutex>
 #include <thread>
 
-void logOut(const std::string &, LogLevel) {}
+static std::mutex logMutex;
+static std::vector<std::string> warningLogs;
+void logOut(const std::string &message, LogLevel level) {
+    if (level == WARN) {
+        std::lock_guard<std::mutex> lock(logMutex);
+        warningLogs.push_back(message);
+    }
+}
 
 static void rejects(const std::function<void()> &f) {
     bool caught = false;
@@ -45,6 +54,29 @@ static void check(ReceiveRingBuffer &pool, uint64_t p, unsigned mask = 3) {
     }
 }
 int main() {
+    // Report a missing packet only after its period leaves the reorder window.
+    ReceiveRingBuffer lossAlert(7, 10, 20, 5, 2, 1, 32, 2, 100000, 80, false);
+    for (unsigned p = 0; p < 7; ++p)
+        feed(lossAlert, p, p == 3 ? 1 : 3);
+    {
+        std::lock_guard<std::mutex> lock(logMutex);
+        assert(std::find(warningLogs.begin(), warningLogs.end(),
+                         "Receive port 7 packet loss: missing_packets=1 affected_periods=1 "
+                         "period_range=3..3") != warningLogs.end());
+    }
+    // An out-of-order period completed inside the reorder window is not loss.
+    ReceiveRingBuffer reordered(8, 10, 20, 5, 2, 1, 32, 2, 100000, 80, false);
+    for (unsigned p = 0; p < 3; ++p)
+        feed(reordered, p);
+    feed(reordered, 4);
+    feed(reordered, 3);
+    feed(reordered, 5);
+    {
+        std::lock_guard<std::mutex> lock(logMutex);
+        assert(std::none_of(warningLogs.begin(), warningLogs.end(), [](const std::string &line) {
+            return line.find("Receive port 8 packet loss") != std::string::npos;
+        }));
+    }
     for (unsigned shift : {0U, 3U, 9U}) {
         ReceiveRingBuffer pool(0, 10, 20, 5, 2, 1, 32, 2, 100000, 25, false);
         for (unsigned p = shift; p < shift + 20; ++p) feed(pool, p);
