@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""List physical Linux interfaces whose reported speed exceeds 1 Gb/s."""
+"""List high-speed physical interfaces and stale link-local data ports."""
 
 import argparse
+import ipaddress
 import json
 from pathlib import Path
+import subprocess
 
 
 def read_number(path):
@@ -13,15 +15,41 @@ def read_number(path):
         return None
 
 
-def select_interfaces(sysfs_root, minimum_speed):
-    """Return physical interfaces at or above the configured speed."""
+def ipv4_link_local_interfaces():
+    """Return interfaces carrying an IPv4 address in 169.254.0.0/16."""
+    try:
+        result = subprocess.run(
+            ['ip', '-j', '-4', 'address', 'show'], check=True,
+            capture_output=True, text=True, timeout=10)
+        report = json.loads(result.stdout)
+    except (FileNotFoundError, json.JSONDecodeError, OSError,
+            subprocess.SubprocessError, TypeError, ValueError):
+        return set()
+    selected = set()
+    for interface in report:
+        name = interface.get('ifname')
+        for address in interface.get('addr_info', []):
+            try:
+                value = ipaddress.ip_address(address.get('local', ''))
+            except ValueError:
+                continue
+            if value.version == 4 and value.is_link_local and isinstance(name, str):
+                selected.add(name)
+    return selected
+
+
+def select_interfaces(sysfs_root, minimum_speed, link_local_interfaces=()):
+    """Return high-speed ports plus link-down physical ports with stale IPv4LL."""
     selected = []
     root = Path(sysfs_root)
+    link_local = set(link_local_interfaces)
     for interface in sorted(root.iterdir()) if root.is_dir() else []:
         if interface.name == 'lo' or not (interface / 'device').exists():
             continue
         speed = read_number(interface / 'speed')
-        if speed is not None and speed >= minimum_speed:
+        speed_unknown = speed is None or speed < 0
+        if (speed is not None and speed >= minimum_speed) or (
+                speed_unknown and interface.name in link_local):
             selected.append({
                 'name': interface.name,
                 'speed_mbps': speed,
@@ -37,8 +65,10 @@ def main():
     arguments = parser.parse_args()
     if arguments.minimum_speed <= 1000:
         parser.error('minimum speed must be greater than 1000 Mb/s')
-    selected = select_interfaces(arguments.sysfs_root, arguments.minimum_speed)
+    link_local = ipv4_link_local_interfaces()
+    selected = select_interfaces(arguments.sysfs_root, arguments.minimum_speed, link_local)
     print(json.dumps({'minimum_speed_mbps': arguments.minimum_speed,
+                      'ipv4_link_local_interfaces': sorted(link_local),
                       'interfaces': selected}, sort_keys=True))
     return 0
 

@@ -4,6 +4,7 @@ network:
   ethernets:
 {% for interface in tianlai_receive_netplan_interfaces %}
     "{{ interface }}":
+      renderer: NetworkManager
       mtu: {{ tianlai_jumbo_mtu }}
       dhcp4: false
       dhcp6: false

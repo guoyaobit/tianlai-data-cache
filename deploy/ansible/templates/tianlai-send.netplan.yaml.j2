@@ -3,6 +3,7 @@ network:
   version: 2
   ethernets:
     "{{ tianlai_send_interface }}":
+      renderer: NetworkManager
       mtu: {{ tianlai_jumbo_mtu }}
       dhcp4: false
       dhcp6: false

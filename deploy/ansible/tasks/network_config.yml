@@ -2,11 +2,17 @@
 - name: Derive cache data-network values
   ansible.builtin.include_tasks: cache_send_facts.yml
 
-- name: Install Netplan and the Linux IP utility
+- name: Install Netplan, NetworkManager, and the Linux IP utility
   ansible.builtin.apt:
-    name: [netplan.io, iproute2]
+    name: [netplan.io, network-manager, iproute2]
     state: present
     update_cache: false
+
+- name: Enable and start NetworkManager
+  ansible.builtin.systemd:
+    name: NetworkManager.service
+    enabled: true
+    state: started
 
 - name: Discover high-speed physical interfaces
   ansible.builtin.script:
@@ -145,6 +151,23 @@
     (receive_netplan.changed | default(false)) or
     ((send_netplan is defined) and (send_netplan.changed | default(false))) or
     ((storage_netplan is defined) and (storage_netplan.changed | default(false)))
+
+- name: Read NetworkManager ownership for managed data interfaces
+  ansible.builtin.command:
+    argv: [nmcli, -g, GENERAL.STATE, device, show, "{{ item }}"]
+  loop: >-
+    {{ tianlai_receive_netplan_interfaces |
+    union([tianlai_send_interface] if 'cache_nodes' in group_names else []) |
+    union([tianlai_storage_receive_interface] if 'storage' in group_names else []) }}
+  register: managed_nm_devices
+  changed_when: false
+
+- name: Require NetworkManager ownership of managed data interfaces
+  ansible.builtin.assert:
+    that:
+      - (item.stdout | trim) is not match('^10([^0-9]|$)')
+    fail_msg: "{{ item.item }} is not managed by NetworkManager after Netplan apply"
+  loop: "{{ managed_nm_devices.results }}"
 
 - name: Read applied MTU values
   ansible.builtin.command:

@@ -2,8 +2,11 @@
 """Verify that Netplan jumbo MTU selection targets high-speed physical interfaces."""
 
 import importlib.util
+import json
 from pathlib import Path
+import subprocess
 import tempfile
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +22,13 @@ def write(path, value):
 
 
 def main():
+    address_report = [{
+        'ifname': 'down10g0',
+        'addr_info': [{'family': 'inet', 'local': '169.254.10.20'}],
+    }]
+    with patch.object(jumbo.subprocess, 'run', return_value=subprocess.CompletedProcess(
+            [], 0, json.dumps(address_report), '')):
+        assert jumbo.ipv4_link_local_interfaces() == {'down10g0'}
     with tempfile.TemporaryDirectory(prefix='tianlai-jumbo-') as directory:
         root = Path(directory)
         for name, speed, mtu, physical in [
@@ -38,6 +48,9 @@ def main():
         assert [item['name'] for item in report] == ['eth10', 'eth100']
         assert report[0]['current_mtu'] == 1500
         assert report[1]['current_mtu'] == 9000
+        report = jumbo.select_interfaces(root, 1001, {'unknown0'})
+        assert [item['name'] for item in report] == ['eth10', 'eth100', 'unknown0']
+        assert report[2]['speed_mbps'] == -1
     receive_template = (ROOT / 'deploy/ansible/templates/tianlai-receive.netplan.yaml.j2').read_text(
         encoding='utf-8')
     send_template = (ROOT / 'deploy/ansible/templates/tianlai-send.netplan.yaml.j2').read_text(
@@ -49,6 +62,7 @@ def main():
     assert '"{{ tianlai_send_ip }}/{{ tianlai_cache_send_prefix_length }}"' in send_template
     assert 'dhcp4: false' in send_template and 'dhcp6: false' in send_template
     for template in (receive_template, send_template, storage_template):
+        assert 'renderer: NetworkManager' in template
         assert 'dhcp4: false' in template
         assert 'dhcp6: false' in template
         assert 'accept-ra: false' in template
@@ -62,6 +76,8 @@ def main():
     assert "select('match', '^169[.]254[.]')" in network_tasks
     assert 'Require the configured storage IP only' in network_tasks
     assert 'Require no IPv6 addresses on managed data interfaces' in network_tasks
+    assert 'network-manager' in network_tasks
+    assert 'Require NetworkManager ownership of managed data interfaces' in network_tasks
     inventory = (ROOT / 'deploy/ansible/inventory_example.yml').read_text(encoding='utf-8')
     for server_id in range(14):
         assert f'tianlai_send_ip: "192.168.210.{100 + server_id}"' in inventory
