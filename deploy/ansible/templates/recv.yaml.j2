@@ -1,28 +1,14 @@
 # Settings shared by all receive ports.
-recvCfg:
-  # Acquisition ID shared by backend, controller, and nodes.
-  acquisitionId: {{ tianlai_acquisition_id | default('UNCONFIGURED') | to_json }}
-  # Periods per trace; must match upstream/controller.
-  integrationPerTrace: {{ tianlai_integration_per_trace | int }}
-  # Integration period (us); match upstream/controller.
-  periodMicroseconds: {{ tianlai_period_us | int }}
-  # Duration of each A/B buffer (s).
-  halfBufferSeconds: 50
-  # Maximum event duration (s); cannot exceed one buffer.
-  maxEventSeconds: 5
-  # Transition-buffer capacity during event freeze (MiB).
-  transitionMiB: 32768
-  # Memory reserved for the OS and drivers at startup (MiB).
-  reserveMemoryMiB: 49152
-  # Prefault buffers at startup: 1=yes, 0=no.
-  prefaultMemory: 1
-  # Packet reorder window in integration periods.
-  reorderPeriods: 50
-  # Tail finalization delay after input stops (ms).
-  settleMilliseconds: 20
-  # Warn when transition-buffer use reaches this percentage.
-  transitionWarnPercent: 80
-  # Integration periods per storage block (1-64).
-  chunkPeriods: 64
-  # Send/reply timeout (s).
-  socketTimeoutSeconds: 60
+acquisitionId: {{ tianlai_acquisition_id | default('UNCONFIGURED') | to_json }}  # Acquisition ID shared by backend, controller, and nodes.
+integrationPerTrace: {{ tianlai_integration_per_trace | int }}  # Periods per trace; must match upstream/controller.
+periodMicroseconds: {{ tianlai_period_us | int }}  # Integration period (us); match upstream/controller.
+halfBufferSeconds: 50  # Duration of each A/B buffer (s).
+maxEventSeconds: 5  # Maximum event duration (s); cannot exceed one buffer.
+transitionMiB: 32768  # Transition-buffer capacity during event freeze (MiB).
+reserveMemoryMiB: 49152  # Memory reserved for the OS and drivers at startup (MiB).
+prefaultMemory: 1  # Prefault buffers at startup: 1=yes, 0=no.
+reorderPeriods: 50  # Packet reorder window in integration periods.
+settleMilliseconds: 20  # Tail finalization delay after input stops (ms).
+transitionWarnPercent: 80  # Warn when transition-buffer use reaches this percentage.
+chunkPeriods: 64  # Integration periods per storage block (1-64).
+socketTimeoutSeconds: 60  # Send/reply timeout (s).

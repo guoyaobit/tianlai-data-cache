@@ -18,12 +18,14 @@ from store_receiver import StoreReceiver, FRAME
 
 
 def read_config(path):
-    # Shipped examples are one root mapping with JSON-compatible scalar values.
+    # Shipped examples are flat mappings with JSON-compatible scalar values.
     lines = [line for line in path.read_text(encoding='utf-8').splitlines()
              if line.strip() and not line.lstrip().startswith('#')]
-    root = lines[0].strip().removesuffix(':')
-    return {root: dict((key.strip(), json.loads(value.strip()))
-                       for key, value in (line.strip().split(':', 1) for line in lines[1:]))}
+    result = {}
+    for line in lines:
+        key, value = line.strip().split(':', 1)
+        result[key] = json.loads(value.split('  #', 1)[0].strip())
+    return result
 
 
 def write_config(path, config):
@@ -109,7 +111,7 @@ def run(server, directory):
                            reserveMemoryMiB=0, prefaultMemory=0, reorderPeriods=1,
                            settleMilliseconds=20, transitionWarnPercent=80,
                            socketTimeoutSeconds=2, chunkPeriods=4).items():
-        cfg['recvCfg'][key] = value
+        cfg[key] = value
     write_config(directory / 'recv.yaml', cfg)
     node_config = read_config(ROOT / variant / f'server_{server:02d}.yaml')
     control_port = free_port(socket.SOCK_STREAM)
@@ -123,7 +125,7 @@ def run(server, directory):
     for lane in range(2):
         values[f'sendDestinationPort{lane}'] = destinations[lane]
     for key, value in values.items():
-        node_config['serverCfg'][key] = value
+        node_config[key] = value
     write_config(directory / 'node.yaml', node_config)
     node = dict(server_id=server, host='127.0.0.1', port=control_port)
     stop_receiver = threading.Event()
@@ -365,7 +367,7 @@ def main():
         # Reject the removed limiter so deployments cannot silently retain old behavior.
         for variant, server in (('F0-2', 0), ('F3-10', 3), ('F11-13', 11)):
             cfg = read_config(ROOT / variant / 'receive_config.yaml')
-            cfg['recvCfg']['sendRateBitsPerSecond'] = 5600000000
+            cfg['sendRateBitsPerSecond'] = 5600000000
             bad = Path(temp) / 'invalid.yaml'
             write_config(bad, cfg)
             result = subprocess.run([str(ROOT / variant / ('tianlai-store-' + variant.lower() + '-simulation')),

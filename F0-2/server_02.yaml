@@ -1,70 +1,28 @@
 # Example: verify addresses, PCI IDs, and acquisition ID.
 # Cache-node network, NIC, and logging settings.
-serverCfg:
-  # Unique cache node ID (0-13).
-  SERVERID: 2
-  # Local management IP for control commands.
-  controlBindIp: "172.0.0.130"
-  # Controller IP allowed to send commands.
-  controlPeerIp: "192.168.200.250"
-  # Local management TCP/JSON control port.
-  controlPort: 19000
-  # Log path; "-" writes only to stderr.
-  logFilePath: "-"
-  # ixcap PCI address for this receive port.
-  deviceName0: "CHANGE_ME_PCI_0"
-  # Receive-thread CPU ID; -1 disables affinity.
-  cpuId0: -1
-  # Local UDP port for simulation only.
-  simulationPort0: 20020
-  # ixcap PCI address for this receive port.
-  deviceName1: "CHANGE_ME_PCI_1"
-  # Receive-thread CPU ID; -1 disables affinity.
-  cpuId1: -1
-  # Local UDP port for simulation only.
-  simulationPort1: 20021
-  # ixcap PCI address for this receive port.
-  deviceName2: "CHANGE_ME_PCI_2"
-  # Receive-thread CPU ID; -1 disables affinity.
-  cpuId2: -1
-  # Local UDP port for simulation only.
-  simulationPort2: 20022
-  # ixcap PCI address for this receive port.
-  deviceName3: "CHANGE_ME_PCI_3"
-  # Receive-thread CPU ID; -1 disables affinity.
-  cpuId3: -1
-  # Local UDP port for simulation only.
-  simulationPort3: 20023
-  # ixcap PCI address for this receive port.
-  deviceName4: "CHANGE_ME_PCI_4"
-  # Receive-thread CPU ID; -1 disables affinity.
-  cpuId4: -1
-  # Local UDP port for simulation only.
-  simulationPort4: 20024
-  # ixcap PCI address for this receive port.
-  deviceName5: "CHANGE_ME_PCI_5"
-  # Receive-thread CPU ID; -1 disables affinity.
-  cpuId5: -1
-  # Local UDP port for simulation only.
-  simulationPort5: 20025
-  # ixcap PCI address for this receive port.
-  deviceName6: "CHANGE_ME_PCI_6"
-  # Receive-thread CPU ID; -1 disables affinity.
-  cpuId6: -1
-  # Local UDP port for simulation only.
-  simulationPort6: 20026
-  # ixcap PCI address for this receive port.
-  deviceName7: "CHANGE_ME_PCI_7"
-  # Receive-thread CPU ID; -1 disables affinity.
-  cpuId7: -1
-  # Local UDP port for simulation only.
-  simulationPort7: 20027
-  # Single storage-network transmit interface; both lanes share it.
-  sendEthName: "ens2f0"
-  # Local storage-network source IP.
-  sendSourceIp: "192.168.210.102"
-  # Storage receiver data-network IP.
-  sendDestinationIp: "192.168.210.250"
-  # Logical lane ports on the same physical link.
-  sendDestinationPort0: 20002
-  sendDestinationPort1: 20102
+SERVERID: 2  # Unique cache node ID (0-13).
+controlBindIp: "172.0.0.130"  # Local management IP for control commands.
+controlPeerIp: "192.168.200.250"  # Controller IP allowed to send commands.
+controlPort: 19000  # Local management TCP/JSON control port.
+logFilePath: "-"  # Log path; "-" writes only to stderr.
+deviceName0: "CHANGE_ME_PCI_0"  # ixcap PCI address for this receive port.
+cpuId0: -1  # Receive-thread CPU ID; -1 disables affinity.
+deviceName1: "CHANGE_ME_PCI_1"  # ixcap PCI address for this receive port.
+cpuId1: -1  # Receive-thread CPU ID; -1 disables affinity.
+deviceName2: "CHANGE_ME_PCI_2"  # ixcap PCI address for this receive port.
+cpuId2: -1  # Receive-thread CPU ID; -1 disables affinity.
+deviceName3: "CHANGE_ME_PCI_3"  # ixcap PCI address for this receive port.
+cpuId3: -1  # Receive-thread CPU ID; -1 disables affinity.
+deviceName4: "CHANGE_ME_PCI_4"  # ixcap PCI address for this receive port.
+cpuId4: -1  # Receive-thread CPU ID; -1 disables affinity.
+deviceName5: "CHANGE_ME_PCI_5"  # ixcap PCI address for this receive port.
+cpuId5: -1  # Receive-thread CPU ID; -1 disables affinity.
+deviceName6: "CHANGE_ME_PCI_6"  # ixcap PCI address for this receive port.
+cpuId6: -1  # Receive-thread CPU ID; -1 disables affinity.
+deviceName7: "CHANGE_ME_PCI_7"  # ixcap PCI address for this receive port.
+cpuId7: -1  # Receive-thread CPU ID; -1 disables affinity.
+sendEthName: "ens2f0"  # Single storage-network transmit interface; both lanes share it.
+sendSourceIp: "192.168.210.102"  # Local storage-network source IP.
+sendDestinationIp: "192.168.210.250"  # Storage receiver data-network IP.
+sendDestinationPort0: 20002  # Logical lane ports on the same physical link.
+sendDestinationPort1: 20102

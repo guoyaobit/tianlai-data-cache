@@ -1,27 +1,15 @@
 # Cache-node network, NIC, and logging settings.
-serverCfg:
-  # Unique cache node ID (0-13).
-  SERVERID: {{ tianlai_server_id | int }}
-  # Local management IP for control commands.
-  controlBindIp: {{ tianlai_control_ip | to_json }}
-  # Controller IP allowed to send commands.
-  controlPeerIp: {{ tianlai_controller_ip | to_json }}
-  # Local management TCP/JSON control port.
-  controlPort: {{ tianlai_control_port | int }}
-  # Log path; "-" writes only to stderr.
-  logFilePath: "-"
+SERVERID: {{ tianlai_server_id | int }}  # Unique cache node ID (0-13).
+controlBindIp: {{ tianlai_control_ip | to_json }}  # Local management IP for control commands.
+controlPeerIp: {{ tianlai_controller_ip | to_json }}  # Controller IP allowed to send commands.
+controlPort: {{ tianlai_control_port | int }}  # Local management TCP/JSON control port.
+logFilePath: "-"  # Log path; "-" writes only to stderr.
 {% for device in tianlai_receive_devices %}
-  # ixcap PCI address for this receive port.
-  deviceName{{ loop.index0 }}: {{ device | to_json }}
-  # Receive-thread CPU ID; -1 disables affinity.
-  cpuId{{ loop.index0 }}: -1
-  # Local UDP port for simulation only.
-  simulationPort{{ loop.index0 }}: {{ 20000 + (tianlai_server_id | int) * 10 + loop.index0 }}
+deviceName{{ loop.index0 }}: {{ device | to_json }}  # ixcap PCI address for this receive port.
+cpuId{{ loop.index0 }}: -1  # Receive-thread CPU ID; -1 disables affinity.
 {% endfor %}
-  # Both logical lanes share this physical storage-network interface.
-  sendEthName: {{ tianlai_send_interface | to_json }}
-  sendSourceIp: {{ tianlai_send_ip | to_json }}
-  sendDestinationIp: {{ tianlai_storage_ip | to_json }}
-  # Logical lane ports on the same physical link.
-  sendDestinationPort0: {{ (tianlai_storage_port | int) + (tianlai_server_id | int) }}
-  sendDestinationPort1: {{ (tianlai_storage_lane1_port | int) + (tianlai_server_id | int) }}
+sendEthName: {{ tianlai_send_interface | to_json }}  # Both logical lanes share this physical storage-network interface.
+sendSourceIp: {{ tianlai_send_ip | to_json }}
+sendDestinationIp: {{ tianlai_storage_ip | to_json }}
+sendDestinationPort0: {{ (tianlai_storage_port | int) + (tianlai_server_id | int) }}  # Logical lane ports on the same physical link.
+sendDestinationPort1: {{ (tianlai_storage_lane1_port | int) + (tianlai_server_id | int) }}

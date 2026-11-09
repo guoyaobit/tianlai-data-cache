@@ -126,11 +126,12 @@ def main():
                 f'      port: {port + lane * 14 + server}\n'
                 f'      allowedSource: "127.0.0.{server + 1}"'
                 for server in range(14) for lane in range(2))
+            receivers = receivers.replace('    - ', '  - ').replace('\n      ', '\n    ')
             config.write_text(
-                f'storage:\n  directory: "{root.as_posix()}"\n  ioThreads: 2\n'
-                f'  receivers:\n{receivers}\n'
-                f'backend:\n  address: "127.0.0.1"\n  port: {notify_port}\n'
-                '  bindAddress: "127.0.0.1"\n', encoding='utf-8')
+                f'directory: "{root.as_posix()}"\nioThreads: 2\n'
+                f'receivers:\n{receivers}\n'
+                f'backendAddress: "127.0.0.1"\nbackendPort: {notify_port}\n'
+                'backendBindAddress: "127.0.0.1"\n', encoding='utf-8')
             command = [str(binary), '--config', str(config)]
         process = subprocess.Popen(command,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

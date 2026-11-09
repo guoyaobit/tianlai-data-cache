@@ -37,7 +37,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 以上命令从项目根目录执行。`make` 等同于 `make production`；使用 `make help` 查看入口。
 可通过 `IXCAP_INCLUDE`、`IXCAP_LIB` 指定 ixcap 路径，例如
 `make production PROFILE=F0-2 IXCAP_INCLUDE=/path/include IXCAP_LIB=/path/lib`。
-模拟构建的程序名带 `-simulation` 后缀，仅用于 `--simulate` 回环联调。原来的各目录 `make` 入口仍可使用。
+模拟构建的程序名带 `-simulation` 后缀，仅用于 `--simulate` 回环联调。生产配置不包含 `simulationPortN`；回环联调时须为每个接收端口显式添加该参数。原来的各目录 `make` 入口仍可使用。
 生产版和模拟版分别使用 `build/`、`build-simulation/`，不共用目标文件。
 
 先修改每台对应的 `server_XX.yaml` 和该组的 `receive_config.yaml`：

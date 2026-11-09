@@ -58,7 +58,12 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
         }
         if (check)
             return 0;
-        if (!para.simulation) {
+        if (para.simulation) {
+            for (const auto &port : config.receivePorts)
+                if (!port.simulationPort)
+                    throw std::runtime_error(
+                        "set simulationPort for every receive port when using --simulate");
+        } else {
             if (config.acquisitionId == "UNCONFIGURED" ||
                 config.acquisitionId.find("CHANGE_ME") != std::string::npos)
                 throw std::runtime_error("set the shared acquisitionId before running");

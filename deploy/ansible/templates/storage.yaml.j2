@@ -1,29 +1,21 @@
 # Ansible-generated; edit inventory/group_vars and redeploy.
-storage:
-  # Mounted path for event files and persistence markers.
-  directory: {{ tianlai_storage_directory | to_json }}
-  # ZeroMQ I/O workers for the single 100 GbE interface.
-  ioThreads: {{ tianlai_storage_io_threads | int }}
-  # Both logical lanes terminate on the same physical interface and IP.
-  receivers:
+directory: {{ tianlai_storage_directory | to_json }}  # Mounted path for event files and persistence markers.
+ioThreads: {{ tianlai_storage_io_threads | int }}  # ZeroMQ I/O workers for the single 100 GbE interface.
+receivers:  # Both logical lanes terminate on the same physical interface and IP.
 {% for server_id in range(0, 14) %}
 {% for host in groups['cache_nodes'] if (hostvars[host].tianlai_server_id | int) == server_id %}
-    - serverId: {{ server_id }}
-      lane: 0
-      bindAddress: {{ tianlai_storage_ip | to_json }}
-      port: {{ (tianlai_storage_port | int) + server_id }}
-      allowedSource: {{ hostvars[host].tianlai_send_ip | to_json }}
-    - serverId: {{ server_id }}
-      lane: 1
-      bindAddress: {{ tianlai_storage_ip | to_json }}
-      port: {{ (tianlai_storage_lane1_port | int) + server_id }}
-      allowedSource: {{ hostvars[host].tianlai_send_ip | to_json }}
+  - serverId: {{ server_id }}
+    lane: 0
+    bindAddress: {{ tianlai_storage_ip | to_json }}
+    port: {{ (tianlai_storage_port | int) + server_id }}
+    allowedSource: {{ hostvars[host].tianlai_send_ip | to_json }}
+  - serverId: {{ server_id }}
+    lane: 1
+    bindAddress: {{ tianlai_storage_ip | to_json }}
+    port: {{ (tianlai_storage_lane1_port | int) + server_id }}
+    allowedSource: {{ hostvars[host].tianlai_send_ip | to_json }}
 {% endfor %}
 {% endfor %}
-backend:
-  # Dedispersion backend IP for completion notices.
-  address: {{ tianlai_backend_ip | to_json }}
-  # Backend TCP/JSON port for CAPTURE_RESULT.
-  port: {{ tianlai_notify_port | int }}
-  # Local management IP for storage completion notices.
-  bindAddress: {{ tianlai_controller_ip | to_json }}
+backendAddress: {{ tianlai_backend_ip | to_json }}  # Dedispersion backend IP for completion notices.
+backendPort: {{ tianlai_notify_port | int }}  # Backend TCP/JSON port for CAPTURE_RESULT.
+backendBindAddress: {{ tianlai_controller_ip | to_json }}  # Local management IP for storage completion notices.

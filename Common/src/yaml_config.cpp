@@ -51,10 +51,10 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     : mode(profile) {
     const bool f0to2 = mode == StoreMode::F0_2;
     const bool remote = mode == StoreMode::F11_13;
-    const auto cfg = YAML::LoadFile(recvFile)["recvCfg"];
-    const auto node = YAML::LoadFile(serverFile)["serverCfg"];
-    validateMapping(cfg, "recvCfg");
-    validateMapping(node, "serverCfg");
+    const auto cfg = YAML::LoadFile(recvFile);
+    const auto node = YAML::LoadFile(serverFile);
+    validateMapping(cfg, "receive config");
+    validateMapping(node, "server config");
     serverId = number(node, "SERVERID", f0to2 ? 0 : remote ? 11 : 3, f0to2 ? 2 : remote ? 13 : 10);
     inputDataBytes = f0to2 ? 2304 : remote ? 8256 : 8832;
     integrationPerTrace = number(cfg, "integrationPerTrace", 1, 0x800000);
@@ -92,7 +92,9 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
         port.cpuId = node[cpuKey] ? node[cpuKey].as<int>() : -1;
         if (port.cpuId < -1 || port.cpuId >= 1024)
             throw std::runtime_error("invalid cpuId");
-        port.simulationPort = number(node, "simulationPort" + std::to_string(p), 1024, 65535);
+        const auto simulationKey = "simulationPort" + std::to_string(p);
+        port.simulationPort =
+            node[simulationKey] ? number(node, simulationKey, 1024, 65535) : 0;
         port.packetId = f0to2    ? serverId * 8 + p
                         : remote ? 2 * ((serverId - 11) * 4 + p)
                                  : 24 + (serverId - 3) * 2 + p / 2;

@@ -1,155 +1,147 @@
 # Storage example; verify addresses before deployment.
-storage:
-  # Use a mounted array path validated for capacity/throughput.
-  directory: "/data/raw-store"
-  # ZeroMQ I/O workers for the 100 GbE receiver.
-  ioThreads: 2
-  # Both logical lanes share one physical 100 GbE interface and IP.
-  receivers:
-    - serverId: 0
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20000
-      allowedSource: "192.168.210.100"
-    - serverId: 0
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20100
-      allowedSource: "192.168.210.100"
-    - serverId: 1
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20001
-      allowedSource: "192.168.210.101"
-    - serverId: 1
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20101
-      allowedSource: "192.168.210.101"
-    - serverId: 2
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20002
-      allowedSource: "192.168.210.102"
-    - serverId: 2
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20102
-      allowedSource: "192.168.210.102"
-    - serverId: 3
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20003
-      allowedSource: "192.168.210.103"
-    - serverId: 3
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20103
-      allowedSource: "192.168.210.103"
-    - serverId: 4
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20004
-      allowedSource: "192.168.210.104"
-    - serverId: 4
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20104
-      allowedSource: "192.168.210.104"
-    - serverId: 5
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20005
-      allowedSource: "192.168.210.105"
-    - serverId: 5
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20105
-      allowedSource: "192.168.210.105"
-    - serverId: 6
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20006
-      allowedSource: "192.168.210.106"
-    - serverId: 6
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20106
-      allowedSource: "192.168.210.106"
-    - serverId: 7
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20007
-      allowedSource: "192.168.210.107"
-    - serverId: 7
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20107
-      allowedSource: "192.168.210.107"
-    - serverId: 8
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20008
-      allowedSource: "192.168.210.108"
-    - serverId: 8
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20108
-      allowedSource: "192.168.210.108"
-    - serverId: 9
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20009
-      allowedSource: "192.168.210.109"
-    - serverId: 9
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20109
-      allowedSource: "192.168.210.109"
-    - serverId: 10
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20010
-      allowedSource: "192.168.210.110"
-    - serverId: 10
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20110
-      allowedSource: "192.168.210.110"
-    - serverId: 11
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20011
-      allowedSource: "192.168.210.111"
-    - serverId: 11
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20111
-      allowedSource: "192.168.210.111"
-    - serverId: 12
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20012
-      allowedSource: "192.168.210.112"
-    - serverId: 12
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20112
-      allowedSource: "192.168.210.112"
-    - serverId: 13
-      lane: 0
-      bindAddress: "192.168.210.250"
-      port: 20013
-      allowedSource: "192.168.210.113"
-    - serverId: 13
-      lane: 1
-      bindAddress: "192.168.210.250"
-      port: 20113
-      allowedSource: "192.168.210.113"
-backend:
-  # Dedispersion backend IP for completion notices.
-  address: "192.168.200.10"
-  # TCP/JSON port for CAPTURE_RESULT/ACK_RESULT.
-  port: 19001
-  # Storage management IP for TCP completion notices.
-  bindAddress: "192.168.200.250"
+directory: "/data/raw-store"  # Use a mounted array path validated for capacity/throughput.
+ioThreads: 2  # ZeroMQ I/O workers for the 100 GbE receiver.
+receivers:  # Both logical lanes share one physical 100 GbE interface and IP.
+  - serverId: 0
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20000
+    allowedSource: "192.168.210.100"
+  - serverId: 0
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20100
+    allowedSource: "192.168.210.100"
+  - serverId: 1
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20001
+    allowedSource: "192.168.210.101"
+  - serverId: 1
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20101
+    allowedSource: "192.168.210.101"
+  - serverId: 2
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20002
+    allowedSource: "192.168.210.102"
+  - serverId: 2
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20102
+    allowedSource: "192.168.210.102"
+  - serverId: 3
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20003
+    allowedSource: "192.168.210.103"
+  - serverId: 3
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20103
+    allowedSource: "192.168.210.103"
+  - serverId: 4
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20004
+    allowedSource: "192.168.210.104"
+  - serverId: 4
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20104
+    allowedSource: "192.168.210.104"
+  - serverId: 5
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20005
+    allowedSource: "192.168.210.105"
+  - serverId: 5
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20105
+    allowedSource: "192.168.210.105"
+  - serverId: 6
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20006
+    allowedSource: "192.168.210.106"
+  - serverId: 6
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20106
+    allowedSource: "192.168.210.106"
+  - serverId: 7
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20007
+    allowedSource: "192.168.210.107"
+  - serverId: 7
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20107
+    allowedSource: "192.168.210.107"
+  - serverId: 8
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20008
+    allowedSource: "192.168.210.108"
+  - serverId: 8
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20108
+    allowedSource: "192.168.210.108"
+  - serverId: 9
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20009
+    allowedSource: "192.168.210.109"
+  - serverId: 9
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20109
+    allowedSource: "192.168.210.109"
+  - serverId: 10
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20010
+    allowedSource: "192.168.210.110"
+  - serverId: 10
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20110
+    allowedSource: "192.168.210.110"
+  - serverId: 11
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20011
+    allowedSource: "192.168.210.111"
+  - serverId: 11
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20111
+    allowedSource: "192.168.210.111"
+  - serverId: 12
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20012
+    allowedSource: "192.168.210.112"
+  - serverId: 12
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20112
+    allowedSource: "192.168.210.112"
+  - serverId: 13
+    lane: 0
+    bindAddress: "192.168.210.250"
+    port: 20013
+    allowedSource: "192.168.210.113"
+  - serverId: 13
+    lane: 1
+    bindAddress: "192.168.210.250"
+    port: 20113
+    allowedSource: "192.168.210.113"
+backendAddress: "192.168.200.10"  # Dedispersion backend IP for completion notices.
+backendPort: 19001  # TCP/JSON port for CAPTURE_RESULT/ACK_RESULT.
+backendBindAddress: "192.168.200.250"  # Storage management IP for TCP completion notices.

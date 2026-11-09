@@ -813,18 +813,15 @@ static void require_yaml_keys(const YAML::Node &node, std::initializer_list<cons
 
 static StorageConfig load_storage_config(const fs::path &path) {
     const auto root = YAML::LoadFile(path.string());
-    require_yaml_keys(root, {"storage", "backend"}, "root");
-    const auto storage = root["storage"];
-    const auto backend = root["backend"];
-    require_yaml_keys(storage, {"directory", "ioThreads", "receivers"}, "storage");
-    require_yaml_keys(backend, {"address", "port", "bindAddress"}, "backend");
+    require_yaml_keys(root, {"directory", "ioThreads", "receivers", "backendAddress",
+                             "backendPort", "backendBindAddress"}, "root");
     StorageConfig config;
-    config.directory = storage["directory"].as<std::string>();
-    config.io_threads = storage["ioThreads"].as<unsigned>();
-    config.backend_address = backend["address"].as<std::string>();
-    config.backend_port = backend["port"].as<unsigned>();
-    config.backend_bind_address = backend["bindAddress"].as<std::string>();
-    const auto receivers = storage["receivers"];
+    config.directory = root["directory"].as<std::string>();
+    config.io_threads = root["ioThreads"].as<unsigned>();
+    config.backend_address = root["backendAddress"].as<std::string>();
+    config.backend_port = root["backendPort"].as<unsigned>();
+    config.backend_bind_address = root["backendBindAddress"].as<std::string>();
+    const auto receivers = root["receivers"];
     require(receivers.IsSequence() && receivers.size() == STORAGE_PORT_COUNT,
             "receivers must contain exactly 28 entries");
     std::set<std::pair<unsigned, unsigned>> unique_endpoints;
@@ -833,7 +830,7 @@ static StorageConfig load_storage_config(const fs::path &path) {
     std::map<unsigned, std::string> server_sources;
     for (const auto &receiver : receivers) {
         require_yaml_keys(receiver, {"serverId", "lane", "bindAddress", "port", "allowedSource"},
-                          "storage.receivers[]");
+                          "receivers[]");
         const auto server = receiver["serverId"].as<unsigned>();
         const auto lane = receiver["lane"].as<unsigned>();
         const auto address = receiver["bindAddress"].as<std::string>();
@@ -861,7 +858,7 @@ static StorageConfig load_storage_config(const fs::path &path) {
     for (const auto &receiver : config.receivers)
         require(::inet_pton(AF_INET, receiver.address.c_str(), &parsed) == 1 &&
                     ::inet_pton(AF_INET, receiver.allowed_source.c_str(), &parsed) == 1,
-                "invalid data IPv4 address in storage.receivers");
+                "invalid data IPv4 address in receivers");
     return config;
 }
 
@@ -877,7 +874,7 @@ int main(int argc, char **argv) {
                 std::cout << "server " << receiver.server << " lane " << receiver.lane << ": "
                           << receiver.address << ':' << receiver.port << " <- "
                           << receiver.allowed_source << '\n';
-            std::cout << "backend UDP: " << config.backend_bind_address << " -> "
+            std::cout << "backend TCP: " << config.backend_bind_address << " -> "
                       << config.backend_address << ':' << config.backend_port << '\n';
             return 0;
         }
