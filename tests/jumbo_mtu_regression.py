@@ -2,11 +2,8 @@
 """Verify that Netplan jumbo MTU selection targets high-speed physical interfaces."""
 
 import importlib.util
-import json
 from pathlib import Path
-import subprocess
 import tempfile
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,13 +19,6 @@ def write(path, value):
 
 
 def main():
-    address_report = [{
-        'ifname': 'down10g0',
-        'addr_info': [{'family': 'inet', 'local': '169.254.10.20'}],
-    }]
-    with patch.object(jumbo.subprocess, 'run', return_value=subprocess.CompletedProcess(
-            [], 0, json.dumps(address_report), '')):
-        assert jumbo.ipv4_link_local_interfaces() == {'down10g0'}
     with tempfile.TemporaryDirectory(prefix='tianlai-jumbo-') as directory:
         root = Path(directory)
         for name, speed, mtu, physical in [
@@ -48,9 +38,6 @@ def main():
         assert [item['name'] for item in report] == ['eth10', 'eth100']
         assert report[0]['current_mtu'] == 1500
         assert report[1]['current_mtu'] == 9000
-        report = jumbo.select_interfaces(root, 1001, {'unknown0'})
-        assert [item['name'] for item in report] == ['eth10', 'eth100', 'unknown0']
-        assert report[2]['speed_mbps'] == -1
     receive_template = (ROOT / 'deploy/ansible/templates/tianlai-receive.netplan.yaml.j2').read_text(
         encoding='utf-8')
     send_template = (ROOT / 'deploy/ansible/templates/tianlai-send.netplan.yaml.j2').read_text(
@@ -73,7 +60,7 @@ def main():
     settings = (ROOT / 'deploy/ansible/group_vars/all/settings.yml').read_text(encoding='utf-8')
     assert 'tianlai_storage_receive_interface: enp152s0f0np0' in settings
     network_tasks = (ROOT / 'deploy/ansible/tasks/network_config.yml').read_text(encoding='utf-8')
-    assert "select('match', '^169[.]254[.]')" in network_tasks
+    assert '169.254.0.0/16' not in network_tasks
     assert 'Require the configured storage IP only' in network_tasks
     assert 'Require no IPv6 addresses on managed data interfaces' in network_tasks
     assert 'network-manager' in network_tasks

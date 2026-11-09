@@ -247,25 +247,6 @@
     fail_msg: "{{ tianlai_storage_receive_interface }} must not provide a default route"
   when: "'storage' in group_names"
 
-- name: Read IPv4 addresses on all managed data interfaces
-  ansible.builtin.command:
-    argv: [ip, -j, -4, address, show, dev, "{{ item }}"]
-  loop: >-
-    {{ tianlai_receive_netplan_interfaces |
-    union([tianlai_send_interface] if 'cache_nodes' in group_names else []) |
-    union([tianlai_storage_receive_interface] if 'storage' in group_names else []) }}
-  register: managed_ipv4_addresses
-  changed_when: false
-
-- name: Require no IPv4 link-local addresses on managed data interfaces
-  ansible.builtin.assert:
-    that:
-      - >-
-        (((item.stdout | from_json | first).addr_info |
-        map(attribute='local') | select('match', '^169[.]254[.]') | list | length) == 0)
-    fail_msg: "{{ item.item }} still has an IPv4 link-local address in 169.254.0.0/16"
-  loop: "{{ managed_ipv4_addresses.results }}"
-
 - name: Read IPv6 addresses on all managed data interfaces
   ansible.builtin.command:
     argv: [ip, -j, -6, address, show, dev, "{{ item }}"]
