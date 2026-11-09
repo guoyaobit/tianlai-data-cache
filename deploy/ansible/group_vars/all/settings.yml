@@ -12,10 +12,13 @@ tianlai_jumbo_mtu: 9000
 tianlai_jumbo_min_speed_mbps: 1001
 # Fixed cache-node storage-data interface.
 tianlai_cache_send_interface: ens2f0
+# Fixed 100 GbE receive interface on the storage server.
+tianlai_storage_receive_interface: enp152s0f0np0
 # server ID 0-13 maps to 192.168.210.100-113/24.
 tianlai_cache_send_network: 192.168.210
 tianlai_cache_send_host_offset: 100
 tianlai_cache_send_prefix_length: 24
+tianlai_storage_prefix_length: 24
 # Controller management IP on the storage server.
 tianlai_controller_ip: CHANGE_ME
 # Backend IP for triggers and completion notices.
@@ -32,7 +35,7 @@ tianlai_integration_per_trace: 50000
 tianlai_control_port: 19000
 # Controller TCP/JSON port for backend requests.
 tianlai_controller_port: 18999
-# Backend result UDP port; replies go to the packet source.
+# Backend TCP/JSON result port.
 tianlai_notify_port: 19001
 # First ZeroMQ/TCP storage data port.
 tianlai_storage_port: 20000

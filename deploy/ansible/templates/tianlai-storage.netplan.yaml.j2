@@ -1,0 +1,13 @@
+# Managed by Ansible. Local changes will be overwritten.
+network:
+  version: 2
+  ethernets:
+    "{{ tianlai_storage_receive_interface }}":
+      mtu: {{ tianlai_jumbo_mtu }}
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false
+      link-local: []
+      optional: true
+      addresses:
+        - "{{ tianlai_storage_ip }}/{{ tianlai_storage_prefix_length }}"
