@@ -23,6 +23,11 @@
   changed_when: false
   check_mode: false
 
+- name: Decode configured network report
+  ansible.builtin.set_fact:
+    network_inventory: "{{ network_report_raw.stdout | from_json }}"
+  changed_when: false
+
 - name: Create network report directory
   ansible.builtin.file:
     path: "{{ tianlai_root }}/config"
@@ -31,7 +36,7 @@
 
 - name: Save this server's network report
   ansible.builtin.copy:
-    content: "{{ network_report_raw.stdout | from_json | to_nice_yaml(indent=2, sort_keys=false) }}"
+    content: "{{ network_inventory | to_nice_yaml(indent=2, sort_keys=false) }}"
     dest: "{{ tianlai_root }}/config/network-report.yaml"
     mode: '0640'
 

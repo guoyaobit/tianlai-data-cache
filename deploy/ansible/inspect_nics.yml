@@ -29,3 +29,25 @@
           interfaces: "{{ network_inventory.interfaces }}"
           pci_network_devices: "{{ network_inventory.pci_network_devices }}"
           warnings: "{{ network_inventory.warnings }}"
+    - name: Create local Markdown report directory
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/reports"
+        state: directory
+        mode: '0700'
+      delegate_to: localhost
+      become: false
+      run_once: true
+    - name: Save consolidated network inventory as Markdown
+      ansible.builtin.template:
+        src: templates/network-inventory.md.j2
+        dest: "{{ playbook_dir }}/reports/network-inventory.md"
+        mode: '0600'
+      vars:
+        inspected_hosts: "{{ ansible_play_hosts_all | sort }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+    - name: Show local Markdown report location
+      ansible.builtin.debug:
+        msg: "Markdown report: {{ playbook_dir }}/reports/network-inventory.md"
+      run_once: true

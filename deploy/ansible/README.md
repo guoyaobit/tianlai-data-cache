@@ -50,6 +50,10 @@ ansible-playbook -i inventory.yml inspect_nics.yml --limit cache_nodes
 ansible-playbook -i inventory.yml inspect_nics.yml
 ```
 
+盘点结束后会在控制机生成 `reports/network-inventory.md`，按服务器汇总接口、IP、MAC、
+链路速率、PCI 地址、驱动和 NUMA 信息。使用 `--limit` 时，文档只包含本次实际盘点的主机；
+再次执行会覆盖旧报告。该目录已被 Git 忽略，避免现场网络信息被提交到远程仓库。
+
 示例清单中的控制器地址是占位符；运行全部主机前须填写实际地址，也可以用 `--limit` 只选择已准备好的主机。盘点输出中各项含义：
 
 | 输出项 | 用途 |
@@ -76,7 +80,7 @@ ansible-playbook -i inventory.yml --syntax-check site.yml
 ansible-playbook -i inventory.yml --ask-become-pass site.yml
 ```
 
-完整清单通过校验后，部署会自动在每台缓存服务器和兼任控制器的存储服务器生成 `{{ tianlai_root }}/config/network-report.yaml`（默认 `/opt/tianlai-store/config/network-report.yaml`），并在存储服务器生成 `/opt/tianlai-store/config/storage.yaml`。重复部署时更新。可在对应服务器上查看：
+完整清单通过校验后，部署会自动在每台缓存服务器和兼任控制器的存储服务器生成 `{{ tianlai_root }}/config/network-report.yaml`（默认 `/opt/tianlai-store/config/network-report.yaml`），同时在控制机更新 `reports/network-inventory.md`，并在存储服务器生成 `/opt/tianlai-store/config/storage.yaml`。重复部署时更新。可在对应服务器上查看：
 
 ```bash
 sudo cat /opt/tianlai-store/config/network-report.yaml
