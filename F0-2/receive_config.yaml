@@ -3,6 +3,8 @@
 recvCfg:
   # Acquisition ID shared by backend, controller, and nodes.
   acquisitionId: "acq-CHANGE_ME"
+  # Enable verbose diagnostic logs.
+  debug: false
   # Periods per trace; must match upstream/controller.
   integrationPerTrace: 50000
   # Integration period (us); match upstream/controller.

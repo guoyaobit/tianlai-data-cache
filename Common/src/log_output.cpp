@@ -27,7 +27,7 @@ spdlog::level::level_enum severity(LogLevel level) {
 }
 } // namespace
 
-void initLogOut(const std::string &path) {
+void initLogOut(const std::string &path, bool debug) {
     // Initialise before starting receive and control threads; the mt sinks are
     // safe for concurrent writers. File rotation bounds long-running log growth.
     std::vector<spdlog::sink_ptr> sinks;
@@ -40,7 +40,7 @@ void initLogOut(const std::string &path) {
     }
     logger = std::make_shared<spdlog::logger>("tianlai-store", sinks.begin(), sinks.end());
     logger->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [thread %t] %v");
-    logger->set_level(spdlog::level::info);
+    logger->set_level(debug ? spdlog::level::debug : spdlog::level::info);
     logger->flush_on(spdlog::level::warn);
     spdlog::register_logger(logger);
     spdlog::flush_every(std::chrono::seconds(3));

@@ -39,7 +39,8 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
         para.config = &config;
         std::cout << "server=" << config.serverId << " receivePorts=" << config.receivePorts.size()
                   << " estimatedBytes=" << config.allocationBytes()
-                  << " transitionPeriods=" << config.transitionPeriods() << "\n";
+                  << " transitionPeriods=" << config.transitionPeriods()
+                  << " debug=" << (config.debug ? "true" : "false") << "\n";
         std::cout << "transport=ZeroMQ lanes=2 sendInterface=" << config.sendLink.ethName
                   << " rateLimit=none\n";
         for (unsigned p = 0; p < config.receivePorts.size(); ++p) {
@@ -69,7 +70,14 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
                 link.sourceIp == "0.0.0.0" || link.destinationIp == "0.0.0.0")
                 throw std::runtime_error("configure the storage send interface before running");
         }
-        initLogOut(config.logFilePath);
+        initLogOut(config.logFilePath, config.debug);
+        LOG("Runtime config: server=" + std::to_string(config.serverId) +
+                " receive_ports=" + std::to_string(config.receivePorts.size()) +
+                " half_periods=" + std::to_string(config.halfPeriods()) +
+                " transition_periods=" + std::to_string(config.transitionPeriods()) +
+                " reorder_periods=" + std::to_string(config.reorderPeriods) +
+                " prefault=" + (config.prefaultMemory ? "true" : "false"),
+            DEBUG);
         LOG("Cache data is memory-only; a process or host restart discards all buffered events.",
             WARN);
         std::signal(SIGINT, stopHandler);
@@ -127,6 +135,14 @@ static void Prepare(CacheRuntime &para) {
     LOG("Allocating " + std::to_string(c.allocationBytes()) + " bytes, no CUDA dependency.", START);
     for (unsigned index = 0; index < c.receivePorts.size(); ++index) {
         const auto &port = c.receivePorts[index];
+        LOG("Receive port " + std::to_string(index) +
+                " buffer: packet_slots=" + std::to_string(port.packetSlots()) +
+                " physical_boards=" + std::to_string(port.boardNum) +
+                " packets_per_board=" + std::to_string(port.packetsPerBoard) +
+                " frame_bytes=" +
+                std::to_string(port.packetSlots() *
+                               uint64_t(c.inputDataBytes + INPUT_HEADER_BYTES)),
+            DEBUG);
         para.receiveBuffers.emplace_back(
             new ReceiveRingBuffer(index, c.halfPeriods(), c.transitionPeriods(),
                                   c.maxEventPeriods(), port.packetSlots(),

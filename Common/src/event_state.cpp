@@ -57,7 +57,7 @@ static void prepareEvent(CacheRuntime *para) {
             transitionPeak = std::max(transitionPeak, status.transitionPeak);
             transitionCapacity = std::max(transitionCapacity, status.transitionCapacity);
         }
-        std::string message;
+        std::string message, debugMessage;
         {
             std::lock_guard<std::mutex> lock(para->eventMutex);
             para->event.missing = missing;
@@ -77,8 +77,16 @@ static void prepareEvent(CacheRuntime *para) {
             }
             message = "Event " + para->event.id + " " + eventStateName(para->event.state) +
                       " freeze_ms=" + std::to_string(para->event.freezeMilliseconds);
+            debugMessage =
+                "Event " + para->event.id +
+                " details: start_period=" + std::to_string(para->event.start) +
+                " period_count=" + std::to_string(para->event.count) +
+                " missing_packets=" + std::to_string(para->event.missing) +
+                " transition_peak_periods=" +
+                std::to_string(para->event.transitionPeakPeriods);
         }
         LOG(message, INFO);
+        LOG(debugMessage, DEBUG);
     } catch (const std::exception &error) {
         // Finish any partially started freezes before releasing their banks.
         try {

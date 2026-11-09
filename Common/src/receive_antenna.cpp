@@ -73,6 +73,11 @@ void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
             if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus))
                 throw std::runtime_error("receive CPU affinity failed");
         }
+        LOG("Receive port " + std::to_string(p) +
+                " thread: device=" + para->config->getDeviceName(p) +
+                " cpu_id=" + std::to_string(cpu) +
+                " simulation=" + (para->simulation ? "true" : "false"),
+            DEBUG);
         if (para->simulation) {
             simulationReceive(para, p);
             return;

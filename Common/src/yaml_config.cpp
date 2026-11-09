@@ -28,6 +28,16 @@ static uint64_t number(const YAML::Node &tree, const std::string &key, uint64_t 
         throw std::runtime_error("invalid YAML field: " + key);
     return n;
 }
+static bool boolean(const YAML::Node &tree, const std::string &key, bool fallback) {
+    if (!tree[key])
+        return fallback;
+    const auto value = field(tree, key);
+    if (value == "true")
+        return true;
+    if (value == "false")
+        return false;
+    throw std::runtime_error("invalid YAML boolean: " + key);
+}
 static std::string ip(const YAML::Node &tree, const std::string &key) {
     auto value = field(tree, key);
     in_addr a{};
@@ -60,6 +70,7 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     transitionWarnPercent = number(cfg, "transitionWarnPercent", 1, 99);
     chunkPeriods = number(cfg, "chunkPeriods", 1, 64);
     socketTimeoutSeconds = number(cfg, "socketTimeoutSeconds", 1, 300);
+    debug = boolean(cfg, "debug", false);
     if (cfg["sendRateBitsPerSecond"])
         throw std::runtime_error("sendRateBitsPerSecond is obsolete; storage transfer is unlimited");
     if (cfg["udpFragmentBytes"])
