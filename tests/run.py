@@ -36,3 +36,4 @@ subprocess.run([sys.executable, str(root / 'tests/notification_regression.py')],
 subprocess.run([sys.executable, str(root / 'tests/controller_safety_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/tcp_control_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/network_inventory_regression.py')], check=True, timeout=30)
+subprocess.run([sys.executable, str(root / 'tests/jumbo_mtu_regression.py')], check=True, timeout=30)

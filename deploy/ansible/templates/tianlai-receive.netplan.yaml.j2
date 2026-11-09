@@ -1,0 +1,11 @@
+# Managed by Ansible. Local changes will be overwritten.
+network:
+  version: 2
+  ethernets:
+{% for interface in tianlai_receive_netplan_interfaces %}
+    "{{ interface }}":
+      mtu: {{ tianlai_jumbo_mtu }}
+{% endfor %}
+{% if not tianlai_receive_netplan_interfaces %}
+    {}
+{% endif %}

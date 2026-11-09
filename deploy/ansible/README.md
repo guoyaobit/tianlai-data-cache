@@ -1,14 +1,14 @@
 # Ansible 部署
 
-`site.yml` 在 Debian/Ubuntu 系的 systemd 主机上部署14台缓存节点，并在同一台存储服务器上部署存储接收器和控制器；不部署消色散后端，也不配置交换机、网卡地址、MTU、磁盘阵列或 ixcap。此脚本尚需在目标环境进行端到端验证。
+`site.yml` 在 Debian/Ubuntu 系的 systemd 主机上部署14台缓存节点，并在同一台存储服务器上部署存储接收器和控制器；不部署消色散后端，也不配置交换机、管理网地址、存储服务器100G地址、磁盘阵列或 ixcap。它会通过 Netplan 配置缓存节点 `ens2f0` 数据地址，并把速率大于 1 Gb/s 的物理 Linux 网口设置为 MTU 9000。此脚本尚需在目标环境进行端到端验证。
 
 ## 前提和清单
 
 - 控制机安装 Ansible，能通过 SSH 连接目标主机并提权；目标主机须能安装 Debian 软件包，控制器须有 Python 3.10 以上。脚本为缓存节点和存储服务器安装 libzmq 开发包，并为 C++ 存储服务安装 yaml-cpp、nlohmann-json 和编译工具。
 - 每个缓存节点事先安装对应的 `ixcap_lib.h` 和 `libixcap.a` 或 `libixcap.so`；默认在 `/usr/local/include`、`/usr/local/lib`，可在清单覆盖 `tianlai_ixcap_include`、`tianlai_ixcap_lib`。
-- 真实地址、链路、网卡 PCI 地址、光模块、驱动、NUMA、MTU 及存储挂载由现场先完成验证。`tianlai_storage_directory` 必须指向目标机已有且正确挂载的存储路径下的目录；脚本只创建目录，不验证其所在磁盘或容量。
-- 清单可使用 YAML 或 INI：复制 `inventory_example.yml` 为 `inventory.yml`，或复制 `inventory_example.ini` 为 `inventory.ini`。两份示例都包含缓存服务器 1～14（节点 0～13）及同机部署的存储/控制器；选择一种维护即可。须现场核对 SSH 地址，并补齐各节点的接收 PCI 地址、万兆发送接口和地址。`controller` 与 `storage` 组必须使用同一个存储服务器主机名。
-- 在清单中填写单个发送接口/源IP及存储100G口上的单个无标签IP。不配置VLAN，数据接口不设置默认网关；管理网仍使用`tianlai_controller_ip`。
+- 真实地址、链路、网卡 PCI 地址、光模块、驱动、NUMA、交换机 Jumbo Frame 及存储挂载由现场先完成验证。`tianlai_storage_directory` 必须指向目标机已有且正确挂载的存储路径下的目录；脚本只创建目录，不验证其所在磁盘或容量。
+- 清单可使用 YAML 或 INI：复制 `inventory_example.yml` 为 `inventory.yml`，或复制 `inventory_example.ini` 为 `inventory.ini`。两份示例都包含缓存服务器 1～14（节点 0～13）及同机部署的存储/控制器；选择一种维护即可。须现场核对 SSH 地址并补齐各节点的接收 PCI 地址。缓存节点发送口统一为 `ens2f0`，地址根据 server ID 自动生成，无需逐台填写。`controller` 与 `storage` 组必须使用同一个存储服务器主机名。
+- 缓存节点单个发送接口/源IP由 server ID 自动生成；清单只需填写存储100G口上的单个无标签IP。不配置VLAN，数据接口不设置默认网关；管理网仍使用`tianlai_controller_ip`。
 - 消色散后端须在`tianlai_backend_ip:tianlai_notify_port`监听TCP/JSON。存储服务从`tianlai_controller_ip`连接并发送`CAPTURE_RESULT`；后端持久化结果后在同一连接回复`ACK_RESULT`。Playbook不部署后端，也不修改相关防火墙。
 - 管理网需放通后端→控制器TCP 18999、控制器→缓存节点TCP 19000、存储服务器→后端TCP 19001；实际端口以清单为准。
 - 如果目标上安装的 ixcap 是共享库，确保运行时动态链接器可找到该库。脚本只检查文件存在，不负责驱动、权限或网卡初始化。
@@ -65,7 +65,19 @@ ansible-playbook -i inventory.yml inspect_nics.yml
 | `pci_network_devices` | PCI 网络设备的地址、厂商和设备编号、驱动、NUMA 节点及其系统接口；没有系统接口的设备也会列出。 |
 | `warnings` | 无法读取 IP 或系统设备信息时的提示。 |
 
-现场确认物理接线后，将接收PCI地址填入`tianlai_receive_devices`，将单个存储数据口的Linux接口名填入`tianlai_send_interface`，地址填入`tianlai_send_ip`。存储服务器100G接口配置`tianlai_storage_ip`一个地址。Playbook只校验和生成报告，不自动修改主机网络。
+现场确认物理接线后，将接收PCI地址填入`tianlai_receive_devices`。缓存节点发送口固定为 `ens2f0`；server ID 0～13 自动映射为 `192.168.210.100～113/24`。存储服务器100G接口使用`tianlai_storage_ip`，仍需按现场填写。单独执行 `inspect_nics.yml` 只盘点、不修改；完整执行 `site.yml` 或 `deploy.sh` 会生成两类独立配置：`/etc/netplan/98-tianlai-receive.yaml` 仅管理检测到的高速接收侧物理网口及其 MTU，缓存节点的 `/etc/netplan/99-tianlai-send.yaml` 仅管理 `ens2f0`、静态数据地址和 MTU，不添加默认网关。配置一起经过 `netplan generate` 校验，再由 `netplan apply` 生效，因此重启后仍然有效。其他1 GbE、回环、虚拟接口和速率未知接口不会修改。绑定 ixcap 专用驱动且未呈现为 Linux netdev 的接收卡不受 Netplan 管理。
+
+交换机对应端口和链路中间设备也必须支持 MTU 9000，否则大包可能被丢弃。部署后可核对：
+
+```bash
+# Only configure cache data IPs and MTU.
+ansible-playbook -i inventory.yml configure_network.yml
+
+ip -br link
+sudo cat /etc/netplan/98-tianlai-receive.yaml
+sudo cat /etc/netplan/99-tianlai-send.yaml
+sudo netplan status --all
+```
 
 ## 执行
 

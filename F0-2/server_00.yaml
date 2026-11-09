@@ -60,7 +60,7 @@ serverCfg:
   # Local UDP port for simulation only.
   simulationPort7: 20007
   # Single storage-network transmit interface; both lanes share it.
-  sendEthName: "CHANGE_ME_SEND"
+  sendEthName: "ens2f0"
   # Local storage-network source IP.
   sendSourceIp: "192.168.210.100"
   # Storage receiver data-network IP.

@@ -1,0 +1,17 @@
+---
+# Configure cache data addresses and jumbo MTU before the full application deployment.
+- name: Configure cache data IPs and jumbo MTU with Netplan
+  hosts: "cache_nodes:storage:controller"
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Validate network settings
+      ansible.builtin.assert:
+        that:
+          - tianlai_jumbo_mtu | int == 9000
+          - tianlai_jumbo_min_speed_mbps | int > 1000
+          - tianlai_cache_send_interface == 'ens2f0'
+          - tianlai_cache_send_prefix_length | int >= 1
+          - tianlai_cache_send_prefix_length | int <= 32
+    - name: Apply Netplan network configuration
+      ansible.builtin.include_tasks: tasks/network_config.yml

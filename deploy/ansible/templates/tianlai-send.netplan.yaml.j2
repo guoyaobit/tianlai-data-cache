@@ -1,0 +1,11 @@
+# Managed by Ansible. Local changes will be overwritten.
+network:
+  version: 2
+  ethernets:
+    "{{ tianlai_send_interface }}":
+      mtu: {{ tianlai_jumbo_mtu }}
+      dhcp4: false
+      dhcp6: false
+      optional: true
+      addresses:
+        - "{{ tianlai_send_ip }}/{{ tianlai_cache_send_prefix_length }}"

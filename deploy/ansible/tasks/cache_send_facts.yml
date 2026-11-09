@@ -1,0 +1,7 @@
+---
+- name: Derive the cache data interface and address
+  ansible.builtin.set_fact:
+    tianlai_send_interface: "{{ tianlai_cache_send_interface }}"
+    tianlai_send_ip: "{{ tianlai_cache_send_network }}.{{ (tianlai_cache_send_host_offset | int) + (tianlai_server_id | int) }}"
+  when: "'cache_nodes' in group_names"
+  changed_when: false

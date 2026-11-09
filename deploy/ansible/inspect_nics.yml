@@ -4,6 +4,8 @@
   hosts: "cache_nodes:storage:controller"
   gather_facts: false
   tasks:
+    - name: Derive cache data-network values
+      ansible.builtin.include_tasks: tasks/cache_send_facts.yml
     - name: Collect Linux network inventory without changing configuration
       ansible.builtin.script:
         cmd: files/network_inventory.py

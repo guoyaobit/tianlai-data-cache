@@ -6,6 +6,16 @@ ansible_user: ubuntu
 ansible_ssh_private_key_file: "{{ lookup('env', 'TIANLAI_SSH_PRIVATE_KEY') | default('~/.ssh/tianlai_ansible', true) }}"
 # Install root on target servers.
 tianlai_root: /opt/tianlai-store
+# MTU applied to physical interfaces faster than 1 Gb/s.
+tianlai_jumbo_mtu: 9000
+# 1001 includes 2.5/10/25/40/100 GbE and excludes 1 GbE.
+tianlai_jumbo_min_speed_mbps: 1001
+# Fixed cache-node storage-data interface.
+tianlai_cache_send_interface: ens2f0
+# server ID 0-13 maps to 192.168.210.100-113/24.
+tianlai_cache_send_network: 192.168.210
+tianlai_cache_send_host_offset: 100
+tianlai_cache_send_prefix_length: 24
 # Acquisition ID shared by all components.
 tianlai_acquisition_id: CHANGE_ME
 # Controller management IP on the storage server.

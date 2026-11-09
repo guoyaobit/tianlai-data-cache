@@ -35,6 +35,13 @@
           - tianlai_storage_io_threads | int <= 32
           - tianlai_controller_port | int >= 1
           - tianlai_controller_port | int <= 65535
+          - tianlai_jumbo_mtu | int == 9000
+          - tianlai_jumbo_min_speed_mbps | int > 1000
+          - tianlai_cache_send_interface == 'ens2f0'
+          - tianlai_cache_send_network is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+          - tianlai_cache_send_host_offset | int >= 1
+          - (tianlai_cache_send_host_offset | int) + 13 <= 254
+          - tianlai_cache_send_prefix_length | int == 24
         fail_msg: Complete inventory_example.yml with all 14 nodes and actual deployment values.
     - name: Require complete cache-node data
       ansible.builtin.assert:
@@ -43,9 +50,6 @@
           - hostvars[item].tianlai_server_id | int >= 0
           - hostvars[item].tianlai_server_id | int <= 13
           - hostvars[item].tianlai_control_ip | default('') is match('^[0-9.]+$')
-          - hostvars[item].tianlai_send_ip | default('') is match('^[0-9.]+$')
-          - hostvars[item].tianlai_send_interface | default('') is match('^[A-Za-z0-9_.:-]+$')
-          - "'CHANGE_ME' not in (hostvars[item].tianlai_send_interface | default('CHANGE_ME'))"
           - hostvars[item].tianlai_receive_devices | default([]) | length == (8 if hostvars[item].tianlai_server_id | int < 3 else 4)
           - "'CHANGE_ME' not in (hostvars[item].tianlai_receive_devices | default([]) | join(' '))"
           - hostvars[item].tianlai_receive_devices | default([]) | unique | list | length == hostvars[item].tianlai_receive_devices | default([]) | length
@@ -57,11 +61,18 @@
         that:
           - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_server_id') | map('int') | sort == range(0, 14) | list
           - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_control_ip') | unique | list | length == 14
-          - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_send_ip') | unique | list | length == 14
     - name: Require controller and storage SSH targets
       ansible.builtin.assert:
         that: "'CHANGE_ME' not in (hostvars[item].ansible_host | default('CHANGE_ME'))"
       loop: "{{ (groups['controller'] + groups['storage']) | unique }}"
+
+- name: Configure cache data IPs and jumbo MTU with Netplan
+  hosts: "cache_nodes:storage:controller"
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Apply Netplan network configuration
+      ansible.builtin.include_tasks: tasks/network_config.yml
 
 - name: Generate per-server network reports
   hosts: "cache_nodes:storage:controller"

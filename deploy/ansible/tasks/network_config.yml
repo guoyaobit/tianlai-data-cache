@@ -1,0 +1,160 @@
+---
+- name: Derive cache data-network values
+  ansible.builtin.include_tasks: cache_send_facts.yml
+
+- name: Install Netplan and the Linux IP utility
+  ansible.builtin.apt:
+    name: [netplan.io, iproute2]
+    state: present
+    update_cache: false
+
+- name: Discover high-speed physical interfaces
+  ansible.builtin.script:
+    cmd: "files/select_jumbo_interfaces.py --minimum-speed {{ tianlai_jumbo_min_speed_mbps }}"
+    executable: /usr/bin/python3
+  register: jumbo_interface_raw
+  changed_when: false
+  check_mode: false
+
+- name: Decode high-speed physical interfaces
+  ansible.builtin.set_fact:
+    tianlai_jumbo_interface_report: "{{ jumbo_interface_raw.stdout | from_json }}"
+    tianlai_jumbo_interfaces: "{{ (jumbo_interface_raw.stdout | from_json).interfaces | map(attribute='name') | list }}"
+  changed_when: false
+
+- name: Separate receive-side interfaces from the cache send interface
+  ansible.builtin.set_fact:
+    tianlai_receive_netplan_interfaces: >-
+      {{ tianlai_jumbo_interfaces |
+      difference([tianlai_send_interface] if 'cache_nodes' in group_names else []) }}
+  changed_when: false
+
+- name: Check the fixed cache data interface
+  ansible.builtin.stat:
+    path: "/sys/class/net/{{ tianlai_send_interface }}"
+  register: cache_send_interface
+  when: "'cache_nodes' in group_names"
+
+- name: Require ens2f0 on every cache node
+  ansible.builtin.assert:
+    that: cache_send_interface.stat.exists
+    fail_msg: "Required cache data interface {{ tianlai_send_interface }} does not exist"
+  when: "'cache_nodes' in group_names"
+
+- name: Install and validate the separate receive and send Netplan overlays
+  block:
+    - name: Write the receive-side Netplan overlay
+      ansible.builtin.template:
+        src: templates/tianlai-receive.netplan.yaml.j2
+        dest: /etc/netplan/98-tianlai-receive.yaml
+        mode: '0600'
+        backup: true
+      register: receive_netplan
+    - name: Write the cache send-side Netplan overlay
+      ansible.builtin.template:
+        src: templates/tianlai-send.netplan.yaml.j2
+        dest: /etc/netplan/99-tianlai-send.yaml
+        mode: '0600'
+        backup: true
+      register: send_netplan
+      when: "'cache_nodes' in group_names"
+    - name: Validate the merged Netplan configuration
+      ansible.builtin.command: netplan generate
+      changed_when: false
+  rescue:
+    - name: Restore the previous receive-side Netplan overlay
+      ansible.builtin.copy:
+        src: "{{ receive_netplan.backup_file }}"
+        dest: /etc/netplan/98-tianlai-receive.yaml
+        remote_src: true
+        mode: '0600'
+      when:
+        - receive_netplan.changed | default(false)
+        - receive_netplan.backup_file | default('') | length > 0
+    - name: Remove an invalid first-time receive-side Netplan overlay
+      ansible.builtin.file:
+        path: /etc/netplan/98-tianlai-receive.yaml
+        state: absent
+      when:
+        - receive_netplan.changed | default(false)
+        - receive_netplan.backup_file | default('') | length == 0
+    - name: Restore the previous send-side Netplan overlay
+      ansible.builtin.copy:
+        src: "{{ send_netplan.backup_file }}"
+        dest: /etc/netplan/99-tianlai-send.yaml
+        remote_src: true
+        mode: '0600'
+      when:
+        - send_netplan is defined
+        - send_netplan.changed | default(false)
+        - send_netplan.backup_file | default('') | length > 0
+    - name: Remove an invalid first-time send-side Netplan overlay
+      ansible.builtin.file:
+        path: /etc/netplan/99-tianlai-send.yaml
+        state: absent
+      when:
+        - send_netplan is defined
+        - send_netplan.changed | default(false)
+        - send_netplan.backup_file | default('') | length == 0
+    - name: Stop after restoring the previous Netplan state
+      ansible.builtin.fail:
+        msg: Netplan validation failed; the receive/send overlays were rolled back.
+
+- name: Apply the separate receive and send Netplan overlays
+  ansible.builtin.command: netplan apply
+  changed_when: >-
+    (receive_netplan.changed | default(false)) or
+    ((send_netplan is defined) and (send_netplan.changed | default(false)))
+
+- name: Read applied MTU values
+  ansible.builtin.command:
+    argv: [cat, "/sys/class/net/{{ item }}/mtu"]
+  loop: "{{ tianlai_jumbo_interfaces | union([tianlai_send_interface] if 'cache_nodes' in group_names else []) }}"
+  register: jumbo_mtu_values
+  changed_when: false
+
+- name: Require MTU 9000 on every selected interface
+  ansible.builtin.assert:
+    that: "(item.stdout | int) == (tianlai_jumbo_mtu | int)"
+    fail_msg: "{{ item.item }} did not apply MTU {{ tianlai_jumbo_mtu }}"
+  loop: "{{ jumbo_mtu_values.results }}"
+
+- name: Read the cache data-interface addresses
+  ansible.builtin.command:
+    argv: [ip, -j, address, show, dev, "{{ tianlai_send_interface }}"]
+  register: cache_send_addresses
+  changed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Require the calculated cache data IP only
+  ansible.builtin.assert:
+    that:
+      - >-
+        (((cache_send_addresses.stdout | from_json | first).addr_info |
+        selectattr('family', 'equalto', 'inet') | map(attribute='local') | list)
+        == [tianlai_send_ip])
+    fail_msg: "{{ tianlai_send_interface }} does not have only the expected IP {{ tianlai_send_ip }}"
+  when: "'cache_nodes' in group_names"
+
+- name: Check for a default route on the cache data interface
+  ansible.builtin.command:
+    argv: [ip, -j, route, show, default, dev, "{{ tianlai_send_interface }}"]
+  register: cache_send_default_route
+  changed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Require no default route on the cache data interface
+  ansible.builtin.assert:
+    that: "(cache_send_default_route.stdout | from_json | length) == 0"
+    fail_msg: "{{ tianlai_send_interface }} must not provide a default route"
+  when: "'cache_nodes' in group_names"
+
+- name: Display Netplan network result
+  ansible.builtin.debug:
+    msg:
+      mtu: "{{ tianlai_jumbo_mtu }}"
+      receive_netplan_file: /etc/netplan/98-tianlai-receive.yaml
+      receive_interfaces: "{{ tianlai_receive_netplan_interfaces }}"
+      send_netplan_file: "{{ '/etc/netplan/99-tianlai-send.yaml' if 'cache_nodes' in group_names else 'not applicable' }}"
+      cache_send_interface: "{{ tianlai_send_interface if 'cache_nodes' in group_names else 'not applicable' }}"
+      cache_send_ip: "{{ (tianlai_send_ip ~ '/' ~ tianlai_cache_send_prefix_length) if 'cache_nodes' in group_names else 'not applicable' }}"
