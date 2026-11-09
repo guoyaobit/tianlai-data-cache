@@ -31,7 +31,7 @@ ssh-copy-id -i ~/.ssh/tianlai_ansible.pub ubuntu@SERVER_IP
 bash deploy.sh
 ```
 
-`deploy.sh`先检查清单和语法，再执行完整部署；可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。
+`deploy.sh`先检查清单和语法，再执行完整部署；可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。部署阶段不需要填写采集任务 ID：存储服务会启动，缓存服务和控制器会安装但保持停止，防止使用错误任务 ID 接收触发。
 
 ## 部署前盘点网卡
 
@@ -90,6 +90,15 @@ bash deploy.sh
 # Equivalent manual commands.
 ansible-playbook -i inventory.yml --syntax-check site.yml
 ansible-playbook -i inventory.yml --ask-become-pass site.yml
+
+# Set the acquisition ID, then start all cache nodes and the controller.
+bash configure_acquisition.sh tianlai-20261109-run01
+```
+
+`configure_acquisition.sh` 是观测任务配置命令。参数只能包含 1～64 个字母、数字、下划线或连字符。它会把同一个 `acquisitionId` 写入全部14台缓存节点和控制器，校验缓存配置，然后统一启用并重启缓存服务和控制器；存储服务无需重启。切换采集任务时再次执行该命令即可，无需重新部署代码。使用 INI 清单时执行：
+
+```bash
+TIANLAI_INVENTORY=inventory.ini bash configure_acquisition.sh tianlai-20261109-run01
 ```
 
 完整清单通过校验后，部署会自动在每台缓存服务器和兼任控制器的存储服务器生成 `{{ tianlai_root }}/config/network-report.yaml`（默认 `/opt/tianlai-store/config/network-report.yaml`），同时在控制机更新 `reports/network-inventory.md`，并在存储服务器生成 `/opt/tianlai-store/config/storage.yaml`。重复部署时更新。可在对应服务器上查看：
@@ -102,9 +111,9 @@ sudo cat /opt/tianlai-store/config/network-report.yaml
 
 报告仅记录配置和观察结果，不会自动选择物理端口、设置系统 IP 或修改驱动。部署前仍需按上一节完成端口对应关系和清单填写；如果完整清单校验未通过，部署及自动报告生成均不会开始，可先单独运行 `inspect_nics.yml` 盘点。
 
-SSH登录使用私钥，sudo密码仅在本次部署进程内使用，不写入磁盘。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单；缓存节点运行`tianlai-cache`，存储服务器同时运行`tianlai-storage`和`tianlai-controller`。重跑时，源码、配置或服务变化会触发对应服务重启。**缓存服务重启会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。重启后必须等待约100秒重新预热，若控制器仍记录旧的未完成事件，应查询全部节点并取消无法恢复的事件，使用新的`event_id`重新触发。
+SSH登录使用私钥，sudo密码仅在本次部署进程内使用，不写入磁盘。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单；存储服务器上的`tianlai-storage`会启动，缓存节点`tianlai-cache`和存储服务器上的`tianlai-controller`须由`configure_acquisition.sh`写入任务 ID 后启动。重跑部署会停止缓存服务和控制器。**停止或重启缓存服务会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。重新执行任务配置命令后必须等待约100秒预热，使用新的`event_id`触发。
 
-服务默认使用 root，节点通过 ixcap 收包；脚本没有配置防火墙或服务用户隔离，需结合现场权限和网络策略审查。软件包安装、服务重启和数据保存路径均由执行 playbook 的操作者负责确认。首次部署或配置变更会重启服务，完成后检查：
+服务默认使用 root，节点通过 ixcap 收包；脚本没有配置防火墙或服务用户隔离，需结合现场权限和网络策略审查。软件包安装、服务启停和数据保存路径均由执行 playbook 的操作者负责确认。代码部署完成后先确认存储服务；执行任务配置命令后再确认缓存服务和控制器：
 
 ```bash
 systemctl status tianlai-storage.service

@@ -4,8 +4,6 @@ all:
   vars:
     # OS account used by Ansible over SSH.
     ansible_user: ubuntu
-    # Acquisition ID shared by all components.
-    tianlai_acquisition_id: CHANGE_ME
     # Controller management IP on the storage server.
     tianlai_controller_ip: CHANGE_ME
     # Backend IP for triggers and completion notices.

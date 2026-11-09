@@ -59,7 +59,8 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
         if (check)
             return 0;
         if (!para.simulation) {
-            if (config.acquisitionId.find("CHANGE_ME") != std::string::npos)
+            if (config.acquisitionId == "UNCONFIGURED" ||
+                config.acquisitionId.find("CHANGE_ME") != std::string::npos)
                 throw std::runtime_error("set the shared acquisitionId before running");
             for (const auto &port : config.receivePorts)
                 if (port.deviceName.find("CHANGE_ME") != std::string::npos)

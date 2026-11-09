@@ -16,8 +16,6 @@ tianlai_cache_send_interface: ens2f0
 tianlai_cache_send_network: 192.168.210
 tianlai_cache_send_host_offset: 100
 tianlai_cache_send_prefix_length: 24
-# Acquisition ID shared by all components.
-tianlai_acquisition_id: CHANGE_ME
 # Controller management IP on the storage server.
 tianlai_controller_ip: CHANGE_ME
 # Backend IP for triggers and completion notices.

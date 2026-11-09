@@ -12,8 +12,6 @@
           - groups['controller'][0] == groups['storage'][0]
           - ansible_user | default('') == 'ubuntu'
           - ansible_ssh_private_key_file | default('') | length > 0
-          - tianlai_acquisition_id is match('^[A-Za-z0-9_-]{1,64}$')
-          - "'CHANGE_ME' not in tianlai_acquisition_id"
           - tianlai_controller_ip is match('^[0-9.]+$')
           - tianlai_backend_ip is match('^[0-9.]+$')
           - tianlai_storage_ip is match('^[0-9.]+$')
@@ -189,6 +187,12 @@
   hosts: cache_nodes
   become: true
   tasks:
+    - name: Stop cache until acquisition is configured
+      ansible.builtin.systemd:
+        name: tianlai-cache.service
+        enabled: false
+        state: stopped
+      failed_when: false
     - name: Require Debian-family Linux
       ansible.builtin.assert:
         that: ansible_facts.os_family == 'Debian'
@@ -229,20 +233,20 @@
         src: "{{ playbook_dir }}/../../Common"
         dest: "{{ tianlai_root }}/src/"
         mode: preserve
-      notify: restart cache
+      notify: stop cache after deployment
     - name: Install unified build entry point
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../Makefile"
         dest: "{{ tianlai_root }}/src/Makefile"
         mode: '0644'
-      notify: restart cache
+      notify: stop cache after deployment
     - name: Copy profile entry and build file
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../{{ tianlai_profile }}/{{ item }}"
         dest: "{{ tianlai_root }}/src/{{ tianlai_profile }}/{{ item }}"
         mode: '0644'
       loop: [main.cpp, Makefile]
-      notify: restart cache
+      notify: stop cache after deployment
     - name: Render YAML configuration
       ansible.builtin.template:
         src: "templates/{{ item.source }}"
@@ -251,7 +255,7 @@
       loop:
         - {source: recv.yaml.j2, destination: recv.yaml}
         - {source: server.yaml.j2, destination: server.yaml}
-      notify: restart cache
+      notify: stop cache after deployment
     - name: Build node for this profile
       ansible.builtin.command:
         argv: [make, -j2, production, "PROFILE={{ tianlai_profile }}", "IXCAP_INCLUDE={{ tianlai_ixcap_include }}", "IXCAP_LIB={{ tianlai_ixcap_lib }}"]
@@ -260,7 +264,7 @@
         LC_ALL: C
       register: node_build
       changed_when: "'Nothing to be done' not in node_build.stdout and 'is up to date' not in node_build.stdout"
-      notify: restart cache
+      notify: stop cache after deployment
     - name: Validate rendered node configuration
       ansible.builtin.command:
         argv:
@@ -275,32 +279,38 @@
         src: "{{ tianlai_root }}/src/{{ tianlai_profile }}/tianlai-store-{{ tianlai_profile | lower }}"
         dest: "{{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }}"
         mode: '0755'
-      notify: restart cache
+      notify: stop cache after deployment
     - name: Install node service
       ansible.builtin.template:
         src: templates/cache.service.j2
         dest: /etc/systemd/system/tianlai-cache.service
         mode: '0644'
-      notify: restart cache
+      notify: stop cache after deployment
     - name: Apply cache changes before enabling
       ansible.builtin.meta: flush_handlers
-    - name: Enable and start cache
+    - name: Keep cache stopped until acquisition is configured
       ansible.builtin.systemd:
         name: tianlai-cache.service
         daemon_reload: true
-        enabled: true
-        state: started
+        enabled: false
+        state: stopped
   handlers:
-    - name: restart cache
+    - name: stop cache after deployment
       ansible.builtin.systemd:
         name: tianlai-cache.service
         daemon_reload: true
-        state: restarted
+        state: stopped
 
 - name: Install trigger controller
   hosts: controller
   become: true
   tasks:
+    - name: Stop controller until acquisition is configured
+      ansible.builtin.systemd:
+        name: tianlai-controller.service
+        enabled: false
+        state: stopped
+      failed_when: false
     - name: Require Debian-family Linux
       ansible.builtin.assert:
         that: ansible_facts.os_family == 'Debian'
@@ -328,30 +338,30 @@
         dest: "{{ tianlai_root }}/tools/{{ item }}"
         mode: '0644'
       loop: [controller.py, durable_json.py, tcp_json.py]
-      notify: restart controller
+      notify: stop controller after deployment
     - name: Render controller node list
       ansible.builtin.template:
         src: templates/nodes.json.j2
         dest: "{{ tianlai_root }}/config/nodes.json"
         mode: '0640'
-      notify: restart controller
+      notify: stop controller after deployment
     - name: Install controller service
       ansible.builtin.template:
         src: templates/controller.service.j2
         dest: /etc/systemd/system/tianlai-controller.service
         mode: '0644'
-      notify: restart controller
+      notify: stop controller after deployment
     - name: Apply controller changes before enabling
       ansible.builtin.meta: flush_handlers
-    - name: Enable and start controller
+    - name: Keep controller stopped until acquisition is configured
       ansible.builtin.systemd:
         name: tianlai-controller.service
         daemon_reload: true
-        enabled: true
-        state: started
+        enabled: false
+        state: stopped
   handlers:
-    - name: restart controller
+    - name: stop controller after deployment
       ansible.builtin.systemd:
         name: tianlai-controller.service
         daemon_reload: true
-        state: restarted
+        state: stopped

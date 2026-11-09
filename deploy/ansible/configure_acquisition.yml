@@ -1,0 +1,70 @@
+---
+- name: Stop the controller before changing acquisition
+  hosts: controller
+  become: true
+  tasks:
+    - name: Validate acquisition ID
+      ansible.builtin.assert:
+        that:
+          - (tianlai_acquisition_id | default('')) is match('^[A-Za-z0-9_-]{1,64}$')
+          - (tianlai_acquisition_id | default('')) not in ['CHANGE_ME', 'UNCONFIGURED']
+        fail_msg: "Pass a 1-64 character acquisition ID using letters, numbers, underscore, or hyphen."
+    - name: Stop controller during the coordinated update
+      ansible.builtin.systemd:
+        name: tianlai-controller.service
+        state: stopped
+
+- name: Configure and start cache nodes for an acquisition
+  hosts: cache_nodes
+  become: true
+  tasks:
+    - name: Validate acquisition ID
+      ansible.builtin.assert:
+        that:
+          - (tianlai_acquisition_id | default('')) is match('^[A-Za-z0-9_-]{1,64}$')
+          - (tianlai_acquisition_id | default('')) not in ['CHANGE_ME', 'UNCONFIGURED']
+        fail_msg: "Pass a 1-64 character acquisition ID using letters, numbers, underscore, or hyphen."
+    - name: Set node build profile
+      ansible.builtin.set_fact:
+        tianlai_profile: "{{ 'F0-2' if tianlai_server_id | int < 3 else ('F3-10' if tianlai_server_id | int < 11 else 'F11-13') }}"
+    - name: Write acquisition ID to cache configuration
+      ansible.builtin.template:
+        src: templates/recv.yaml.j2
+        dest: "{{ tianlai_root }}/config/recv.yaml"
+        mode: '0640'
+    - name: Validate cache configuration
+      ansible.builtin.command:
+        argv:
+          - "{{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }}"
+          - "{{ tianlai_root }}/config/server.yaml"
+          - "{{ tianlai_root }}/config/recv.yaml"
+          - --check-config
+      changed_when: false
+    - name: Enable and restart cache
+      ansible.builtin.systemd:
+        name: tianlai-cache.service
+        daemon_reload: true
+        enabled: true
+        state: restarted
+
+- name: Configure and start trigger controller for an acquisition
+  hosts: controller
+  become: true
+  tasks:
+    - name: Validate acquisition ID
+      ansible.builtin.assert:
+        that:
+          - (tianlai_acquisition_id | default('')) is match('^[A-Za-z0-9_-]{1,64}$')
+          - (tianlai_acquisition_id | default('')) not in ['CHANGE_ME', 'UNCONFIGURED']
+        fail_msg: "Pass a 1-64 character acquisition ID using letters, numbers, underscore, or hyphen."
+    - name: Write acquisition ID to controller service
+      ansible.builtin.template:
+        src: templates/controller.service.j2
+        dest: /etc/systemd/system/tianlai-controller.service
+        mode: '0644'
+    - name: Enable and restart controller
+      ansible.builtin.systemd:
+        name: tianlai-controller.service
+        daemon_reload: true
+        enabled: true
+        state: restarted

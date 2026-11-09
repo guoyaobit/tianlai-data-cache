@@ -46,6 +46,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 - 填写单个存储网口对应的 `sendEthName`、本地IPv4、存储端IPv4及两个逻辑lane端口。
 - `controlBindIp/controlPort` 是管理网 TCP/JSON 监听地址；`controlPeerIp` 只允许调度机地址。
 - 所有节点及调度程序使用同一个实际 `acquisitionId`；前端复位后重新建立任务。
+- `acquisitionId` 不属于代码部署清单；部署后用 `deploy/ansible/configure_acquisition.sh ACQUISITION_ID` 统一写入14台缓存节点和控制器并启动服务。
 - `transitionWarnPercent` 默认 80；过渡区达到该占用比例时记录一次 WARN，并在查询结果中置警告标志。
 - `chunkPeriods` 默认 64；它控制单个 ZeroMQ 数据块的积分周期数，应结合消息内存和吞吐实测调整。
 - 配置适合网卡 NUMA 拓扑的 `cpuIdN`；默认 -1 不绑定。内存预触页默认开启；
