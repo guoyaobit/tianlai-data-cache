@@ -36,7 +36,7 @@ assert site.index("Copy shared sources") < site.index(
 assert "Search common locations for the ixcap header" in site
 assert "Search common locations for the ixcap library" in site
 assert "tianlai_ixcap_include_effective" in site
-assert "libboost-dev" not in site
+assert "libboost-dev" in site
 assert "enabled: false\n        state: stopped" in site
 assert "tianlai_acquisition_id" not in settings
 assert "tianlai_acquisition_id" not in inventory_yml

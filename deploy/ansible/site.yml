@@ -197,7 +197,7 @@
         tianlai_profile: "{{ 'F0-2' if tianlai_server_id | int < 3 else ('F3-10' if tianlai_server_id | int < 11 else 'F11-13') }}"
     - name: Install build dependencies
       ansible.builtin.apt:
-        name: [build-essential, pkg-config, libspdlog-dev, libyaml-cpp-dev, libzmq3-dev]
+        name: [build-essential, pkg-config, libboost-dev, libspdlog-dev, libyaml-cpp-dev, libzmq3-dev]
         state: present
         update_cache: true
         cache_valid_time: 3600

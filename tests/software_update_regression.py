@@ -29,6 +29,8 @@ assert "templates/storage.yaml.j2" not in PLAYBOOK
 assert "templates/nodes.json.j2" not in PLAYBOOK
 assert "network_config.yml" not in PLAYBOOK
 assert "ansible.builtin.apt:" not in PLAYBOOK
+assert "/usr/include/boost/property_tree/ptree.hpp" in PLAYBOOK
+assert "install libboost-dev" in PLAYBOOK
 assert "update_software.yml" in SCRIPT
 assert "--syntax-check update_software.yml" in SCRIPT
 assert "bash update_software.sh" in README

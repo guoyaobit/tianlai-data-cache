@@ -97,6 +97,14 @@
         - "{{ tianlai_ixcap_lib }}/libixcap.a"
         - "{{ tianlai_ixcap_lib }}/libixcap.so"
       register: update_ixcap_files
+    - name: Check required Boost headers
+      ansible.builtin.stat:
+        path: /usr/include/boost/property_tree/ptree.hpp
+      register: update_boost_header
+    - name: Require cache build dependencies
+      ansible.builtin.assert:
+        that: update_boost_header.stat.exists
+        fail_msg: Run deploy.sh once or install libboost-dev before updating cache software.
     - name: Require the configured ixcap SDK
       ansible.builtin.assert:
         that:
