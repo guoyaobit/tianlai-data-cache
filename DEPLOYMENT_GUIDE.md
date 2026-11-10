@@ -34,6 +34,8 @@
 
 节点配置的 `controlBindIp` 已按部署说明填入 `172.0.0.128～141`，分别对应 tianlaistore1～14；`tools/nodes_example.json` 和 Ansible 示例清单也采用这些内网规划值。`172.0.0.204～217` 为对应 HDM 管理口地址，不应自动作为 SSH 或缓存程序监听地址。实际网卡配置及 SSH 可达性仍需核对。
 
+BMC/HDM带外电源控制脚本位于[`deploy/bmc/bmc_power.sh`](deploy/bmc/bmc_power.sh)，使用说明和安全注意事项见[`deploy/bmc/README.md`](deploy/bmc/README.md)。账号和密码不写入仓库；GPU服务器的BMC地址因原始文档未提供而未加入地址表。
+
 | 文件 / 字段 | 要填写或核对的内容 |
 | --- | --- |
 | `receive_config.yaml` / `acquisitionId` | 内部固定为 `tianlai`，现场无需修改。 |

@@ -38,5 +38,6 @@ subprocess.run([sys.executable, str(root / 'tests/tcp_control_regression.py')], 
 subprocess.run([sys.executable, str(root / 'tests/network_inventory_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/jumbo_mtu_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/acquisition_deployment_regression.py')], check=True, timeout=30)
+subprocess.run([sys.executable, str(root / 'tests/bmc_power_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/simulation_config_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/yaml_comment_style_regression.py')], check=True, timeout=30)
