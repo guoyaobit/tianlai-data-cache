@@ -20,6 +20,8 @@ class StoreConnection {
     unsigned laneIndex = 0;
     void *context = nullptr;
     void *socket = nullptr;
+    bool connectionReadyLogged = false;
+    std::string remoteEndpoint;
     std::vector<unsigned char> result;
 };
 #endif

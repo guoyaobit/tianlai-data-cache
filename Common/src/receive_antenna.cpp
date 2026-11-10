@@ -15,7 +15,8 @@
 
 static const unsigned BATCH_SIZE = 512;
 // Validate a raw payload packet and write it to the matching receive-port buffer by absolute integration period and board position.
-static void receivePacket(CacheRuntime *para, unsigned p, const unsigned char *data, size_t bytes) {
+static void receivePacket(CacheRuntime *para, unsigned p, const unsigned char *data, size_t bytes,
+                          bool &firstPacketLogged) {
     const auto &cfg = *para->config;
     const auto &port = cfg.receivePorts[p];
     if (bytes != INPUT_HEADER_BYTES + cfg.inputDataBytes) {
@@ -31,7 +32,18 @@ static void receivePacket(CacheRuntime *para, unsigned p, const unsigned char *d
     }
     const unsigned slot =
         (h.board - port.boardBegin) * port.packetsPerBoard + h.packetId - port.packetId;
-    para->receiveBuffers[p]->receive(h.absolute(cfg.integrationPerTrace), slot, h.ifTrace, data);
+    const uint64_t absolutePeriod = h.absolute(cfg.integrationPerTrace);
+    if (para->receiveBuffers[p]->receive(absolutePeriod, slot, h.ifTrace, data) &&
+        !firstPacketLogged) {
+        firstPacketLogged = true;
+        LOG("Receive port " + std::to_string(p) +
+                " first UDP packet: packet_id=" + std::to_string(h.packetId) +
+                " board=" + std::to_string(h.board) +
+                " trace_period_id=" + std::to_string(h.trace) +
+                " integration_period_id=" + std::to_string(h.integration) +
+                " absolute_period=" + std::to_string(absolutePeriod),
+            INFO);
+    }
 }
 static void simulationReceive(CacheRuntime *para, unsigned p) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -53,13 +65,14 @@ static void simulationReceive(CacheRuntime *para, unsigned p) {
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buffer, sizeof(buffer));
     ++para->initializedPorts;
     unsigned char packet[16384];
+    bool firstPacketLogged = false;
     while (para->flags->ifRecvAntenna) {
         pollfd poller{fd, POLLIN, 0};
         if (poll(&poller, 1, 100) <= 0)
             continue;
         auto n = recv(fd, packet, sizeof(packet), 0);
         if (n >= 0)
-            receivePacket(para, p, packet, size_t(n));
+            receivePacket(para, p, packet, size_t(n), firstPacketLogged);
     }
 }
 // Run each receive port independently, receive packets in batches after NIC initialization, and stop all threads on error.
@@ -96,6 +109,7 @@ void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
         if (!capture)
             throw std::runtime_error("ixcap_init failed on port " + std::to_string(p));
         ixcap_pkt_buf *packets[BATCH_SIZE];
+        bool firstPacketLogged = false;
         ++para->initializedPorts;
         LOG("Receive port " + std::to_string(p) +
                 " packetId=" + std::to_string(para->config->receivePorts[p].packetId) + ".." +
@@ -110,7 +124,7 @@ void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
                 size_t bytes;
                 try {
                     if (inputPayload(raw, ixcap_get_pkt_size(packets[i]), data, bytes))
-                        receivePacket(para, p, data, bytes);
+                        receivePacket(para, p, data, bytes, firstPacketLogged);
                     else
                         ++para->ignoredPackets;
                 } catch (...) {

@@ -1,4 +1,5 @@
 #include "zmq_store.h"
+#include "log_output.h"
 #include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
@@ -85,6 +86,12 @@ StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane)
     : para(p), laneIndex(lane) {
     const auto &config = para.config->sendLink;
     validateSource(config);
+    remoteEndpoint = config.destinationIp + ":" +
+                     std::to_string(config.destinationPorts[lane]);
+    LOG("ZeroMQ lane " + std::to_string(laneIndex) +
+            " connecting: source=" + config.sourceIp +
+            " destination=" + remoteEndpoint,
+        INFO);
     context = zmq_ctx_new();
     if (!context)
         throw zmqError("ZeroMQ context creation failed");
@@ -114,6 +121,9 @@ StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane)
                                      std::to_string(config.destinationPorts[lane]);
         if (zmq_connect(socket, endpoint.c_str()) != 0)
             throw zmqError("ZeroMQ connect failed");
+        LOG("ZeroMQ lane " + std::to_string(laneIndex) +
+                " asynchronous connect started: destination=" + remoteEndpoint,
+            DEBUG);
     } catch (...) {
         if (socket)
             zmq_close(socket);
@@ -143,6 +153,12 @@ void StoreConnection::sendMessage(const std::vector<unsigned char> &message, boo
         if (sent >= 0) {
             if (static_cast<size_t>(sent) != message.size())
                 throw std::runtime_error("ZeroMQ message send was incomplete");
+            if (!connectionReadyLogged) {
+                connectionReadyLogged = true;
+                LOG("ZeroMQ lane " + std::to_string(laneIndex) +
+                        " connected: destination=" + remoteEndpoint,
+                    INFO);
+            }
             break;
         }
         if (zmq_errno() == EINTR)
