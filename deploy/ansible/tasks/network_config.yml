@@ -2,6 +2,32 @@
 - name: Derive cache data-network values
   ansible.builtin.include_tasks: cache_send_facts.yml
 
+- name: Require a valid cache data IPv4 address before changing Netplan
+  ansible.builtin.assert:
+    that:
+      - (tianlai_send_ip | default('')) is match(tianlai_ipv4_pattern)
+      - tianlai_cache_send_prefix_length | int >= 1
+      - tianlai_cache_send_prefix_length | int <= 32
+    fail_msg: >-
+      Invalid cache data address {{ tianlai_send_ip | default('undefined') }}/{{ tianlai_cache_send_prefix_length }}.
+      Correct the inventory before deploying.
+  vars:
+    tianlai_ipv4_pattern: '^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+  when: "'cache_nodes' in group_names"
+
+- name: Require a valid storage data IPv4 address before changing Netplan
+  ansible.builtin.assert:
+    that:
+      - (tianlai_storage_ip | default('')) is match(tianlai_ipv4_pattern)
+      - tianlai_storage_prefix_length | int >= 1
+      - tianlai_storage_prefix_length | int <= 32
+    fail_msg: >-
+      Invalid tianlai_storage_ip={{ tianlai_storage_ip | default('undefined') }}.
+      Set the storage server's 100 GbE IPv4 address in inventory.yml before deploying.
+  vars:
+    tianlai_ipv4_pattern: '^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+  when: "'storage' in group_names"
+
 - name: Install Netplan, NetworkManager, and the Linux IP utility
   ansible.builtin.apt:
     name: [netplan.io, network-manager, iproute2]
@@ -59,6 +85,21 @@
     that: storage_receive_interface.stat.exists
     fail_msg: "Required storage receive interface {{ tianlai_storage_receive_interface }} does not exist"
   when: "'storage' in group_names"
+
+- name: Find existing Netplan configuration files
+  ansible.builtin.find:
+    paths: /etc/netplan
+    patterns: ['*.yaml', '*.yml']
+    file_type: file
+  register: netplan_configuration_files
+
+- name: Restrict Netplan configuration permissions
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    mode: '0600'
+  loop: "{{ netplan_configuration_files.files }}"
+  loop_control:
+    label: "{{ item.path }}"
 
 - name: Install and validate the separate Netplan overlays
   block:

@@ -59,13 +59,19 @@ def main():
     assert '"{{ tianlai_storage_ip }}/{{ tianlai_storage_prefix_length }}"' in storage_template
     settings = (ROOT / 'deploy/ansible/group_vars/all/settings.yml').read_text(encoding='utf-8')
     assert 'tianlai_storage_receive_interface: enp152s0f0np0' in settings
+    assert 'tianlai_storage_ip: 192.168.210.250' in settings
     network_tasks = (ROOT / 'deploy/ansible/tasks/network_config.yml').read_text(encoding='utf-8')
     assert '169.254.0.0/16' not in network_tasks
     assert 'Require the configured storage IP only' in network_tasks
     assert 'managed_ipv6_addresses' not in network_tasks
     assert 'network-manager' in network_tasks
+    assert 'Require a valid storage data IPv4 address before changing Netplan' in network_tasks
+    assert "Invalid tianlai_storage_ip=" in network_tasks
+    assert 'Restrict Netplan configuration permissions' in network_tasks
+    assert "patterns: ['*.yaml', '*.yml']" in network_tasks
     assert 'Require NetworkManager ownership of managed data interfaces' in network_tasks
     inventory = (ROOT / 'deploy/ansible/inventory_example.yml').read_text(encoding='utf-8')
+    assert 'tianlai_storage_ip: "192.168.210.250"' in inventory
     for server_id in range(14):
         assert f'tianlai_send_ip: "192.168.210.{100 + server_id}"' in inventory
     print('Netplan network: cache data IP and high-speed MTU selection passed')

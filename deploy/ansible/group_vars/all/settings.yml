@@ -24,7 +24,7 @@ tianlai_controller_ip: CHANGE_ME
 # Backend IP for triggers and completion notices.
 tianlai_backend_ip: CHANGE_ME
 # Data IP on the storage server's 100 GbE interface.
-tianlai_storage_ip: CHANGE_ME
+tianlai_storage_ip: 192.168.210.250
 # Event path under the mounted storage directory.
 tianlai_storage_directory: CHANGE_ME
 # Integration period (us); must match acquisition.
