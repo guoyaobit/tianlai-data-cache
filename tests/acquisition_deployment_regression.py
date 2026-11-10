@@ -13,12 +13,18 @@ inventory_yml = (ANSIBLE / "inventory_example.yml").read_text(encoding="utf-8")
 inventory_ini = (ANSIBLE / "inventory_example.ini").read_text(encoding="utf-8")
 recv_template = (ANSIBLE / "templates" / "recv.yaml.j2").read_text(encoding="utf-8")
 controller_template = (ANSIBLE / "templates" / "controller.service.j2").read_text(encoding="utf-8")
+deploy_script = (ANSIBLE / "deploy.sh").read_text(encoding="utf-8")
+configure_script = (ANSIBLE / "configure_acquisition.sh").read_text(encoding="utf-8")
 
 assert "tianlai_acquisition_id is match" not in site
 assert "enabled: false\n        state: stopped" in site
 assert "tianlai_acquisition_id" not in settings
 assert "tianlai_acquisition_id" not in inventory_yml
 assert "tianlai_acquisition_id" not in inventory_ini
+assert "ansible_ssh_private_key_file" not in settings
+assert "ansible_ssh_private_key_file" not in site
+assert "TIANLAI_SSH_PRIVATE_KEY" not in deploy_script
+assert "TIANLAI_SSH_PRIVATE_KEY" not in configure_script
 assert "default('UNCONFIGURED')" in recv_template
 assert "default('UNCONFIGURED')" in controller_template
 assert configure.index("Stop the controller before changing acquisition") < configure.index(

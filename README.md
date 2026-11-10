@@ -1,6 +1,6 @@
 # 原始数据缓存：服务器 0～13
 
-文档入口：[部署与联调操作手册](部署与联调手册.md) · [Ansible 部署](deploy/ansible/README.md) · [触发与存储协议](PROTOCOL.md) · [代码结构](代码整理说明.md)。
+文档入口：[部署与联调操作手册](DEPLOYMENT_GUIDE.md) · [Ansible 部署](deploy/ansible/README.md) · [触发与存储协议](PROTOCOL.md) · [代码结构](CODE_STRUCTURE.md)。
 首次部署请先阅读操作手册；本文提供架构和配置背景。所有 IP、端口和路径示例均须按现场实际情况修改。
 
 前 11 台按 `tianlai-A288B288-20260917` 的输入包格式实现，新增 11～13 台接收远端子站数据。

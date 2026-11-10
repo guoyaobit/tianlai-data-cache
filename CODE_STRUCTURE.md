@@ -21,7 +21,7 @@
 | `tools/result_listener.py` | 完成通知的演示接收器；生产后端应先持久化再确认。 |
 | `deploy/ansible/` | 清单示例、模板及三类服务器部署 playbook。 |
 | `tests/` | 接收、ZeroMQ 发送、控制器与模拟联调测试。 |
-| `README.md`、`部署与联调手册.md`、`PROTOCOL.md` | 架构、运行步骤与控制、传输协议。 |
+| `README.md`、`DEPLOYMENT_GUIDE.md`、`PROTOCOL.md` | 架构、运行步骤与控制、传输协议。 |
 
 ## 数据处理流程
 

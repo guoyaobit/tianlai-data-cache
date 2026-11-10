@@ -3,7 +3,6 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 inventory="${TIANLAI_INVENTORY:-inventory.yml}"
-private_key="${TIANLAI_SSH_PRIVATE_KEY:-$HOME/.ssh/tianlai_ansible}"
 acquisition_id="${1:-}"
 
 if [[ ! "$acquisition_id" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || \
@@ -24,11 +23,6 @@ if [[ ! -f "$inventory" ]]; then
     echo "Inventory not found: $inventory" >&2
     exit 2
 fi
-if [[ ! -r "$private_key" ]]; then
-    echo "SSH private key is not readable: $private_key" >&2
-    exit 2
-fi
-
 ansible-inventory -i "$inventory" --list >/dev/null
 ansible-playbook -i "$inventory" --syntax-check configure_acquisition.yml
 ansible-playbook -i "$inventory" --ask-become-pass configure_acquisition.yml \

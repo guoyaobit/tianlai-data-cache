@@ -13,17 +13,15 @@
 - 管理网需放通后端→控制器TCP 18999、控制器→缓存节点TCP 19000、存储服务器→后端TCP 19001；实际端口以清单为准。
 - 如果目标上安装的 ixcap 是共享库，确保运行时动态链接器可找到该库。脚本只检查文件存在，不负责驱动、权限或网卡初始化。
 
-## SSH密钥和sudo密码
+## SSH登录和sudo密码
 
-所有目标服务器使用`ubuntu`账户。控制机默认使用`~/.ssh/tianlai_ansible`私钥；需要使用其他路径时设置环境变量`TIANLAI_SSH_PRIVATE_KEY`。不要把私钥放进项目目录。SSH公钥已经安装时无需再次执行`ssh-copy-id`。新服务器首次准备方法为：
+所有目标服务器使用`ubuntu`账户。部署脚本不指定私钥路径，直接使用系统默认SSH配置、默认密钥或已加载到`ssh-agent`中的密钥。已经能够免密登录时不需要执行其他SSH准备操作。新服务器尚未配置免密登录时，可使用系统默认密钥执行：
 
 ```bash
-umask 077
-ssh-keygen -t ed25519 -f ~/.ssh/tianlai_ansible -C tianlai-ansible
-ssh-copy-id -i ~/.ssh/tianlai_ansible.pub ubuntu@SERVER_IP
+ssh-copy-id ubuntu@SERVER_IP
 ```
 
-第二条命令对14台缓存服务器和存储服务器各执行一次，首次执行时使用服务器现有密码。完成后用`ssh -i ~/.ssh/tianlai_ansible ubuntu@SERVER_IP`确认可以免密登录，再继续部署。
+该命令对14台缓存服务器和存储服务器各执行一次，首次执行时使用服务器现有密码。完成后用`ssh ubuntu@SERVER_IP`确认可以免密登录，再继续部署。
 
 部署不保存SSH或sudo密码。直接运行一键部署脚本，按提示输入一次所有服务器共用的sudo密码：
 
@@ -35,7 +33,7 @@ bash deploy.sh
 
 ## 部署前盘点网卡
 
-`inspect_nics.yml` 可以在完整部署配置准备好之前单独运行。所有目标服务器默认使用 `ubuntu` 账户和上述SSH密钥登录；请核对要连接的服务器的 `ansible_host`，缓存节点的 `tianlai_server_id` 使用示例中的编号。以下命令以 YAML 清单为例，使用 INI 时将 `inventory.yml` 替换为 `inventory.ini`。控制机需要 Ansible 和 SSH 连接，目标服务器需要 `/usr/bin/python3`；安装 `iproute2` 后才能列出接口 IP。盘点不需要 sudo，不修改网络配置、驱动或服务。Ansible 会在目标机临时传送并执行盘点脚本。
+`inspect_nics.yml` 可以在完整部署配置准备好之前单独运行。所有目标服务器默认使用 `ubuntu` 账户和系统SSH配置登录；请核对要连接的服务器的 `ansible_host`，缓存节点的 `tianlai_server_id` 使用示例中的编号。以下命令以 YAML 清单为例，使用 INI 时将 `inventory.yml` 替换为 `inventory.ini`。控制机需要 Ansible 和 SSH 连接，目标服务器需要 `/usr/bin/python3`；安装 `iproute2` 后才能列出接口 IP。盘点不需要 sudo，不修改网络配置、驱动或服务。Ansible 会在目标机临时传送并执行盘点脚本。
 
 从本目录执行：
 
@@ -112,7 +110,7 @@ sudo cat /opt/tianlai-store/config/network-report.yaml
 
 报告仅记录配置和观察结果，不会自动选择物理端口、设置系统 IP 或修改驱动。部署前仍需按上一节完成端口对应关系和清单填写；如果完整清单校验未通过，部署及自动报告生成均不会开始，可先单独运行 `inspect_nics.yml` 盘点。
 
-SSH登录使用私钥，sudo密码仅在本次部署进程内使用，不写入磁盘。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单；存储服务器上的`tianlai-storage`会启动，缓存节点`tianlai-cache`和存储服务器上的`tianlai-controller`须由`configure_acquisition.sh`写入任务 ID 后启动。重跑部署会停止缓存服务和控制器。**停止或重启缓存服务会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。重新执行任务配置命令后必须等待约100秒预热，使用新的`event_id`触发。
+SSH登录使用系统默认配置，sudo密码仅在本次部署进程内使用，不写入磁盘。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单；存储服务器上的`tianlai-storage`会启动，缓存节点`tianlai-cache`和存储服务器上的`tianlai-controller`须由`configure_acquisition.sh`写入任务 ID 后启动。重跑部署会停止缓存服务和控制器。**停止或重启缓存服务会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。重新执行任务配置命令后必须等待约100秒预热，使用新的`event_id`触发。
 
 服务默认使用 root，节点通过 ixcap 收包；脚本没有配置防火墙或服务用户隔离，需结合现场权限和网络策略审查。软件包安装、服务启停和数据保存路径均由执行 playbook 的操作者负责确认。代码部署完成后先确认存储服务；执行任务配置命令后再确认缓存服务和控制器：
 
@@ -122,6 +120,6 @@ systemctl status tianlai-cache.service
 systemctl status tianlai-controller.service
 ```
 
-分别在对应机器执行上述命令，并按[部署与联调手册](../../部署与联调手册.md)检查 14 台收包、计数同步、触发、落盘、缺包、通知和真实吞吐。服务启动不等于缓存已 READY，也不表示真实设备验收通过。
+分别在对应机器执行上述命令，并按[部署与联调手册](../../DEPLOYMENT_GUIDE.md)检查 14 台收包、计数同步、触发、落盘、缺包、通知和真实吞吐。服务启动不等于缓存已 READY，也不表示真实设备验收通过。
 
 每节点不做应用层限速，两个逻辑lane共享一个物理网口。存储服务为14台节点生成28个监听端点：lane 0使用20000～20013，lane 1使用20100～20113。每个端点线程同时负责协议和写盘，默认使用2个ZeroMQ I/O线程，应用可见线程数约32个，libzmq可能另有内部管理线程。修改端口基数时应同时更新节点与存储服务。
