@@ -47,13 +47,13 @@ def main():
     assert 'mtu: {{ tianlai_jumbo_mtu }}' in receive_template
     assert 'tianlai_send_ip' not in receive_template
     assert '"{{ tianlai_send_ip }}/{{ tianlai_cache_send_prefix_length }}"' in send_template
-    assert 'dhcp4: false' in send_template and 'dhcp6: false' in send_template
+    assert 'dhcp4: false' in send_template
     for template in (receive_template, send_template, storage_template):
         assert 'renderer: NetworkManager' in template
         assert 'dhcp4: false' in template
-        assert 'dhcp6: false' in template
-        assert 'accept-ra: false' in template
-        assert 'link-local: []' in template
+        assert 'dhcp6:' not in template
+        assert 'accept-ra:' not in template
+        assert 'link-local:' not in template
     assert 'optional: true' in send_template
     assert '"{{ tianlai_storage_receive_interface }}"' in storage_template
     assert '"{{ tianlai_storage_ip }}/{{ tianlai_storage_prefix_length }}"' in storage_template
@@ -62,7 +62,7 @@ def main():
     network_tasks = (ROOT / 'deploy/ansible/tasks/network_config.yml').read_text(encoding='utf-8')
     assert '169.254.0.0/16' not in network_tasks
     assert 'Require the configured storage IP only' in network_tasks
-    assert 'Require no IPv6 addresses on managed data interfaces' in network_tasks
+    assert 'managed_ipv6_addresses' not in network_tasks
     assert 'network-manager' in network_tasks
     assert 'Require NetworkManager ownership of managed data interfaces' in network_tasks
     inventory = (ROOT / 'deploy/ansible/inventory_example.yml').read_text(encoding='utf-8')

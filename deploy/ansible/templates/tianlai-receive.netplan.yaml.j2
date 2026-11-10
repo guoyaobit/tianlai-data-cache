@@ -7,9 +7,6 @@ network:
       renderer: NetworkManager
       mtu: {{ tianlai_jumbo_mtu }}
       dhcp4: false
-      dhcp6: false
-      accept-ra: false
-      link-local: []
       optional: true
 {% endfor %}
 {% if not tianlai_receive_netplan_interfaces %}

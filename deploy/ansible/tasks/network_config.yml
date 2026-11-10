@@ -247,23 +247,6 @@
     fail_msg: "{{ tianlai_storage_receive_interface }} must not provide a default route"
   when: "'storage' in group_names"
 
-- name: Read IPv6 addresses on all managed data interfaces
-  ansible.builtin.command:
-    argv: [ip, -j, -6, address, show, dev, "{{ item }}"]
-  loop: >-
-    {{ tianlai_receive_netplan_interfaces |
-    union([tianlai_send_interface] if 'cache_nodes' in group_names else []) |
-    union([tianlai_storage_receive_interface] if 'storage' in group_names else []) }}
-  register: managed_ipv6_addresses
-  changed_when: false
-
-- name: Require no IPv6 addresses on managed data interfaces
-  ansible.builtin.assert:
-    that:
-      - "((item.stdout | from_json | first).addr_info | length) == 0"
-    fail_msg: "{{ item.item }} still has an IPv6 address"
-  loop: "{{ managed_ipv6_addresses.results }}"
-
 - name: Display Netplan network result
   ansible.builtin.debug:
     msg:

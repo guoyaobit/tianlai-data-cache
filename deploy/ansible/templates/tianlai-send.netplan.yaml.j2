@@ -6,9 +6,6 @@ network:
       renderer: NetworkManager
       mtu: {{ tianlai_jumbo_mtu }}
       dhcp4: false
-      dhcp6: false
-      accept-ra: false
-      link-local: []
       optional: true
       addresses:
         - "{{ tianlai_send_ip }}/{{ tianlai_cache_send_prefix_length }}"
