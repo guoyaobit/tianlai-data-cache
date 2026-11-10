@@ -1,0 +1,9 @@
+---
+- name: Allow the deployment account read-only access to the install tree
+  ansible.builtin.file:
+    path: "{{ tianlai_root }}"
+    state: directory
+    owner: root
+    group: "{{ ansible_user }}"
+    mode: 'u=rwX,g=rX,o='
+    recurse: true

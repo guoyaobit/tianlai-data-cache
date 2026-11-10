@@ -39,13 +39,32 @@
       delegate_to: localhost
       become: false
       run_once: true
+    - name: Reset successful network-report host list
+      ansible.builtin.set_fact:
+        tianlai_network_report_hosts: []
+      delegate_to: localhost
+      delegate_facts: true
+      become: false
+      run_once: true
+    - name: Select hosts that completed network inventory
+      ansible.builtin.set_fact:
+        tianlai_network_report_hosts: >-
+          {{ hostvars['localhost'].tianlai_network_report_hosts + [item] }}
+      loop: "{{ ansible_play_hosts_all | sort }}"
+      when: hostvars[item].network_inventory is defined
+      delegate_to: localhost
+      delegate_facts: true
+      become: false
+      run_once: true
     - name: Save consolidated network inventory as Markdown
       ansible.builtin.template:
         src: templates/network-inventory.md.j2
         dest: "{{ playbook_dir }}/reports/network-inventory.md"
         mode: '0600'
       vars:
-        inspected_hosts: "{{ ansible_play_hosts_all | sort }}"
+        requested_hosts: "{{ ansible_play_hosts_all | sort }}"
+        inspected_hosts: "{{ hostvars['localhost'].tianlai_network_report_hosts }}"
+        missing_hosts: "{{ requested_hosts | difference(inspected_hosts) | sort }}"
       delegate_to: localhost
       become: false
       run_once: true

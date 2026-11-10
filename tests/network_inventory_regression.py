@@ -105,6 +105,15 @@ def main():
         assert inventory.ip_addresses()[0] is None
     with patch.object(inventory.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, json.dumps([]), '')):
         assert inventory.ip_addresses() == ({}, None)
+    site = (ROOT / 'deploy/ansible/site.yml').read_text(encoding='utf-8')
+    inspect = (ROOT / 'deploy/ansible/inspect_nics.yml').read_text(encoding='utf-8')
+    template = (ROOT / 'deploy/ansible/templates/network-inventory.md.j2').read_text(
+        encoding='utf-8')
+    for playbook in (site, inspect):
+        assert 'Select hosts that completed network inventory' in playbook
+        assert "when: hostvars[item].network_inventory is defined" in playbook
+        assert "hostvars['localhost'].tianlai_network_report_hosts" in playbook
+    assert '## Missing inventory' in template
     print('network inventory: interfaces, PCI devices and unavailable data passed')
 
 

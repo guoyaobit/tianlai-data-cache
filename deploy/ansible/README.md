@@ -49,7 +49,7 @@ ansible-playbook -i inventory.yml inspect_nics.yml --limit cache_nodes
 ansible-playbook -i inventory.yml inspect_nics.yml
 ```
 
-盘点结束后会在控制机生成 `reports/network-inventory.md`，使用统一列表汇总所有服务器的
+盘点结束后会在控制机生成 `reports/network-inventory.md`，使用统一列表汇总成功完成盘点的服务器；失败、不可达或未生成盘点事实的主机会列在 `Missing inventory` 中，不会导致Markdown生成任务再次失败。文档包含
 配置、接口、IP、MAC、链路速率、PCI 地址、驱动、NUMA 信息及告警。使用 `--limit` 时，文档只包含本次实际盘点的主机；
 再次执行会覆盖旧报告。该目录已被 Git 忽略，避免现场网络信息被提交到远程仓库。
 
@@ -111,7 +111,7 @@ sudo cat /opt/tianlai-store/config/network-report.yaml
 
 报告仅记录配置和观察结果，不会自动选择物理端口、设置系统 IP 或修改驱动。部署前仍需按上一节完成端口对应关系和清单填写；如果完整清单校验未通过，部署及自动报告生成均不会开始，可先单独运行 `inspect_nics.yml` 盘点。
 
-SSH登录使用系统默认配置，sudo密码仅在本次部署进程内使用，不写入磁盘。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单；存储服务器上的`tianlai-storage`会启动，缓存节点`tianlai-cache`和存储服务器上的`tianlai-controller`须由`configure_acquisition.sh`写入任务 ID 后启动。重跑部署会停止缓存服务和控制器。**停止或重启缓存服务会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。重新执行任务配置命令后必须等待约100秒预热，使用新的`event_id`触发。
+SSH登录使用系统默认配置，sudo密码仅在本次部署进程内使用，不写入磁盘。`/opt/tianlai-store` 默认保持 `root` 所有权，组设为部署账户 `ubuntu`；目录和程序允许 `ubuntu` 读取/执行，但只有 root 可以修改，避免普通用户篡改由 root 服务运行的程序。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单；存储服务器上的`tianlai-storage`会启动，缓存节点`tianlai-cache`和存储服务器上的`tianlai-controller`须由`configure_acquisition.sh`写入任务 ID 后启动。重跑部署会停止缓存服务和控制器。**停止或重启缓存服务会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。重新执行任务配置命令后必须等待约100秒预热，使用新的`event_id`触发。
 
 服务默认使用 root，节点通过 ixcap 收包；脚本没有配置防火墙或服务用户隔离，需结合现场权限和网络策略审查。软件包安装、服务启停和数据保存路径均由执行 playbook 的操作者负责确认。代码部署完成后先确认存储服务；执行任务配置命令后再确认缓存服务和控制器：
 

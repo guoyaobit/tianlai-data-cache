@@ -15,6 +15,7 @@ recv_template = (ANSIBLE / "templates" / "recv.yaml.j2").read_text(encoding="utf
 controller_template = (ANSIBLE / "templates" / "controller.service.j2").read_text(encoding="utf-8")
 deploy_script = (ANSIBLE / "deploy.sh").read_text(encoding="utf-8")
 configure_script = (ANSIBLE / "configure_acquisition.sh").read_text(encoding="utf-8")
+permissions = (ANSIBLE / "tasks" / "install_permissions.yml").read_text(encoding="utf-8")
 
 assert "tianlai_acquisition_id is match" not in site
 assert 'hosts: "cache_nodes:storage:controller"' in site
@@ -33,6 +34,10 @@ assert "ansible_ssh_private_key_file" not in settings
 assert "ansible_ssh_private_key_file" not in site
 assert "TIANLAI_SSH_PRIVATE_KEY" not in deploy_script
 assert "TIANLAI_SSH_PRIVATE_KEY" not in configure_script
+assert site.count("tasks/install_permissions.yml") == 4
+assert 'owner: root' in permissions
+assert 'group: "{{ ansible_user }}"' in permissions
+assert "mode: 'u=rwX,g=rX,o='" in permissions
 assert "default('UNCONFIGURED')" in recv_template
 assert "default('UNCONFIGURED')" in controller_template
 assert configure.index("Stop the controller before changing acquisition") < configure.index(
