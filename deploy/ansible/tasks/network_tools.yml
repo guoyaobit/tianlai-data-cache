@@ -1,7 +1,15 @@
 ---
+- name: Keep Wireshark packet capture privileged
+  ansible.builtin.debconf:
+    name: wireshark-common
+    question: wireshark-common/install-setuid
+    value: 'false'
+    vtype: boolean
+
 - name: Install network diagnostic packages
   ansible.builtin.apt:
     name:
+      - bwm-ng
       - ethtool
       - iftop
       - iperf3
@@ -16,7 +24,10 @@
       - pciutils
       - socat
       - tcpdump
+      - tshark
       - traceroute
+      - wireshark
+      - wireshark-common
     state: latest
     update_cache: true
     cache_valid_time: 3600

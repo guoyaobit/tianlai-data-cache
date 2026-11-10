@@ -16,6 +16,7 @@ assert "Install network diagnostics on all nodes" in SITE
 assert "tasks/network_tools.yml" in SITE
 
 for package in (
+    "bwm-ng",
     "ethtool",
     "iftop",
     "iperf3",
@@ -27,10 +28,15 @@ for package in (
     "nmap",
     "socat",
     "tcpdump",
+    "tshark",
     "traceroute",
+    "wireshark",
+    "wireshark-common",
 ):
     assert f"- {package}" in TASKS
 
 assert "update_cache_retries: 5" in TASKS
 assert "state: latest" in TASKS
+assert "wireshark-common/install-setuid" in TASKS
+assert "value: 'false'" in TASKS
 print("network diagnostic package deployment passed")

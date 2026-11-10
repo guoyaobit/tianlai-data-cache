@@ -42,7 +42,7 @@ bash update_software.sh
 
 该命令更新并编译缓存程序和C++落盘程序，同时更新Python控制器。更新前正在运行的服务会在程序替换后恢复运行；原本停止的服务保持停止。先更新单台缓存服务器可执行 `bash update_software.sh --limit tianlaistore1`；只更新存储/控制器可使用 `--limit storage` 或 `--limit controller`。使用INI清单时执行 `TIANLAI_INVENTORY=inventory.ini bash update_software.sh`。
 
-主部署会在所有缓存节点、存储服务器和控制器安装网络诊断工具，包括 `ethtool`、`iperf3`、`tcpdump`、`mtr`、`nmap`、`iftop` 和 `nload`。独立Playbook只安装或更新这组工具，不执行系统全量升级，也不修改网络和业务配置：
+主部署会在所有缓存节点、存储服务器和控制器安装网络诊断工具，包括 `bwm-ng`、`ethtool`、`iperf3`、`tcpdump`、完整的`wireshark`、命令行工具`tshark`、`mtr`、`nmap`、`iftop` 和 `nload`。`tshark`和`dumpcap`默认要求sudo权限。独立Playbook只安装或更新这组工具，不执行系统全量升级，也不修改网络和业务配置：
 
 ```bash
 ansible-playbook -i inventory.yml --ask-become-pass install_network_tools.yml
