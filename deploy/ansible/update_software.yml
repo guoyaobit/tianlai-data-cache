@@ -1,0 +1,240 @@
+---
+- name: Update storage receiver program
+  hosts: storage
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Require an existing storage deployment
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ tianlai_root }}/config/storage.yaml"
+        - /etc/systemd/system/tianlai-storage.service
+      register: storage_deployment_files
+    - name: Stop when storage has not been deployed
+      ansible.builtin.assert:
+        that: storage_deployment_files.results | map(attribute='stat.exists') | min
+        fail_msg: Run deploy.sh once before using update_software.sh.
+    - name: Copy storage receiver sources
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../Storage/{{ item }}"
+        dest: "{{ tianlai_root }}/src/Storage/{{ item }}"
+        mode: '0644'
+      loop: [Makefile, storage_receiver.cpp]
+    - name: Build updated storage receiver
+      ansible.builtin.command:
+        argv: [make, -j2]
+        chdir: "{{ tianlai_root }}/src/Storage"
+      environment:
+        LC_ALL: C
+      register: storage_update_build
+      changed_when: >-
+        'Nothing to be done' not in storage_update_build.stdout and
+        'is up to date' not in storage_update_build.stdout
+    - name: Validate updated storage receiver
+      ansible.builtin.command:
+        argv:
+          - "{{ tianlai_root }}/src/Storage/tianlai-storage"
+          - --config
+          - "{{ tianlai_root }}/config/storage.yaml"
+          - --check-config
+      changed_when: false
+    - name: Read storage service state
+      ansible.builtin.service_facts:
+    - name: Remember whether storage was running
+      ansible.builtin.set_fact:
+        storage_was_running: >-
+          {{ ansible_facts.services.get('tianlai-storage.service', {}).get('state', 'stopped') == 'running' }}
+    - name: Replace storage receiver while preserving service state
+      block:
+        - name: Stop running storage receiver for replacement
+          ansible.builtin.systemd:
+            name: tianlai-storage.service
+            state: stopped
+          when: storage_was_running
+        - name: Install updated storage receiver
+          ansible.builtin.copy:
+            remote_src: true
+            src: "{{ tianlai_root }}/src/Storage/tianlai-storage"
+            dest: "{{ tianlai_root }}/bin/tianlai-storage"
+            mode: '0755'
+      always:
+        - name: Restore running storage receiver
+          ansible.builtin.systemd:
+            name: tianlai-storage.service
+            state: started
+          when: storage_was_running
+    - name: Apply safe storage permissions
+      ansible.builtin.include_tasks: tasks/install_permissions.yml
+
+- name: Update cache-node programs
+  hosts: cache_nodes
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Select cache-node build profile
+      ansible.builtin.set_fact:
+        tianlai_profile: >-
+          {{ 'F0-2' if tianlai_server_id | int < 3 else
+          ('F3-10' if tianlai_server_id | int < 11 else 'F11-13') }}
+    - name: Require an existing cache deployment
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ tianlai_root }}/config/server.yaml"
+        - "{{ tianlai_root }}/config/recv.yaml"
+        - /etc/systemd/system/tianlai-cache.service
+      register: cache_deployment_files
+    - name: Stop when cache software has not been deployed
+      ansible.builtin.assert:
+        that: cache_deployment_files.results | map(attribute='stat.exists') | min
+        fail_msg: Run deploy.sh once before using update_software.sh.
+    - name: Check configured ixcap SDK paths
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ tianlai_ixcap_include }}/ixcap_lib.h"
+        - "{{ tianlai_ixcap_lib }}/libixcap.a"
+        - "{{ tianlai_ixcap_lib }}/libixcap.so"
+      register: update_ixcap_files
+    - name: Require the configured ixcap SDK
+      ansible.builtin.assert:
+        that:
+          - update_ixcap_files.results[0].stat.exists
+          - update_ixcap_files.results[1].stat.exists or update_ixcap_files.results[2].stat.exists
+        fail_msg: Install ixcap or correct tianlai_ixcap_include and tianlai_ixcap_lib.
+    - name: Copy shared cache sources
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../Common"
+        dest: "{{ tianlai_root }}/src/"
+        mode: preserve
+    - name: Copy unified cache build entry point
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../Makefile"
+        dest: "{{ tianlai_root }}/src/Makefile"
+        mode: '0644'
+    - name: Copy cache profile sources
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../{{ tianlai_profile }}/{{ item }}"
+        dest: "{{ tianlai_root }}/src/{{ tianlai_profile }}/{{ item }}"
+        mode: '0644'
+      loop: [main.cpp, Makefile]
+    - name: Build updated cache program
+      ansible.builtin.command:
+        argv:
+          - make
+          - -j2
+          - production
+          - "PROFILE={{ tianlai_profile }}"
+          - "IXCAP_INCLUDE={{ tianlai_ixcap_include }}"
+          - "IXCAP_LIB={{ tianlai_ixcap_lib }}"
+        chdir: "{{ tianlai_root }}/src"
+      environment:
+        LC_ALL: C
+      register: cache_update_build
+      changed_when: >-
+        'Nothing to be done' not in cache_update_build.stdout and
+        'is up to date' not in cache_update_build.stdout
+    - name: Validate updated cache program with existing configuration
+      ansible.builtin.command:
+        argv:
+          - "{{ tianlai_root }}/src/{{ tianlai_profile }}/tianlai-store-{{ tianlai_profile | lower }}"
+          - "{{ tianlai_root }}/config/server.yaml"
+          - "{{ tianlai_root }}/config/recv.yaml"
+          - --check-config
+      changed_when: false
+    - name: Read cache service state
+      ansible.builtin.service_facts:
+    - name: Remember whether cache was running
+      ansible.builtin.set_fact:
+        cache_was_running: >-
+          {{ ansible_facts.services.get('tianlai-cache.service', {}).get('state', 'stopped') == 'running' }}
+    - name: Replace cache program while preserving service state
+      block:
+        - name: Stop running cache for replacement
+          ansible.builtin.systemd:
+            name: tianlai-cache.service
+            state: stopped
+          when: cache_was_running
+        - name: Install updated cache program
+          ansible.builtin.copy:
+            remote_src: true
+            src: "{{ tianlai_root }}/src/{{ tianlai_profile }}/tianlai-store-{{ tianlai_profile | lower }}"
+            dest: "{{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }}"
+            mode: '0755'
+      always:
+        - name: Restore running cache
+          ansible.builtin.systemd:
+            name: tianlai-cache.service
+            state: started
+          when: cache_was_running
+    - name: Apply safe cache permissions
+      ansible.builtin.include_tasks: tasks/install_permissions.yml
+
+- name: Update trigger controller program
+  hosts: controller
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Require an existing controller deployment
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ tianlai_root }}/config/nodes.json"
+        - /etc/systemd/system/tianlai-controller.service
+      register: controller_deployment_files
+    - name: Stop when controller has not been deployed
+      ansible.builtin.assert:
+        that: controller_deployment_files.results | map(attribute='stat.exists') | min
+        fail_msg: Run deploy.sh once before using update_software.sh.
+    - name: Create controller update staging directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: tianlai-controller-update-
+      register: controller_update_temp
+    - name: Stage and validate controller programs
+      block:
+        - name: Copy controller programs to staging
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../../tools/{{ item }}"
+            dest: "{{ controller_update_temp.path }}/{{ item }}"
+            mode: '0644'
+          loop: [controller.py, durable_json.py, tcp_json.py]
+        - name: Check controller Python syntax
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, -m, py_compile, "{{ controller_update_temp.path }}/{{ item }}"]
+          loop: [controller.py, durable_json.py, tcp_json.py]
+          changed_when: false
+        - name: Read controller service state
+          ansible.builtin.service_facts:
+        - name: Remember whether controller was running
+          ansible.builtin.set_fact:
+            controller_was_running: >-
+              {{ ansible_facts.services.get('tianlai-controller.service', {}).get('state', 'stopped') == 'running' }}
+        - name: Replace controller programs while preserving service state
+          block:
+            - name: Stop running controller for replacement
+              ansible.builtin.systemd:
+                name: tianlai-controller.service
+                state: stopped
+              when: controller_was_running
+            - name: Install updated controller programs
+              ansible.builtin.copy:
+                remote_src: true
+                src: "{{ controller_update_temp.path }}/{{ item }}"
+                dest: "{{ tianlai_root }}/tools/{{ item }}"
+                mode: '0644'
+              loop: [controller.py, durable_json.py, tcp_json.py]
+          always:
+            - name: Restore running controller
+              ansible.builtin.systemd:
+                name: tianlai-controller.service
+                state: started
+              when: controller_was_running
+      always:
+        - name: Remove controller update staging directory
+          ansible.builtin.file:
+            path: "{{ controller_update_temp.path }}"
+            state: absent
+    - name: Apply safe controller permissions
+      ansible.builtin.include_tasks: tasks/install_permissions.yml

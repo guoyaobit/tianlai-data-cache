@@ -1,0 +1,8 @@
+---
+- name: Install network diagnostics on all nodes
+  hosts: "cache_nodes:storage:controller"
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Install network diagnostic packages
+      ansible.builtin.include_tasks: tasks/network_tools.yml

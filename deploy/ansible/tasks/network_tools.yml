@@ -1,0 +1,23 @@
+---
+- name: Install network diagnostic packages
+  ansible.builtin.apt:
+    name:
+      - ethtool
+      - iftop
+      - iperf3
+      - iproute2
+      - iputils-ping
+      - lsof
+      - mtr-tiny
+      - net-tools
+      - netcat-openbsd
+      - nload
+      - nmap
+      - pciutils
+      - socat
+      - tcpdump
+      - traceroute
+    state: latest
+    update_cache: true
+    cache_valid_time: 3600
+    update_cache_retries: 5

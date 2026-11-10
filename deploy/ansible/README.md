@@ -33,6 +33,22 @@ bash deploy.sh
 
 `deploy.sh`先检查清单和语法，再在本次选择的实际目标主机变量上下文中执行一次完整性预检。执行顺序为：必要网络配置、存储/缓存/控制器代码复制与编译安装、最后生成网卡报告；报告问题不会阻止前面的代码部署。可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。部署阶段不需要填写采集任务 ID：存储服务会启动，缓存服务和控制器会安装但保持停止，防止使用错误任务 ID 接收触发。
 
+首次完整部署完成后，可只更新项目源代码和程序，不修改Netplan、YAML业务配置、采集任务ID、systemd单元或系统软件包：
+
+```bash
+bash update_software.sh
+```
+
+该命令更新并编译缓存程序和C++落盘程序，同时更新Python控制器。更新前正在运行的服务会在程序替换后恢复运行；原本停止的服务保持停止。先更新单台缓存服务器可执行 `bash update_software.sh --limit tianlaistore1`；只更新存储/控制器可使用 `--limit storage` 或 `--limit controller`。使用INI清单时执行 `TIANLAI_INVENTORY=inventory.ini bash update_software.sh`。
+
+主部署会在所有缓存节点、存储服务器和控制器安装网络诊断工具，包括 `ethtool`、`iperf3`、`tcpdump`、`mtr`、`nmap`、`iftop` 和 `nload`。独立Playbook只安装或更新这组工具，不执行系统全量升级，也不修改网络和业务配置：
+
+```bash
+ansible-playbook -i inventory.yml --ask-become-pass install_network_tools.yml
+```
+
+重复执行同一命令即可将这组工具更新到当前软件源提供的最新版本。只更新单台服务器可追加 `--limit tianlaistore1`；使用INI清单时将 `inventory.yml` 替换为 `inventory.ini`。
+
 ## 部署前盘点网卡
 
 `inspect_nics.yml` 可以在完整部署配置准备好之前单独运行。所有目标服务器默认使用 `ubuntu` 账户和系统SSH配置登录；请核对要连接的服务器的 `ansible_host`，缓存节点的 `tianlai_server_id` 使用示例中的编号。以下命令以 YAML 清单为例，使用 INI 时将 `inventory.yml` 替换为 `inventory.ini`。控制机需要 Ansible 和 SSH 连接，目标服务器需要 `/usr/bin/python3`；安装 `iproute2` 后才能列出接口 IP。盘点不需要 sudo，不修改网络配置、驱动或服务。Ansible 会在目标机临时传送并执行盘点脚本。
