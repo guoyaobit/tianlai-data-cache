@@ -1,6 +1,6 @@
 ---
 - name: Validate complete deployment inventory before modifying hosts
-  hosts: localhost
+  hosts: "cache_nodes:storage:controller"
   gather_facts: false
   tasks:
     - name: Require all roles and production values
@@ -41,7 +41,8 @@
           - (tianlai_cache_send_host_offset | int) + 13 <= 254
           - tianlai_cache_send_prefix_length | int == 24
           - tianlai_storage_prefix_length | int == 24
-        fail_msg: Complete inventory_example.yml with all 14 nodes and actual deployment values.
+        fail_msg: Complete the active inventory with all 14 nodes and actual deployment values.
+      run_once: true
     - name: Require complete cache-node data
       ansible.builtin.assert:
         that:
@@ -55,15 +56,18 @@
           - "'CHANGE_ME' not in (hostvars[item].ansible_host | default('CHANGE_ME'))"
         fail_msg: "Complete cache node {{ item }}: id, management/data IPs, interface and receive PCI addresses."
       loop: "{{ groups['cache_nodes'] }}"
+      run_once: true
     - name: Require a complete unique server ID set
       ansible.builtin.assert:
         that:
           - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_server_id') | map('int') | sort == range(0, 14) | list
           - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_control_ip') | unique | list | length == 14
+      run_once: true
     - name: Require controller and storage SSH targets
       ansible.builtin.assert:
         that: "'CHANGE_ME' not in (hostvars[item].ansible_host | default('CHANGE_ME'))"
       loop: "{{ (groups['controller'] + groups['storage']) | unique }}"
+      run_once: true
 
 - name: Configure cache data IPs and jumbo MTU with Netplan
   hosts: "cache_nodes:storage:controller"

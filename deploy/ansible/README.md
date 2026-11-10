@@ -11,6 +11,7 @@
 - 缓存节点单个发送接口/源IP由 server ID 自动生成；清单只需填写存储100G口上的单个无标签IP。存储服务器固定使用 `enp152s0f0np0` 接收14台缓存节点的数据。不配置VLAN，数据接口不设置默认网关；管理网仍使用`tianlai_controller_ip`。
 - 消色散后端须在`tianlai_backend_ip:tianlai_notify_port`监听TCP/JSON。存储服务从`tianlai_controller_ip`连接并发送`CAPTURE_RESULT`；后端持久化结果后在同一连接回复`ACK_RESULT`。Playbook不部署后端，也不修改相关防火墙。
 - 管理网需放通后端→控制器TCP 18999、控制器→缓存节点TCP 19000、存储服务器→后端TCP 19001；实际端口以清单为准。
+- 当前规划中控制器业务地址为 `192.168.200.250`，消色散后端地址为 `192.168.200.10`，存储数据地址为 `192.168.210.250`，默认落盘目录为 `/data/raw-store`；部署前确认这些地址和挂载点与现场一致。
 - 如果目标上安装的 ixcap 是共享库，确保运行时动态链接器可找到该库。脚本只检查文件存在，不负责驱动、权限或网卡初始化。
 
 ## SSH登录和sudo密码
@@ -29,7 +30,7 @@ ssh-copy-id ubuntu@SERVER_IP
 bash deploy.sh
 ```
 
-`deploy.sh`先检查清单和语法，再执行完整部署；可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。部署阶段不需要填写采集任务 ID：存储服务会启动，缓存服务和控制器会安装但保持停止，防止使用错误任务 ID 接收触发。
+`deploy.sh`先检查清单和语法，再在本次选择的实际目标主机变量上下文中执行一次完整性预检，随后开始部署；可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。部署阶段不需要填写采集任务 ID：存储服务会启动，缓存服务和控制器会安装但保持停止，防止使用错误任务 ID 接收触发。
 
 ## 部署前盘点网卡
 

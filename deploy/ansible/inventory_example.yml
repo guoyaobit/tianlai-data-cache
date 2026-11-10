@@ -5,13 +5,13 @@ all:
     # OS account used by Ansible over SSH.
     ansible_user: ubuntu
     # Controller management IP on the storage server.
-    tianlai_controller_ip: CHANGE_ME
+    tianlai_controller_ip: "192.168.200.250"
     # Backend IP for triggers and completion notices.
-    tianlai_backend_ip: CHANGE_ME
+    tianlai_backend_ip: "192.168.200.10"
     # Data IP on the storage server's 100 GbE interface.
     tianlai_storage_ip: "192.168.210.250"
     # Event path under the mounted storage directory.
-    tianlai_storage_directory: CHANGE_ME
+    tianlai_storage_directory: /data/raw-store
     # First TCP port for storage data listeners.
     tianlai_storage_port: 20000
     tianlai_storage_lane1_port: 20100
