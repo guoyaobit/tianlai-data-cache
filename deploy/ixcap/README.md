@@ -54,6 +54,15 @@ TIANLAI_IXCAP_NO_START=true bash deploy_ixcap.sh
 
 底层的 `install_ixcap.sh` 由 Playbook 自动传输和执行，也可用于单机故障处理。
 
+在项目的 `deploy/ixcap` 目录直接执行时，不需要传SDK路径或许可证文件名；脚本自动使用同目录的 `packages/`：
+
+```bash
+cd deploy/ixcap
+sudo bash install_ixcap.sh
+```
+
+许可证属于机密文件，不提交到Git。只安装SDK时不需要许可证包；脚本会提示许可证尚未安装。投入生产前，应通过安全方式将许可证TAR包复制到 `deploy/ixcap/packages/` 后再次执行，脚本会根据包内的12位MAC许可证文件自动识别并安装到 `/etc/ixcap`。
+
 ## Installed files
 
 ```text

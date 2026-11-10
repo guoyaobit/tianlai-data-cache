@@ -25,6 +25,9 @@ for required in (
 assert 'license.lic' in README
 assert '/etc/ixcap/<MAC>.lic' in README
 assert '--no-start' in SCRIPT
+assert 'sdk_directory="$script_directory/packages"' in SCRIPT
+assert 'expected at most one MAC-license archive under' in SCRIPT
+assert 'Licenses: not installed' in SCRIPT
 assert 'ubuntu22.04.1-20260701.zip' not in README
 assert 'TIANLAI_IXCAP_HEADER' in WRAPPER
 assert 'TIANLAI_IXCAP_LIBRARY' in WRAPPER
