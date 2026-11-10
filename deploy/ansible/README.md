@@ -10,6 +10,7 @@
 - 真实地址、链路、网卡 PCI 地址、光模块、驱动、NUMA、交换机 Jumbo Frame 及存储挂载由现场先完成验证。`tianlai_storage_directory` 必须指向目标机已有且正确挂载的存储路径下的目录；脚本只创建目录，不验证其所在磁盘或容量。
 - 清单可使用 YAML 或 INI：复制 `inventory_example.yml` 为 `inventory.yml`，或复制 `inventory_example.ini` 为 `inventory.ini`。两份示例都包含缓存服务器 1～14（节点 0～13）及同机部署的存储/控制器；选择一种维护即可。须现场核对 SSH 地址。`tianlai_receive_devices: auto` 以 `ens2f0` 所在Intel双口万兆卡的PCI厂商/设备ID为基准，排除该发送卡的整个PCI插槽，再选择其他同型号端口；候选端口允许存在Linux网口，也允许尚未加载驱动。旧清单中的 `CHANGE_ME` 列表也自动进入该模式。节点1～3必须发现8个，节点4～14必须发现4个，否则部署停止。也可把 `auto` 替换为按端口顺序排列的PCI地址列表。缓存节点发送口统一为 `ens2f0`，地址根据 server ID 自动生成，无需逐台填写。`controller` 与 `storage` 组必须使用同一个存储服务器主机名。
 - 缓存节点单个发送接口/源IP由 server ID 自动生成；清单只需填写存储100G口上的单个无标签IP。存储服务器固定使用 `enp152s0f0np0` 接收14台缓存节点的数据。不配置VLAN，数据接口不设置默认网关；管理网仍使用`tianlai_controller_ip`。
+- 数据网口不要求物理链路处于UP状态。部署会为缓存发送口、存储100G口和已识别的高速数据口设置NetworkManager `ignore-carrier`，因此光纤暂未连接时仍可写入静态IP、MTU和代码。管理网SSH必须可达，否则Ansible无法向该节点传输文件；恢复后可用 `--limit` 单独重跑失败节点。
 - 消色散后端须在`tianlai_backend_ip:tianlai_notify_port`监听TCP/JSON。存储服务从`tianlai_controller_ip`连接并发送`CAPTURE_RESULT`；后端持久化结果后在同一连接回复`ACK_RESULT`。Playbook不部署后端，也不修改相关防火墙。
 - 管理网需放通后端→控制器TCP 18999、控制器→缓存节点TCP 19000、存储服务器→后端TCP 19001；实际端口以清单为准。
 - 当前规划中控制器业务地址为 `192.168.200.250`，消色散后端地址为 `192.168.200.10`，存储数据地址为 `192.168.210.250`，默认落盘目录为 `/data/raw-store`；部署前确认这些地址和挂载点与现场一致。

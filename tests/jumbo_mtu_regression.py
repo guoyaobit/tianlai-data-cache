@@ -70,6 +70,12 @@ def main():
     assert 'Restrict Netplan configuration permissions' in network_tasks
     assert "patterns: ['*.yaml', '*.yml']" in network_tasks
     assert 'Require NetworkManager ownership of managed data interfaces' in network_tasks
+    assert 'Configure NetworkManager to ignore data-link carrier' in network_tasks
+    assert 'tianlai_ignore_carrier_interfaces' in network_tasks
+    carrier_template = (ROOT / 'deploy/ansible/templates/tianlai-ignore-carrier.conf.j2').read_text(
+        encoding='utf-8')
+    assert 'ignore-carrier=true' in carrier_template
+    assert 'match-device=interface-name:{{ interface }}' in carrier_template
     inventory = (ROOT / 'deploy/ansible/inventory_example.yml').read_text(encoding='utf-8')
     assert 'tianlai_storage_ip: "192.168.210.250"' in inventory
     for server_id in range(14):

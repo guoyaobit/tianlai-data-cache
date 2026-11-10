@@ -111,6 +111,28 @@
     fail_msg: "Required storage receive interface {{ tianlai_storage_receive_interface }} does not exist"
   when: "'storage' in group_names"
 
+- name: Select data interfaces that must ignore carrier state
+  ansible.builtin.set_fact:
+    tianlai_ignore_carrier_interfaces: >-
+      {{ tianlai_receive_netplan_interfaces |
+      union([tianlai_send_interface] if 'cache_nodes' in group_names else []) |
+      union([tianlai_storage_receive_interface] if 'storage' in group_names else []) |
+      unique | sort }}
+  changed_when: false
+
+- name: Configure NetworkManager to ignore data-link carrier
+  ansible.builtin.template:
+    src: templates/tianlai-ignore-carrier.conf.j2
+    dest: /etc/NetworkManager/conf.d/99-tianlai-ignore-carrier.conf
+    mode: '0644'
+  register: ignore_carrier_configuration
+
+- name: Reload NetworkManager carrier policy
+  ansible.builtin.systemd:
+    name: NetworkManager.service
+    state: reloaded
+  when: ignore_carrier_configuration.changed
+
 - name: Find existing Netplan configuration files
   ansible.builtin.find:
     paths: /etc/netplan

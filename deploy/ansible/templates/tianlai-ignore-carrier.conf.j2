@@ -1,0 +1,7 @@
+# Managed by Ansible. Data links stay configured without physical carrier.
+{% for interface in tianlai_ignore_carrier_interfaces %}
+[device-tianlai-ignore-carrier-{{ loop.index }}]
+match-device=interface-name:{{ interface }}
+ignore-carrier=true
+
+{% endfor %}
