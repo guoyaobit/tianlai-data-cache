@@ -5,7 +5,8 @@
 ## 前提和清单
 
 - 控制机安装 Ansible，能通过 SSH 连接目标主机并提权；目标主机须能安装 Debian 软件包，控制器须有 Python 3.10 以上。脚本为缓存节点和存储服务器安装 libzmq 开发包，并为 C++ 存储服务安装 yaml-cpp、nlohmann-json 和编译工具。
-- 每个缓存节点事先安装对应的 `ixcap_lib.h` 和 `libixcap.a` 或 `libixcap.so`；默认在 `/usr/local/include`、`/usr/local/lib`，可在清单覆盖 `tianlai_ixcap_include`、`tianlai_ixcap_lib`。
+- 生产版缓存程序需要 `ixcap_lib.h` 和 `libixcap.a` 或 `libixcap.so`。部署优先检查清单中的 `tianlai_ixcap_include`、`tianlai_ixcap_lib`，找不到时自动搜索 `/usr/local`、`/usr`、`/opt` 和部署账户主目录。源码和配置会先复制，再执行SDK检查和编译；SDK确实不存在时源码仍保留在 `/opt/tianlai-store/src`，但生产程序无法编译。
+- ixcap尚未安装时，在Ansible master准备三个已解压的SDK文件和许可证TAR包，然后运行 [`deploy/ansible/deploy_ixcap.sh`](deploy_ixcap.sh) 统一安装SDK、MAC许可证和systemd大页服务；无需解压或指定SDK ZIP。详细说明见 [`deploy/ixcap/README.md`](../ixcap/README.md)。
 - 真实地址、链路、网卡 PCI 地址、光模块、驱动、NUMA、交换机 Jumbo Frame 及存储挂载由现场先完成验证。`tianlai_storage_directory` 必须指向目标机已有且正确挂载的存储路径下的目录；脚本只创建目录，不验证其所在磁盘或容量。
 - 清单可使用 YAML 或 INI：复制 `inventory_example.yml` 为 `inventory.yml`，或复制 `inventory_example.ini` 为 `inventory.ini`。两份示例都包含缓存服务器 1～14（节点 0～13）及同机部署的存储/控制器；选择一种维护即可。须现场核对 SSH 地址。`tianlai_receive_devices: auto` 以 `ens2f0` 所在Intel双口万兆卡的PCI厂商/设备ID为基准，排除该发送卡的整个PCI插槽，再选择其他同型号端口；候选端口允许存在Linux网口，也允许尚未加载驱动。旧清单中的 `CHANGE_ME` 列表也自动进入该模式。节点1～3必须发现8个，节点4～14必须发现4个，否则部署停止。也可把 `auto` 替换为按端口顺序排列的PCI地址列表。缓存节点发送口统一为 `ens2f0`，地址根据 server ID 自动生成，无需逐台填写。`controller` 与 `storage` 组必须使用同一个存储服务器主机名。
 - 缓存节点单个发送接口/源IP由 server ID 自动生成；清单只需填写存储100G口上的单个无标签IP。存储服务器固定使用 `enp152s0f0np0` 接收14台缓存节点的数据。不配置VLAN，数据接口不设置默认网关；管理网仍使用`tianlai_controller_ip`。
@@ -30,7 +31,7 @@ ssh-copy-id ubuntu@SERVER_IP
 bash deploy.sh
 ```
 
-`deploy.sh`先检查清单和语法，再在本次选择的实际目标主机变量上下文中执行一次完整性预检，随后开始部署；可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。部署阶段不需要填写采集任务 ID：存储服务会启动，缓存服务和控制器会安装但保持停止，防止使用错误任务 ID 接收触发。
+`deploy.sh`先检查清单和语法，再在本次选择的实际目标主机变量上下文中执行一次完整性预检。执行顺序为：必要网络配置、存储/缓存/控制器代码复制与编译安装、最后生成网卡报告；报告问题不会阻止前面的代码部署。可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。部署阶段不需要填写采集任务 ID：存储服务会启动，缓存服务和控制器会安装但保持停止，防止使用错误任务 ID 接收触发。
 
 ## 部署前盘点网卡
 

@@ -21,6 +21,21 @@ assert "tianlai_acquisition_id is match" not in site
 assert 'hosts: "cache_nodes:storage:controller"' in site
 assert "hosts: localhost" not in site
 assert site.count("run_once: true") >= 4
+assert site.index("Install storage receiver") < site.index(
+    "Generate per-server network reports after code deployment"
+)
+assert site.index("Build and install cache nodes") < site.index(
+    "Generate per-server network reports after code deployment"
+)
+assert site.index("Install trigger controller") < site.index(
+    "Generate per-server network reports after code deployment"
+)
+assert site.index("Copy shared sources") < site.index(
+    "Require the ixcap SDK for the production build"
+)
+assert "Search common locations for the ixcap header" in site
+assert "Search common locations for the ixcap library" in site
+assert "tianlai_ixcap_include_effective" in site
 assert "enabled: false\n        state: stopped" in site
 assert "tianlai_acquisition_id" not in settings
 assert "tianlai_acquisition_id" not in inventory_yml

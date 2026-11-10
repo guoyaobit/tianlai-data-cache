@@ -10,3 +10,6 @@ F11-13/tianlai-store-f11-13-simulation
 deploy/ansible/inventory.yml
 deploy/ansible/inventory.ini
 deploy/ansible/reports/
+deploy/ixcap/packages/*.lic
+deploy/ixcap/packages/*licenses*.tar.gz
+deploy/ixcap/packages/*licenses*.tgz

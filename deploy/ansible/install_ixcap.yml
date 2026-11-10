@@ -1,0 +1,116 @@
+---
+- name: Install ixcap SDK and runtime prerequisites on cache nodes
+  hosts: cache_nodes
+  become: true
+  gather_facts: false
+  vars:
+    ixcap_header: "{{ lookup('env', 'TIANLAI_IXCAP_HEADER') }}"
+    ixcap_library: "{{ lookup('env', 'TIANLAI_IXCAP_LIBRARY') }}"
+    ixcap_hugepage_script: "{{ lookup('env', 'TIANLAI_IXCAP_HUGEPAGE_SCRIPT') }}"
+    ixcap_license_archive: "{{ lookup('env', 'TIANLAI_IXCAP_LICENSE_ARCHIVE') }}"
+    ixcap_pages_per_node: >-
+      {{ lookup('env', 'TIANLAI_IXCAP_HUGEPAGES_PER_NODE') | default('5120', true) }}
+    ixcap_no_start: >-
+      {{ lookup('env', 'TIANLAI_IXCAP_NO_START') | default('false', true) | bool }}
+  pre_tasks:
+    - name: Check ixcap packages on the Ansible master
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ ixcap_header }}"
+        - "{{ ixcap_library }}"
+        - "{{ ixcap_hugepage_script }}"
+        - "{{ ixcap_license_archive }}"
+      register: ixcap_master_packages
+      delegate_to: localhost
+      become: false
+      run_once: true
+    - name: Require all ixcap inputs on the Ansible master
+      ansible.builtin.assert:
+        that:
+          - ixcap_master_packages.results[0].stat.isreg | default(false)
+          - ixcap_master_packages.results[1].stat.isreg | default(false)
+          - ixcap_master_packages.results[2].stat.isreg | default(false)
+          - ixcap_master_packages.results[3].stat.isreg | default(false)
+        fail_msg: Run deploy_ixcap.sh so it can discover the extracted SDK files and license archive.
+      delegate_to: localhost
+      become: false
+      run_once: true
+  tasks:
+    - name: Create temporary ixcap installation directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: tianlai-ixcap-
+      register: ixcap_remote_temp
+    - name: Install ixcap from master packages
+      block:
+        - name: Create remote ixcap SDK directory
+          ansible.builtin.file:
+            path: "{{ ixcap_remote_temp.path }}/sdk"
+            state: directory
+            mode: '0700'
+        - name: Copy standalone ixcap installer
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../ixcap/install_ixcap.sh"
+            dest: "{{ ixcap_remote_temp.path }}/install_ixcap.sh"
+            mode: '0700'
+        - name: Copy ixcap SDK header
+          ansible.builtin.copy:
+            src: "{{ ixcap_header }}"
+            dest: "{{ ixcap_remote_temp.path }}/sdk/ixcap_lib.h"
+            mode: '0600'
+        - name: Copy ixcap SDK library
+          ansible.builtin.copy:
+            src: "{{ ixcap_library }}"
+            dest: "{{ ixcap_remote_temp.path }}/sdk/libixcap.a"
+            mode: '0600'
+        - name: Copy ixcap hugepage script
+          ansible.builtin.copy:
+            src: "{{ ixcap_hugepage_script }}"
+            dest: "{{ ixcap_remote_temp.path }}/sdk/init-huge-page-2MB.sh"
+            mode: '0600'
+        - name: Copy ixcap MAC-license package
+          ansible.builtin.copy:
+            src: "{{ ixcap_license_archive }}"
+            dest: "{{ ixcap_remote_temp.path }}/licenses.tar.gz"
+            mode: '0600'
+        - name: Run standalone ixcap installer
+          ansible.builtin.command:
+            argv: >-
+              {{ ['/bin/bash', ixcap_remote_temp.path ~ '/install_ixcap.sh',
+              '--sdk-dir', ixcap_remote_temp.path ~ '/sdk',
+              '--licenses', ixcap_remote_temp.path ~ '/licenses.tar.gz',
+              '--pages-per-node', ixcap_pages_per_node | string]
+              + (['--no-start'] if ixcap_no_start else []) }}
+          register: ixcap_install_result
+          changed_when: true
+        - name: Check installed ixcap SDK files
+          ansible.builtin.stat:
+            path: "{{ item }}"
+          loop:
+            - /usr/local/include/ixcap_lib.h
+            - /usr/local/lib/libixcap.a
+            - /etc/systemd/system/ixcap-hugepages.service
+          register: installed_ixcap_files
+        - name: Count installed ixcap licenses
+          ansible.builtin.find:
+            paths: /etc/ixcap
+            patterns: '*.lic'
+            file_type: file
+          register: installed_ixcap_licenses
+        - name: Require a complete ixcap installation
+          ansible.builtin.assert:
+            that:
+              - installed_ixcap_files.results | map(attribute='stat.exists') | min
+              - installed_ixcap_licenses.matched | int > 0
+        - name: Display ixcap installation result
+          ansible.builtin.debug:
+            msg:
+              host: "{{ inventory_hostname }}"
+              licenses: "{{ installed_ixcap_licenses.matched }}"
+              output: "{{ ixcap_install_result.stdout_lines }}"
+      always:
+        - name: Remove transferred ixcap installation files
+          ansible.builtin.file:
+            path: "{{ ixcap_remote_temp.path }}"
+            state: absent
