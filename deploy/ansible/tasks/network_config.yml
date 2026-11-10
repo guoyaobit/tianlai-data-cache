@@ -7,6 +7,7 @@
     cmd: >-
       files/discover_receive_devices.py
       --expected-count {{ 8 if tianlai_server_id | int < 3 else 4 }}
+      --exclude-interface {{ tianlai_send_interface }}
     executable: /usr/bin/python3
   register: discovered_receive_devices_raw
   changed_when: false
