@@ -30,8 +30,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.100"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 8 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore2:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.129"
@@ -42,8 +42,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.101"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 8 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore3:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.130"
@@ -54,8 +54,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.102"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 8 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore4:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.131"
@@ -66,8 +66,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.103"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore5:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.132"
@@ -78,8 +78,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.104"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore6:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.133"
@@ -90,8 +90,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.105"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore7:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.134"
@@ -102,8 +102,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.106"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore8:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.135"
@@ -114,8 +114,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.107"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore9:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.136"
@@ -126,8 +126,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.108"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore10:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.137"
@@ -138,8 +138,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.109"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore11:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.138"
@@ -150,8 +150,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.110"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore12:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.139"
@@ -162,8 +162,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.111"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore13:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.140"
@@ -174,8 +174,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.112"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
         tianlaistore14:
           # Host IP used by Ansible over SSH.
           ansible_host: "172.0.0.141"
@@ -186,8 +186,8 @@ all:
           # Single physical interface and its untagged data-subnet address.
           tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.113"
-          # ixcap PCI list: 8 entries for nodes 0-2; 4 for others.
-          tianlai_receive_devices: [CHANGE_ME, CHANGE_ME, CHANGE_ME, CHANGE_ME]
+          # Auto-discovers 4 Intel ixcap PCI devices without Linux netdevs.
+          tianlai_receive_devices: auto
     controller:
       hosts:
         # Controller and storage run on the same storage host.

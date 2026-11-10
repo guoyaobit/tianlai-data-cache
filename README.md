@@ -42,7 +42,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 
 先修改每台对应的 `server_XX.yaml` 和该组的 `receive_config.yaml`：
 
-- 将 `deviceName0..7` 或 `deviceName0..3` 改为实际接收 PCI 地址。
+- Ansible部署默认自动发现没有Linux网口的Intel接收卡，允许驱动尚未加载；手工运行时将 `deviceName0..7` 或 `deviceName0..3` 改为实际接收 PCI 地址。
 - 填写单个存储网口对应的 `sendEthName`、本地IPv4、存储端IPv4及两个逻辑lane端口。
 - `controlBindIp/controlPort` 是管理网 TCP/JSON 监听地址；`controlPeerIp` 只允许调度机地址。
 - 所有节点及调度程序使用同一个实际 `acquisitionId`；前端复位后重新建立任务。

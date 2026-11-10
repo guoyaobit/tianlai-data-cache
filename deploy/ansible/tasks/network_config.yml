@@ -2,6 +2,30 @@
 - name: Derive cache data-network values
   ansible.builtin.include_tasks: cache_send_facts.yml
 
+- name: Discover Intel ixcap receive devices
+  ansible.builtin.script:
+    cmd: >-
+      files/discover_receive_devices.py
+      --expected-count {{ 8 if tianlai_server_id | int < 3 else 4 }}
+    executable: /usr/bin/python3
+  register: discovered_receive_devices_raw
+  changed_when: false
+  check_mode: false
+  when:
+    - "'cache_nodes' in group_names"
+    - >-
+      (tianlai_receive_devices | default('auto')) == 'auto' or
+      ('CHANGE_ME' in (tianlai_receive_devices | default('') | string))
+
+- name: Use automatically discovered receive PCI addresses
+  ansible.builtin.set_fact:
+    tianlai_receive_devices: "{{ (discovered_receive_devices_raw.stdout | from_json).pci_addresses }}"
+    tianlai_receive_device_report: "{{ discovered_receive_devices_raw.stdout | from_json }}"
+  changed_when: false
+  when:
+    - "'cache_nodes' in group_names"
+    - discovered_receive_devices_raw is not skipped
+
 - name: Require a valid cache data IPv4 address before changing Netplan
   ansible.builtin.assert:
     that:

@@ -50,11 +50,22 @@
           - hostvars[item].tianlai_server_id | int >= 0
           - hostvars[item].tianlai_server_id | int <= 13
           - hostvars[item].tianlai_control_ip | default('') is match('^[0-9.]+$')
-          - hostvars[item].tianlai_receive_devices | default([]) | length == (8 if hostvars[item].tianlai_server_id | int < 3 else 4)
-          - "'CHANGE_ME' not in (hostvars[item].tianlai_receive_devices | default([]) | join(' '))"
-          - hostvars[item].tianlai_receive_devices | default([]) | unique | list | length == hostvars[item].tianlai_receive_devices | default([]) | length
+          - >-
+            (hostvars[item].tianlai_receive_devices | default('auto')) == 'auto' or
+            ('CHANGE_ME' in (hostvars[item].tianlai_receive_devices | default('') | string)) or
+            (hostvars[item].tianlai_receive_devices | length ==
+            (8 if hostvars[item].tianlai_server_id | int < 3 else 4))
+          - >-
+            (hostvars[item].tianlai_receive_devices | default('auto')) == 'auto' or
+            ('CHANGE_ME' in (hostvars[item].tianlai_receive_devices | default('') | string)) or
+            ('CHANGE_ME' not in (hostvars[item].tianlai_receive_devices | join(' ')))
+          - >-
+            (hostvars[item].tianlai_receive_devices | default('auto')) == 'auto' or
+            ('CHANGE_ME' in (hostvars[item].tianlai_receive_devices | default('') | string)) or
+            (hostvars[item].tianlai_receive_devices | unique | list | length ==
+            hostvars[item].tianlai_receive_devices | length)
           - "'CHANGE_ME' not in (hostvars[item].ansible_host | default('CHANGE_ME'))"
-        fail_msg: "Complete cache node {{ item }}: id, management/data IPs, interface and receive PCI addresses."
+        fail_msg: "Complete cache node {{ item }}: id, management/data IPs, interface, or use auto/manual receive PCI addresses."
       loop: "{{ groups['cache_nodes'] }}"
       run_once: true
     - name: Require a complete unique server ID set
