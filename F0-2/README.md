@@ -9,6 +9,6 @@ make -j4
 sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
 ```
 
-运行前须填写实际PCI地址、单个存储发送接口、管理/发送IP及全局采集编号。
+运行前须填写实际PCI地址、单个存储发送接口及管理/发送IP；内部采集标识固定为`tianlai`。
 沿用 GPU 程序命名的收包、缓存、配置和线程模块位于 `../Common/`，与另一组共用。
 内存、触发、调度、存储格式和测试说明见 [总说明](../README.md)。

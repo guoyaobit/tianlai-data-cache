@@ -32,7 +32,7 @@ ssh-copy-id ubuntu@SERVER_IP
 bash deploy.sh
 ```
 
-`deploy.sh`先检查清单和语法，再在本次选择的实际目标主机变量上下文中执行一次完整性预检。执行顺序为：必要网络配置、存储/缓存/控制器代码复制与编译安装、最后生成网卡报告；报告问题不会阻止前面的代码部署。可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。部署阶段不需要填写采集任务 ID：存储服务会启动，缓存服务和控制器会安装但保持停止，防止使用错误任务 ID 接收触发。
+`deploy.sh`先检查清单和语法，再在本次选择的实际目标主机变量上下文中执行一次完整性预检。执行顺序为：必要网络配置、存储/缓存/控制器代码复制与编译安装、最后生成网卡报告；报告问题不会阻止前面的代码部署。可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。节点内部固定使用 `acquisitionId: tianlai`，无需在清单或部署命令中填写；部署完成后自动启用并启动存储、缓存和控制器服务。
 
 首次完整部署完成后，可只更新项目源代码和程序，不修改Netplan、YAML业务配置、采集任务ID、systemd单元或系统软件包：
 
@@ -109,14 +109,6 @@ bash deploy.sh
 ansible-playbook -i inventory.yml --syntax-check site.yml
 ansible-playbook -i inventory.yml --ask-become-pass site.yml
 
-# Set the acquisition ID, then start all cache nodes and the controller.
-bash configure_acquisition.sh tianlai-20261109-run01
-```
-
-`configure_acquisition.sh` 是观测任务配置命令。参数只能包含 1～64 个字母、数字、下划线或连字符。它会把同一个 `acquisitionId` 写入全部14台缓存节点和控制器，校验缓存配置，然后统一启用并重启缓存服务和控制器；存储服务无需重启。切换采集任务时再次执行该命令即可，无需重新部署代码。使用 INI 清单时执行：
-
-```bash
-TIANLAI_INVENTORY=inventory.ini bash configure_acquisition.sh tianlai-20261109-run01
 ```
 
 完整清单通过校验后，部署会自动在每台缓存服务器和兼任控制器的存储服务器生成 `{{ tianlai_root }}/config/network-report.yaml`（默认 `/opt/tianlai-store/config/network-report.yaml`），同时在控制机更新 `reports/network-inventory.md`，并在存储服务器生成 `/opt/tianlai-store/config/storage.yaml`。重复部署时更新。可在对应服务器上查看：
@@ -129,9 +121,9 @@ sudo cat /opt/tianlai-store/config/network-report.yaml
 
 报告仅记录配置和观察结果，不会自动选择物理端口、设置系统 IP 或修改驱动。部署前仍需按上一节完成端口对应关系和清单填写；如果完整清单校验未通过，部署及自动报告生成均不会开始，可先单独运行 `inspect_nics.yml` 盘点。
 
-SSH登录使用系统默认配置，sudo密码仅在本次部署进程内使用，不写入磁盘。`/opt/tianlai-store` 默认保持 `root` 所有权，组设为部署账户 `ubuntu`；目录和程序允许 `ubuntu` 读取/执行，但只有 root 可以修改，避免普通用户篡改由 root 服务运行的程序。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单；存储服务器上的`tianlai-storage`会启动，缓存节点`tianlai-cache`和存储服务器上的`tianlai-controller`须由`configure_acquisition.sh`写入任务 ID 后启动。重跑部署会停止缓存服务和控制器。**停止或重启缓存服务会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。重新执行任务配置命令后必须等待约100秒预热，使用新的`event_id`触发。
+SSH登录使用系统默认配置，sudo密码仅在本次部署进程内使用，不写入磁盘。`/opt/tianlai-store` 默认保持 `root` 所有权，组设为部署账户 `ubuntu`；目录和程序允许 `ubuntu` 读取/执行，但只有 root 可以修改，避免普通用户篡改由 root 服务运行的程序。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单，并自动启动存储、缓存和控制器服务。重跑完整部署会重启缓存服务和控制器。**停止或重启缓存服务会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。服务重启后必须等待约100秒预热，并始终使用全局唯一的新`event_id`触发。
 
-服务默认使用 root，节点通过 ixcap 收包；脚本没有配置防火墙或服务用户隔离，需结合现场权限和网络策略审查。软件包安装、服务启停和数据保存路径均由执行 playbook 的操作者负责确认。代码部署完成后先确认存储服务；执行任务配置命令后再确认缓存服务和控制器：
+服务默认使用 root，节点通过 ixcap 收包；脚本没有配置防火墙或服务用户隔离，需结合现场权限和网络策略审查。软件包安装、服务启停和数据保存路径均由执行 playbook 的操作者负责确认。代码部署完成后确认三个服务：
 
 ```bash
 systemctl status tianlai-storage.service

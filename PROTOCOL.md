@@ -19,10 +19,9 @@
 触发以信号采集编号为准，TCP控制请求到达时间和服务器系统时间不参与选取数据。
 仅接受已经定稿的历史区间；不等待未来未到的数据。
 
-所有节点启动时使用同一 acquisition_id。控制器 `--integration-per-trace` 和 `--period-us` 必须分别与所有节点 `receive_config.yaml` 中的 `integrationPerTrace`、`periodMicroseconds` 一致，默认 50000 和 200；控制器不会自动验证节点配置的一致性。原始包没有 acquisition_id，它由采集管理约定。
+节点、控制器和存储内部固定使用 `acquisition_id=tianlai`，外部触发和确认均可省略该字段。控制器 `--integration-per-trace` 和 `--period-us` 必须分别与所有节点 `receive_config.yaml` 中的 `integrationPerTrace`、`periodMicroseconds` 一致，默认 50000 和 200；控制器不会自动验证节点配置的一致性。
 远端和原系统须有相同的积分计数起点，才能使用同一区间代表同一物理时间；本版不做时钟偏移换算。
-前端清零、重启或 trace 20 位回绕时，需协调停止旧任务，并以新 acquisition_id 重启缓存
-程序重新积累。禁止跨任务/跨计数回绕触发，不能靠收到一个倒退的包推断新任务。
+前端清零、重启或 trace 20 位回绕时，需协调停止并重启缓存程序重新积累。禁止跨任务/跨计数回绕触发，不能靠收到一个倒退的包推断新任务；`event_id`必须全局唯一且不得跨观测重复使用。
 
 ## 千兆内网 TCP + JSON 控制
 
@@ -34,12 +33,11 @@
 {
   "version": 1,
   "request_id": "req-000001",
-  "acquisition_id": "acq-20260918-001",
   "command": "QUERY_STATUS"
 }
 ```
 
-ID 字段只能使用 ASCII 字母、数字、下划线、短横线，长度 1～64。
+request_id和event_id只能使用 ASCII 字母、数字、下划线、短横线，长度 1～64。外部请求若仍携带`acquisition_id`，其值必须为`tianlai`；错误值会被拒绝。
 重复 JSON 字段在控制器和节点端均被拒绝；节点端不接受数组。计数及长度须是 JSON 整数，不接受小数、布尔值或负数。
 节点回复携带 version、request_id 和 server_id。控制器回复携带 version、request_id。
 错误回复为 `status=ERROR, error=原因`。
@@ -56,7 +54,6 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
 {
   "version": 1,
   "request_id": "req-000002",
-  "acquisition_id": "acq-20260918-001",
   "command": "CAPTURE",
   "event_id": "event-000001",
   "channel_count": 288,
@@ -92,18 +89,18 @@ COMPLETED 只表示事件保存完成，不代表已经恢复完整 100 秒历�
 C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～13（384路）各自两个lane全部持久化且元数据一致后，先写入事件级`storage-complete.json`，再通过TCP/JSON通知消色散后端：
 
 ```json
-{"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"acq-20260918-001","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0}}
+{"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"tianlai","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0}}
 ```
 
 `STORED`精确表示所选模式的11台或14台数据均已写盘并形成持久化标记；它不表示控制器已经完成缓存释放。缺包数量见`missing_by_server`，因此该通知也不是零丢包保证。
 
-后端应按 `(acquisition_id,event_id)` 幂等地持久化并处理结果，再使用监听通知的同一个 UDP 套接字，向收到报文的来源 IP 和临时端口回复：
+后端应按全局唯一的`event_id`幂等地持久化并处理结果，再在同一TCP连接回复：
 
 ```json
-{"version":1,"command":"ACK_RESULT","status":"ACKNOWLEDGED","acquisition_id":"acq-20260918-001","event_id":"event-000001"}
+{"version":1,"command":"ACK_RESULT","status":"ACKNOWLEDGED","event_id":"event-000001"}
 ```
 
-存储服务连接后端默认TCP 19001，在同一连接发送长度前缀JSON并等待ACK_RESULT。确认报文的命令、状态、采集编号和事件编号全部匹配后才写入`backend-acknowledged.json`。超时、断线或重启后，存储服务会从`storage-complete.json`继续建立新连接重试，因此后端必须按事件编号处理重复通知。`tools/result_listener.py`是演示接收器，打印后立即确认，不提供业务侧持久化。控制器不再转发完成通知，也不处理`ACK_RESULT`。若事件暂停，仍通过控制器的`QUERY_EVENT`查询并按`RESUME`或`CANCEL`处理。
+存储服务连接后端默认TCP 19001，在同一连接发送长度前缀JSON并等待ACK_RESULT。确认报文的命令、状态和事件编号匹配后才写入`backend-acknowledged.json`；为兼容旧后端，ACK若携带`acquisition_id`则必须为`tianlai`。超时、断线或重启后，存储服务会从`storage-complete.json`继续建立新连接重试，因此后端必须按事件编号处理重复通知。`tools/result_listener.py`是演示接收器，打印后立即确认，不提供业务侧持久化。控制器不再转发完成通知，也不处理`ACK_RESULT`。若事件暂停，仍通过控制器的`QUERY_EVENT`查询并按`RESUME`或`CANCEL`处理。
 
 ### 控制器 → 节点（默认 TCP 19000）
 
@@ -146,7 +143,7 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
   "version": 1,
   "format": "TLSTORE1",
   "event_id": "event-000001",
-  "acquisition_id": "acq-20260918-001",
+  "acquisition_id": "tianlai",
   "server_id": 3,
   "lane": 0,
   "channel_count": 288,
@@ -231,13 +228,13 @@ C++ 存储接收器检查长度、区间、映射、每个有效包的头字段�
   "version": 1,
   "status": "STORED",
   "event_id": "event-000001",
-  "acquisition_id": "acq-20260918-001",
+  "acquisition_id": "tianlai",
   "server_id": 3,
   "lane": 0
 }
 ```
 
-节点收到单路匹配的 STORED（覆盖本机全部接收口）才转为 STORED；UDP RELEASE 不能伪造这一状态跃迁。
+节点收到单路匹配的 STORED（覆盖本机全部接收口）才转为 STORED；TCP RELEASE 不能伪造这一状态跃迁。
 会话失败重试从本节点事件开头发送，接收端按固定偏移写入，元数据不同则拒绝覆盖。
 同节点同 lane 不允许并发会话写文件。接收器重启允许重传；没有磁盘成功确认的数据
 仍保存在节点 RAM，除非显式取消或节点进程退出。

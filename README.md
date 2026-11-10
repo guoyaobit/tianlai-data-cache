@@ -45,8 +45,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 - Ansible部署默认以 `ens2f0` 的Intel双口万兆卡型号为基准，排除该发送卡并自动发现其他同型号接收端口，端口可以有Linux网口或尚未加载驱动；手工运行时将 `deviceName0..7` 或 `deviceName0..3` 改为实际接收 PCI 地址。
 - 填写单个存储网口对应的 `sendEthName`、本地IPv4、存储端IPv4及两个逻辑lane端口。
 - `controlBindIp/controlPort` 是管理网 TCP/JSON 监听地址；`controlPeerIp` 只允许调度机地址。
-- 所有节点及调度程序使用同一个实际 `acquisitionId`；前端复位后重新建立任务。
-- `acquisitionId` 不属于代码部署清单；部署后用 `deploy/ansible/configure_acquisition.sh ACQUISITION_ID` 统一写入14台缓存节点和控制器并启动服务。
+- 节点间内部固定使用 `acquisitionId: tianlai`；现场无需配置，消色散后端触发时省略该字段。
 - `transitionWarnPercent` 默认 80；过渡区达到该占用比例时记录一次 WARN，并在查询结果中置警告标志。
 - `chunkPeriods` 默认 64；它控制单个 ZeroMQ 数据块的积分周期数，应结合消息内存和吞吐实测调整。
 - 配置适合网卡 NUMA 拓扑的 `cpuIdN`；默认 -1 不绑定。内存预触页默认开启；
@@ -57,7 +56,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
   5 个备份。WARN 及以上立即刷新，其他日志按约 3 秒周期刷新；日志并非事件持久化凭据。
 
 节点 YAML 的 `controlBindIp` 按部署说明填入缓存服务器内网规划地址 `172.0.0.128～141`（server 0～13 对应 tianlaistore1～14），须现场核对。控制器业务地址为 `192.168.200.250`，消色散后端地址为 `192.168.200.10`，存储数据网地址为 `192.168.210.250`。当前配置统一使用 YAML。
-程序在正式启动时拒绝未填写的 PCI 地址、发送接口或采集编号。
+程序在正式启动时拒绝未填写的 PCI 地址或发送接口。
 
 ```bash
 cd F0-2
@@ -126,11 +125,11 @@ sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
 `tianlai-controller.service` 和 `tianlai-storage.service`。控制器绑定管理网 IP，落盘服务绑定高速数据网 IP；两者不共用数据端口。
 
 复制并修改 `tools/nodes_example.json` 的 14 台管理网地址，然后在调度机运行。
-远端和原系统须使用同一积分计数起点；同一 acquisitionId 不会自动校正采集时钟偏差。
+远端和原系统须使用同一积分计数起点；内部固定标识不会自动校正采集时钟偏差。
 
 ```bash
 python3 tools/controller.py --nodes tools/nodes_example.json \
-  --acquisition acq-20260918-001 --journal /data/store-control \
+  --journal /data/store-control \
   --bind 192.168.200.250 --allow-source 192.168.200.10
 ```
 
@@ -146,14 +145,14 @@ python3 tools/trigger.py --host 192.168.200.250 --file tools/trigger_example.jso
 
 在触发JSON中设置`"channel_count":288`或`384`；省略时默认384。返回PREPARING表示请求正在处理；查询事件得到PREPARED/STORING后才表明所选模式全部节点已保护。控制器只有确认所有节点STORED后才统一RELEASE，单节点故障不会提前释放其他节点缓存。
 QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
-本字段同时进入缓存事件和TLSTORE1元数据。升级时必须先停止触发并处理完旧事件，在维护窗口统一更新控制器、14台缓存服务和存储服务，再使用新的`acquisition_id`启动，不能混跑不含该字段的旧版进程。
+内部固定标识仍进入缓存事件和TLSTORE1元数据。升级时必须先停止触发并处理完旧事件，在维护窗口统一更新控制器、14台缓存服务和存储服务，不能混跑协议版本不同的进程。
 所选模式的11台或14台节点持久化完成后，C++存储服务通过TCP/JSON直接向消色散后端发送
 `CAPTURE_RESULT`；后端持久化结果后向报文来源地址回复 `ACK_RESULT`。未确认结果会落盘保存并在重启后继续重试。示例接收器为 `tools/result_listener.py`，协议和缺包含义见 `PROTOCOL.md`。默认要求配置全部
 14台，单节点联调用`--allow-partial`，不能用该模式表示288或384路全部完成。
 原始输入头的 `ifTrace` 不充当触发位，也不修改保留字节。
 协议字段和状态详见 [PROTOCOL.md](PROTOCOL.md)。
 
-任何准备失败、UDP 确认不明或落盘故障会使调度事件 PAUSED，保留节点可能已保护的数据，
+任何准备失败、TCP 确认不明或落盘故障会使调度事件 PAUSED，保留节点可能已保护的数据，
 阻止新的独立事件。查询确认后使用 RESUME 继续，或明确 CANCEL 放弃。
 调度器有磁盘日志，重启后未完成事件标为 PAUSED，等待 RESUME 查询节点实际状态再继续。
 不要直接启动第二个调度器处理相同节点。全部节点返回 RELEASED 后事件 COMPLETED，

@@ -183,10 +183,9 @@
   hosts: cache_nodes
   become: true
   tasks:
-    - name: Stop cache until acquisition is configured
+    - name: Stop cache during deployment
       ansible.builtin.systemd:
         name: tianlai-cache.service
-        enabled: false
         state: stopped
       failed_when: false
     - name: Require Debian-family Linux
@@ -336,12 +335,12 @@
       notify: stop cache after deployment
     - name: Apply cache changes before enabling
       ansible.builtin.meta: flush_handlers
-    - name: Keep cache stopped until acquisition is configured
+    - name: Enable and start cache
       ansible.builtin.systemd:
         name: tianlai-cache.service
         daemon_reload: true
-        enabled: false
-        state: stopped
+        enabled: true
+        state: started
     - name: Apply safe cache install-tree permissions
       ansible.builtin.include_tasks: tasks/install_permissions.yml
   handlers:
@@ -355,10 +354,9 @@
   hosts: controller
   become: true
   tasks:
-    - name: Stop controller until acquisition is configured
+    - name: Stop controller during deployment
       ansible.builtin.systemd:
         name: tianlai-controller.service
-        enabled: false
         state: stopped
       failed_when: false
     - name: Require Debian-family Linux
@@ -403,12 +401,12 @@
       notify: stop controller after deployment
     - name: Apply controller changes before enabling
       ansible.builtin.meta: flush_handlers
-    - name: Keep controller stopped until acquisition is configured
+    - name: Enable and start controller
       ansible.builtin.systemd:
         name: tianlai-controller.service
         daemon_reload: true
-        enabled: false
-        state: stopped
+        enabled: true
+        state: started
     - name: Apply safe controller install-tree permissions
       ansible.builtin.include_tasks: tasks/install_permissions.yml
   handlers:

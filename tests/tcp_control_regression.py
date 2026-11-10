@@ -52,11 +52,10 @@ def main():
         nodes = directory / 'nodes.json'
         nodes.write_text(json.dumps([dict(server_id=0, host='127.0.0.1', port=19000)]))
         request = directory / 'request.json'
-        request.write_text(json.dumps(dict(version=1, acquisition_id='acq',
-                                           command='QUERY_EVENT', event_id='missing')))
+        request.write_text(json.dumps(dict(version=1, command='QUERY_EVENT', event_id='missing')))
         process = subprocess.Popen([
             sys.executable, str(ROOT / 'tools/controller.py'), '--nodes', str(nodes),
-            '--acquisition', 'acq', '--journal', str(directory / 'journal'),
+            '--journal', str(directory / 'journal'),
             '--bind', '127.0.0.1', '--port', str(port), '--allow-source', '127.0.0.1',
             '--allow-partial'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         try:

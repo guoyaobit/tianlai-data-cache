@@ -548,7 +548,8 @@ class CompletionNotifier {
             auto ack = json::parse(reply.begin(), reply.end());
             require(ack.is_object() && integer(ack, "version") == 1 && ack.at("command") == "ACK_RESULT" &&
                     ack.at("status") == "ACKNOWLEDGED" &&
-                    ack.at("acquisition_id") == notice.at("acquisition_id") &&
+                    (!ack.contains("acquisition_id") ||
+                     ack.at("acquisition_id") == notice.at("acquisition_id")) &&
                     ack.at("event_id") == notice.at("event_id"), "invalid backend completion acknowledgment");
             atomic_json(event_directory / "backend-acknowledged.json", ack);
             close_tcp(socket);

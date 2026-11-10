@@ -20,7 +20,7 @@
 ## 2. 部署前准备
 
 1. 确认 0～13 号缓存服务器的接收口、PCI 地址、内存、管理网和专用数据发送口；确认存储服务器的管理网地址、高速数据网地址及落盘目录。控制器与落盘服务部署在这台存储服务器上。
-2. 确认中心站和远端的积分周期计数起点一致；所有节点及控制器使用同一采集编号。前端计数复位、重启或回绕时，停止旧任务并建立新的采集编号。
+2. 确认中心站和远端的积分周期计数起点一致。前端计数复位、重启或回绕时，停止旧任务并重启缓存重新预热；后续事件继续使用全局唯一的新`event_id`。
 3. 核实Linux、g++、Boost头文件、yaml-cpp、spdlog（含fmt）开发库、Python 3.10+和生产环境的ixcap头文件及库。验证全路径MTU、光链路、内存和NUMA；地址及端口须由现场网络规划确定。
    管理网需要放通：后端到控制器TCP 18999、控制器到14台缓存节点TCP 19000、存储服务器到后端TCP 19001。
 4. 保留 `Common/` 与 `F0-2/`、`F3-10/`、`F11-13/` 的相对目录；大小写与示例一致。原压缩包中的 `build/` 和可执行文件不代表当前源码已构建，应在目标环境重新编译。
@@ -36,7 +36,7 @@
 
 | 文件 / 字段 | 要填写或核对的内容 |
 | --- | --- |
-| `receive_config.yaml` / `acquisitionId` | 全体节点与控制器一致，替换 `acq-CHANGE_ME`。 |
+| `receive_config.yaml` / `acquisitionId` | 内部固定为 `tianlai`，现场无需修改。 |
 | `integrationPerTrace` / `periodMicroseconds` | 默认 50000 / 200；须与前端实际包头一致。 |
 | `halfBufferSeconds` / `maxEventSeconds` | 默认 50 / 5；当前代码对事件长度有 5 秒上限。 |
 | `transitionMiB` / `reserveMemoryMiB` | 默认每台 32768 / 49152 MiB；分别为全机过渡区及系统预留。 |
@@ -95,11 +95,11 @@ cd F0-2
 
    ```bash
    python3 tools/controller.py --nodes tools/nodes_example.json \
-     --acquisition acq-20260918-001 --journal /data/store-control \
+     --journal /data/store-control \
      --bind 192.168.200.250 --allow-source 192.168.200.10
    ```
 
-   此处采集编号和地址均为示例。控制器和落盘服务是同机的两个独立进程：控制器走管理网，落盘服务走高速数据网。控制器默认 `--period-us 200 --integration-per-trace 50000`，须与所有节点对应配置一致；程序不会自动验证此一致性。生产默认必须配置 0～13 全部节点；`--allow-partial` 只用于模拟或部分节点联调。不要启动两个控制器同时管理相同节点。
+   此处地址为示例。控制器内部固定使用`tianlai`，外部请求不填写采集编号。控制器和落盘服务是同机的两个独立进程：控制器走管理网，落盘服务走高速数据网。控制器默认 `--period-us 200 --integration-per-trace 50000`，须与所有节点对应配置一致；程序不会自动验证此一致性。生产默认必须配置 0～13 全部节点；`--allow-partial` 只用于模拟或部分节点联调。不要启动两个控制器同时管理相同节点。
 
 4. 消色散后端通过TCP/JSON监听19001，接收C++存储程序发来的写盘完成通知，并在同一连接回复确认。供联调的示例：
 
@@ -112,11 +112,11 @@ cd F0-2
 
 ## 5. 检查状态与发送触发
 
-通过后端或`tools/trigger.py`发送带4字节长度前缀的TCP JSON。以下示例使用临时请求文件；请替换采集编号、控制器地址及事件编号。`trigger.py`可自动生成`request_id`。
+通过后端或`tools/trigger.py`发送带4字节长度前缀的TCP JSON。以下示例使用临时请求文件；请替换控制器地址及全局唯一的事件编号。`trigger.py`可自动生成`request_id`。
 
 ```bash
 cat > /tmp/tianlai-status.json <<'EOF'
-{"version":1,"acquisition_id":"acq-20260918-001","command":"QUERY_STATUS","channel_count":288}
+{"version":1,"command":"QUERY_STATUS","channel_count":288}
 EOF
 python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-status.json
 ```
@@ -125,7 +125,7 @@ python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-status.json
 
 ```bash
 cat > /tmp/tianlai-capture.json <<'EOF'
-{"version":1,"acquisition_id":"acq-20260918-001","command":"CAPTURE","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"period_count":15000}
+{"version":1,"command":"CAPTURE","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"period_count":15000}
 EOF
 python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-capture.json
 ```
@@ -136,7 +136,7 @@ python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-capture.json
 
 ```bash
 cat > /tmp/tianlai-event.json <<'EOF'
-{"version":1,"acquisition_id":"acq-20260918-001","command":"QUERY_EVENT","event_id":"event-000001"}
+{"version":1,"command":"QUERY_EVENT","event_id":"event-000001"}
 EOF
 python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-event.json
 ```

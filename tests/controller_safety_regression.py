@@ -16,6 +16,11 @@ def main():
              dict(server_id=1, host='127.0.0.1', port=19001)]
     with tempfile.TemporaryDirectory() as directory, patch('durable_json.sync_directory'):
         c = controller.Controller(nodes, 'acq', directory, allow_partial=True)
+        try:
+            c.dispatch(dict(version=1, acquisition_id='wrong', command='QUERY_STATUS'))
+            raise AssertionError('wrong acquisition identifier accepted')
+        except ValueError:
+            pass
         start = dict(trace_period_id=120, integration_period_id=45000)
         by_duration = c.capture_range(dict(start=start, duration_ms=3000))
         assert by_duration == c.capture_range(dict(start=start, period_count=15000))
@@ -31,6 +36,9 @@ def main():
             replay = controller.Controller(nodes, 'acq', another, allow_partial=True)
             base = dict(version=1, acquisition_id='acq', command='CAPTURE', event_id='same', start=start)
             first = replay.dispatch(dict(base, duration_ms=3000))
+            without_acquisition = dict(base, duration_ms=3000)
+            del without_acquisition['acquisition_id']
+            assert replay.dispatch(without_acquisition) == first
             second = replay.dispatch(dict(base, period_count=15000))
             assert first == second and first['end_exclusive'] == by_duration[2]
             try:
@@ -111,6 +119,8 @@ def main():
         cache = controller.ReplayCache(capacity=4, ttl=60)
         request = json.dumps(dict(version=1, request_id='request-1', acquisition_id='acq',
                                   command='QUERY_STATUS')).encode()
+        request_without_acquisition = json.dumps(dict(
+            version=1, request_id='request-2', command='QUERY_STATUS')).encode()
         first = controller.backend_reply(backend, request, ('127.0.0.1', 1000), cache)
         second = controller.backend_reply(backend, request, ('127.0.0.1', 2000), cache)
         assert first == second and backend.calls == 1
@@ -121,6 +131,9 @@ def main():
         assert rejected['status'] == 'ERROR' and rejected['error'] == 'REQUEST_ID_CONFLICT'
         assert controller.backend_reply(backend, request, ('127.0.0.1', 4000), cache) == first
         assert backend.calls == 1
+        assert json.loads(controller.backend_reply(
+            backend, request_without_acquisition, ('127.0.0.1', 5000), cache))['status'] == 'READY'
+        assert backend.calls == 2
     print('shared-range, replay safety, trigger bounds, and journal failure checks passed')
 
 

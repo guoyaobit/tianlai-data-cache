@@ -33,7 +33,7 @@ def main():
                     print(json.dumps(notice, ensure_ascii=False), flush=True)
                     # A production backend must persist/process the event before this reply.
                     ack = dict(version=1, command='ACK_RESULT', status='ACKNOWLEDGED',
-                               acquisition_id=notice['acquisition_id'], event_id=notice['event_id'])
+                               event_id=notice['event_id'])
                 except (ConnectionError, OSError, ValueError, KeyError, UnicodeDecodeError):
                     ack = dict(version=1, command='ACK_RESULT', status='ERROR')
                 try:

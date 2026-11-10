@@ -18,6 +18,7 @@ MAX_CONTROL_BYTES = MAX_JSON_BYTES
 RPC_ATTEMPTS = 6
 REPLAY_TTL_SECONDS = 300
 REPLAY_MAX_ENTRIES = 1024
+DEFAULT_ACQUISITION = 'tianlai'
 
 
 def parse_request(data):
@@ -347,8 +348,12 @@ class Controller:
 
     def dispatch(self, message):
         """Handle backend trigger, query, recovery, and cancellation requests."""
-        if type(message.get('version')) is not int or message['version'] != 1 or message.get('acquisition_id') != self.acquisition:
+        if type(message.get('version')) is not int or message['version'] != 1:
             raise ValueError('version/acquisition mismatch')
+        if message.get('acquisition_id', self.acquisition) != self.acquisition:
+            raise ValueError('version/acquisition mismatch')
+        if 'acquisition_id' not in message:
+            message = dict(message, acquisition_id=self.acquisition)
         command = message['command']
         if command == 'CAPTURE':
             return self.submit(message)
@@ -398,7 +403,8 @@ class Controller:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--nodes', required=True, help='JSON node list')
-    parser.add_argument('--acquisition', required=True)
+    parser.add_argument('--acquisition', default=DEFAULT_ACQUISITION,
+                        help='internal identifier; external requests may omit it')
     parser.add_argument('--journal', required=True)
     parser.add_argument('--bind', required=True)
     parser.add_argument('--port', type=int, default=18999)

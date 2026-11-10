@@ -173,7 +173,7 @@ def main():
                 assert repeated == notice, 'storage did not retry an unacknowledged result'
                 send_frame(connection, json.dumps(dict(
                     version=1, command='ACK_RESULT', status='ACKNOWLEDGED',
-                    acquisition_id='acq', event_id='event')).encode())
+                    event_id='event')).encode())
             deadline = time.monotonic() + 10
             while not (root / 'acq/event/backend-acknowledged.json').exists():
                 if time.monotonic() >= deadline:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static checks for the two-phase deploy/acquisition workflow."""
+"""Static checks for fixed internal acquisition deployment."""
 from pathlib import Path
 
 
@@ -7,14 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 ANSIBLE = ROOT / "deploy" / "ansible"
 
 site = (ANSIBLE / "site.yml").read_text(encoding="utf-8")
-configure = (ANSIBLE / "configure_acquisition.yml").read_text(encoding="utf-8")
 settings = (ANSIBLE / "group_vars" / "all" / "settings.yml").read_text(encoding="utf-8")
 inventory_yml = (ANSIBLE / "inventory_example.yml").read_text(encoding="utf-8")
 inventory_ini = (ANSIBLE / "inventory_example.ini").read_text(encoding="utf-8")
 recv_template = (ANSIBLE / "templates" / "recv.yaml.j2").read_text(encoding="utf-8")
 controller_template = (ANSIBLE / "templates" / "controller.service.j2").read_text(encoding="utf-8")
 deploy_script = (ANSIBLE / "deploy.sh").read_text(encoding="utf-8")
-configure_script = (ANSIBLE / "configure_acquisition.sh").read_text(encoding="utf-8")
 permissions = (ANSIBLE / "tasks" / "install_permissions.yml").read_text(encoding="utf-8")
 
 assert "tianlai_acquisition_id is match" not in site
@@ -37,7 +35,7 @@ assert "Search common locations for the ixcap header" in site
 assert "Search common locations for the ixcap library" in site
 assert "tianlai_ixcap_include_effective" in site
 assert "libboost-dev" in site
-assert "enabled: false\n        state: stopped" in site
+assert site.count("enabled: true\n        state: started") >= 3
 assert "tianlai_acquisition_id" not in settings
 assert "tianlai_acquisition_id" not in inventory_yml
 assert "tianlai_acquisition_id" not in inventory_ini
@@ -49,20 +47,13 @@ assert "tianlai_backend_ip: 192.168.200.10" in settings
 assert "ansible_ssh_private_key_file" not in settings
 assert "ansible_ssh_private_key_file" not in site
 assert "TIANLAI_SSH_PRIVATE_KEY" not in deploy_script
-assert "TIANLAI_SSH_PRIVATE_KEY" not in configure_script
 assert site.count("tasks/install_permissions.yml") == 4
 assert 'owner: root' in permissions
 assert 'group: "{{ ansible_user }}"' in permissions
 assert "mode: 'u=rwX,g=rX,o='" in permissions
-assert "default('UNCONFIGURED')" in recv_template
-assert "default('UNCONFIGURED')" in controller_template
-assert configure.index("Stop the controller before changing acquisition") < configure.index(
-    "Configure and start cache nodes for an acquisition"
-)
-assert configure.index("Configure and start cache nodes for an acquisition") < configure.index(
-    "Configure and start trigger controller for an acquisition"
-)
-assert configure.count("enabled: true") == 2
-assert configure.count("state: restarted") == 2
+assert 'acquisitionId: "tianlai"' in recv_template
+assert "--acquisition" not in controller_template
+assert not (ANSIBLE / "configure_acquisition.sh").exists()
+assert not (ANSIBLE / "configure_acquisition.yml").exists()
 
 print("acquisition deployment regression passed")
