@@ -183,17 +183,28 @@
   hosts: cache_nodes
   become: true
   tasks:
+    - name: Set node build profile
+      ansible.builtin.set_fact:
+        tianlai_profile: "{{ 'F0-2' if tianlai_server_id | int < 3 else ('F3-10' if tianlai_server_id | int < 11 else 'F11-13') }}"
+    - name: Install receive-NIC ixgbe rebind helper before stopping cache
+      ansible.builtin.copy:
+        src: files/rebind_ixgbe.sh
+        dest: /usr/local/sbin/tianlai-rebind-ixgbe
+        mode: '0755'
+    - name: Install cache service stop policy before stopping cache
+      ansible.builtin.template:
+        src: templates/cache.service.j2
+        dest: /etc/systemd/system/tianlai-cache.service
+        mode: '0644'
     - name: Stop cache during deployment
       ansible.builtin.systemd:
         name: tianlai-cache.service
+        daemon_reload: true
         state: stopped
       failed_when: false
     - name: Require Debian-family Linux
       ansible.builtin.assert:
         that: ansible_facts.os_family == 'Debian'
-    - name: Set node build profile
-      ansible.builtin.set_fact:
-        tianlai_profile: "{{ 'F0-2' if tianlai_server_id | int < 3 else ('F3-10' if tianlai_server_id | int < 11 else 'F11-13') }}"
     - name: Install build dependencies
       ansible.builtin.apt:
         name: [build-essential, pkg-config, libboost-dev, libspdlog-dev, libyaml-cpp-dev, libzmq3-dev]
@@ -326,18 +337,6 @@
         src: "{{ tianlai_root }}/src/{{ tianlai_profile }}/tianlai-store-{{ tianlai_profile | lower }}"
         dest: "{{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }}"
         mode: '0755'
-      notify: stop cache after deployment
-    - name: Install receive-NIC ixgbe rebind helper
-      ansible.builtin.copy:
-        src: files/rebind_ixgbe.sh
-        dest: /usr/local/sbin/tianlai-rebind-ixgbe
-        mode: '0755'
-      notify: stop cache after deployment
-    - name: Install node service
-      ansible.builtin.template:
-        src: templates/cache.service.j2
-        dest: /etc/systemd/system/tianlai-cache.service
-        mode: '0644'
       notify: stop cache after deployment
     - name: Apply cache changes before enabling
       ansible.builtin.meta: flush_handlers

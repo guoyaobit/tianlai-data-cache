@@ -10,6 +10,7 @@ ExecStart={{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }} {{ 
 ExecStopPost=/usr/local/sbin/tianlai-rebind-ixgbe $SERVICE_RESULT{% for device in tianlai_receive_devices %} {{ device }}{% endfor %}
 Restart=on-failure
 RestartSec=5
+KillSignal=SIGKILL
 LimitCORE=0
 
 [Install]

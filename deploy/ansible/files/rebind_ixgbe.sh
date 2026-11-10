@@ -4,11 +4,7 @@ set -euo pipefail
 service_result="${1:-unknown}"
 shift || true
 
-# A failed cache process may be restarted by systemd; do not change its devices mid-restart.
-if [[ "$service_result" != success ]]; then
-    echo "Skip ixgbe rebind after cache result: $service_result" >&2
-    exit 0
-fi
+echo "Restore receive devices to ixgbe after cache result: $service_result"
 
 modprobe ixgbe
 failed=0
@@ -26,10 +22,22 @@ for pci in "$@"; do
     fi
     if [[ -L "$device/driver" ]]; then
         driver=$(readlink -f "$device/driver")
-        printf '%s' "$pci" > "$driver/unbind"
+        if [[ "$(basename "$driver")" == ixgbe ]]; then
+            echo "$pci is already bound to ixgbe"
+            continue
+        fi
+        if ! printf '%s' "$pci" > "$driver/unbind"; then
+            echo "Failed to unbind $pci from $(basename "$driver")" >&2
+            failed=1
+            continue
+        fi
     fi
     if [[ -w "$device/driver_override" ]]; then
-        printf '\n' > "$device/driver_override"
+        if ! printf '\n' > "$device/driver_override"; then
+            echo "Failed to clear driver override for $pci" >&2
+            failed=1
+            continue
+        fi
     fi
     if ! printf '%s' "$pci" > /sys/bus/pci/drivers/ixgbe/bind; then
         echo "Failed to bind $pci to ixgbe" >&2
