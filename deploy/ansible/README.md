@@ -32,7 +32,7 @@ ssh-copy-id ubuntu@SERVER_IP
 bash deploy.sh
 ```
 
-`deploy.sh`先检查清单和语法，再在本次选择的实际目标主机变量上下文中执行一次完整性预检。执行顺序为：必要网络配置、存储/缓存/控制器代码复制与编译安装、最后生成网卡报告；报告问题不会阻止前面的代码部署。可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。节点内部固定使用 `acquisitionId: tianlai`，无需在清单或部署命令中填写；部署完成后自动启用并启动存储、缓存和控制器服务。
+`deploy.sh`先检查清单和语法，再在本次选择的实际目标主机变量上下文中执行一次完整性预检。执行顺序为：必要网络配置、存储/缓存/控制器代码复制与编译安装、最后生成网卡报告；报告问题不会阻止前面的代码部署。可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。节点内部固定使用 `acquisitionId: tianlai`，无需在清单或部署命令中填写。部署完成后存储和控制器自动启动；`tianlai-cache.service`保持禁用和停止，并将配置的接收PCI设备逐个恢复到ixgbe驱动。
 
 首次完整部署完成后，可只更新项目源代码和程序，不修改Netplan、YAML业务配置、采集任务ID、systemd单元或系统软件包：
 
@@ -121,14 +121,21 @@ sudo cat /opt/tianlai-store/config/network-report.yaml
 
 报告仅记录配置和观察结果，不会自动选择物理端口、设置系统 IP 或修改驱动。部署前仍需按上一节完成端口对应关系和清单填写；如果完整清单校验未通过，部署及自动报告生成均不会开始，可先单独运行 `inspect_nics.yml` 盘点。
 
-SSH登录使用系统默认配置，sudo密码仅在本次部署进程内使用，不写入磁盘。`/opt/tianlai-store` 默认保持 `root` 所有权，组设为部署账户 `ubuntu`；目录和程序允许 `ubuntu` 读取/执行，但只有 root 可以修改，避免普通用户篡改由 root 服务运行的程序。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单，并自动启动存储、缓存和控制器服务。重跑完整部署会重启缓存服务和控制器。**停止或重启缓存服务会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。服务重启后必须等待约100秒预热，并始终使用全局唯一的新`event_id`触发。
+SSH登录使用系统默认配置，sudo密码仅在本次部署进程内使用，不写入磁盘。`/opt/tianlai-store` 默认保持 `root` 所有权，组设为部署账户 `ubuntu`；目录和程序允许 `ubuntu` 读取/执行，但只有 root 可以修改，避免普通用户篡改由 root 服务运行的程序。部署会安装 apt 软件包、复制源码及工具，通过项目统一的`make production PROFILE=...`入口编译缓存节点、生成YAML和控制器节点清单。缓存服务默认不启动；正常停止缓存服务后，`ExecStopPost`只对配置中的接收PCI设备执行ixgbe解绑和重绑，不全局卸载ixgbe，因此不会影响发送口和其他Intel网口。**停止缓存服务会丢失全部内存缓存及尚未完成的冻结事件**；应先确认没有活动或暂停事件，并安排维护窗口。启动后必须等待约100秒预热，并始终使用全局唯一的新`event_id`触发。
 
-服务默认使用 root，节点通过 ixcap 收包；脚本没有配置防火墙或服务用户隔离，需结合现场权限和网络策略审查。软件包安装、服务启停和数据保存路径均由执行 playbook 的操作者负责确认。代码部署完成后确认三个服务：
+服务默认使用 root，节点通过 ixcap 收包；脚本没有配置防火墙或服务用户隔离，需结合现场权限和网络策略审查。软件包安装、服务启停和数据保存路径均由执行 playbook 的操作者负责确认。代码部署完成后确认服务状态，需要采集时再启动缓存服务：
 
 ```bash
 systemctl status tianlai-storage.service
 systemctl status tianlai-cache.service
 systemctl status tianlai-controller.service
+```
+
+从Ansible master启动全部缓存节点：
+
+```bash
+ansible cache_nodes -i inventory.yml --become --ask-become-pass \
+  -m systemd -a "name=tianlai-cache.service state=started"
 ```
 
 分别在对应机器执行上述命令，并按[部署与联调手册](../../DEPLOYMENT_GUIDE.md)检查 14 台收包、计数同步、触发、落盘、缺包、通知和真实吞吐。服务启动不等于缓存已 READY，也不表示真实设备验收通过。

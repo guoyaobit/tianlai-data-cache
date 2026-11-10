@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory={{ tianlai_root }}/src/{{ tianlai_profile }}
 ExecStart={{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }} {{ tianlai_root }}/config/server.yaml {{ tianlai_root }}/config/recv.yaml
+ExecStopPost=/usr/local/sbin/tianlai-rebind-ixgbe $SERVICE_RESULT{% for device in tianlai_receive_devices %} {{ device }}{% endfor %}
 Restart=on-failure
 RestartSec=5
 LimitCORE=0

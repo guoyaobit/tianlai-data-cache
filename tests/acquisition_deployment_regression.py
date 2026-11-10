@@ -35,7 +35,10 @@ assert "Search common locations for the ixcap header" in site
 assert "Search common locations for the ixcap library" in site
 assert "tianlai_ixcap_include_effective" in site
 assert "libboost-dev" in site
-assert site.count("enabled: true\n        state: started") >= 3
+assert site.count("enabled: true\n        state: started") >= 2
+assert "Keep cache disabled and stopped by default" in site
+assert "enabled: false\n        state: stopped" in site
+assert "Restore receive NICs to ixgbe after deployment" in site
 assert "tianlai_acquisition_id" not in settings
 assert "tianlai_acquisition_id" not in inventory_yml
 assert "tianlai_acquisition_id" not in inventory_ini

@@ -327,6 +327,12 @@
         dest: "{{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }}"
         mode: '0755'
       notify: stop cache after deployment
+    - name: Install receive-NIC ixgbe rebind helper
+      ansible.builtin.copy:
+        src: files/rebind_ixgbe.sh
+        dest: /usr/local/sbin/tianlai-rebind-ixgbe
+        mode: '0755'
+      notify: stop cache after deployment
     - name: Install node service
       ansible.builtin.template:
         src: templates/cache.service.j2
@@ -335,12 +341,17 @@
       notify: stop cache after deployment
     - name: Apply cache changes before enabling
       ansible.builtin.meta: flush_handlers
-    - name: Enable and start cache
+    - name: Keep cache disabled and stopped by default
       ansible.builtin.systemd:
         name: tianlai-cache.service
         daemon_reload: true
-        enabled: true
-        state: started
+        enabled: false
+        state: stopped
+    - name: Restore receive NICs to ixgbe after deployment
+      ansible.builtin.command:
+        argv: >-
+          {{ ['/usr/local/sbin/tianlai-rebind-ixgbe', 'success'] + tianlai_receive_devices }}
+      changed_when: true
     - name: Apply safe cache install-tree permissions
       ansible.builtin.include_tasks: tasks/install_permissions.yml
   handlers:
