@@ -56,6 +56,58 @@
   changed_when: true
   when: "'cache_nodes' in group_names"
 
+- name: Select the fixed receive-interface order on cache nodes 1-11
+  ansible.builtin.set_fact:
+    tianlai_fixed_receive_interfaces: >-
+      {{ tianlai_f0_receive_interfaces if tianlai_server_id | int < 3
+      else tianlai_f3_10_receive_interfaces }}
+  changed_when: false
+  when:
+    - "'cache_nodes' in group_names"
+    - tianlai_server_id | int < 11
+
+- name: Resolve the fixed receive-interface order on cache nodes 1-11
+  ansible.builtin.script:
+    cmd: >-
+      files/map_interfaces_to_pci.py
+      {{ tianlai_fixed_receive_interfaces | join(' ') }}
+    executable: /usr/bin/python3
+  register: ordered_receive_devices_raw
+  changed_when: false
+  when:
+    - "'cache_nodes' in group_names"
+    - tianlai_server_id | int < 11
+
+- name: Decode the fixed receive-interface order
+  ansible.builtin.set_fact:
+    tianlai_ordered_receive_report: "{{ ordered_receive_devices_raw.stdout | from_json }}"
+  changed_when: false
+  when:
+    - "'cache_nodes' in group_names"
+    - tianlai_server_id | int < 11
+
+- name: Require the fixed names to match all discovered receive PCI devices
+  ansible.builtin.assert:
+    that:
+      - tianlai_ordered_receive_report.missing_interfaces | length == 0
+      - tianlai_ordered_receive_report.invalid_interfaces | length == 0
+      - tianlai_ordered_receive_report.pci_addresses | length == tianlai_receive_devices | length
+      - (tianlai_ordered_receive_report.pci_addresses | sort) == (tianlai_receive_devices | sort)
+    fail_msg: >-
+      Fixed receive-interface order does not match the discovered receive devices:
+      {{ tianlai_ordered_receive_report }}; discovered={{ tianlai_receive_devices }}
+  when:
+    - "'cache_nodes' in group_names"
+    - tianlai_server_id | int < 11
+
+- name: Use the fixed receive-interface order on cache nodes 1-11
+  ansible.builtin.set_fact:
+    tianlai_receive_devices: "{{ tianlai_ordered_receive_report.pci_addresses }}"
+  changed_when: false
+  when:
+    - "'cache_nodes' in group_names"
+    - tianlai_server_id | int < 11
+
 - name: Require a valid cache data IPv4 address before changing Netplan
   ansible.builtin.assert:
     that:
