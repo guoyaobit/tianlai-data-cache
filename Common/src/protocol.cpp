@@ -86,10 +86,10 @@ void put64(std::vector<unsigned char> &v, uint64_t n) {
     for (int i = 7; i >= 0; --i)
         v.push_back((n >> (8 * i)) & 255);
 }
-// Parse the marker, integration number, board number, and packet number from the FPGA payload header.
+// Parse the integration number, board number, and packet number from the FPGA payload header.
+// The high nibble of byte 0 is intentionally ignored.
 InputHeader decodeInput(const unsigned char *d) {
     InputHeader h;
-    h.valid = d[0] >> 4;
     h.trace = (uint32_t(d[0] & 15) << 16) | (uint32_t(d[1]) << 8) | d[2];
     h.ifTrace = d[3] >> 7;
     h.integration = (uint32_t(d[3] & 127) << 16) | (uint32_t(d[4]) << 8) | d[5];

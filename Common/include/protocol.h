@@ -19,7 +19,7 @@ void put32(std::vector<unsigned char> &v, uint32_t n);
 void put64(std::vector<unsigned char> &v, uint64_t n);
 struct InputHeader {
     uint32_t trace = 0, integration = 0;
-    unsigned valid = 0, ifTrace = 0, board = 0, packetId = 0;
+    unsigned ifTrace = 0, board = 0, packetId = 0;
     uint64_t absolute(unsigned perTrace) const {
         return uint64_t(trace) * perTrace + integration;
     }

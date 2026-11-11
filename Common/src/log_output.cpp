@@ -1,5 +1,6 @@
 #include "log_output.h"
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <vector>
 #include <spdlog/sinks/rotating_file_sink.h>
@@ -31,15 +32,23 @@ void initLogOut(const std::string &path, bool debug) {
     // Initialise before starting receive and control threads; the mt sinks are
     // safe for concurrent writers. File rotation bounds long-running log growth.
     std::vector<spdlog::sink_ptr> sinks;
-    sinks.push_back(std::make_shared<spdlog::sinks::stderr_color_sink_mt>());
+    auto consoleSink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+    // Journald already supplies time, host and process metadata. Avoid repeating
+    // them while retaining full timestamps for an interactive terminal.
+    if (std::getenv("JOURNAL_STREAM"))
+        consoleSink->set_pattern("[%l] %v");
+    else
+        consoleSink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [T%t] %v");
+    sinks.push_back(consoleSink);
     if (!path.empty() && path != "-") {
         constexpr size_t maxBytes = 50U * 1024 * 1024;
         constexpr size_t backupFiles = 5;
-        sinks.push_back(
-            std::make_shared<spdlog::sinks::rotating_file_sink_mt>(path, maxBytes, backupFiles));
+        auto fileSink =
+            std::make_shared<spdlog::sinks::rotating_file_sink_mt>(path, maxBytes, backupFiles);
+        fileSink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [T%t] %v");
+        sinks.push_back(fileSink);
     }
     logger = std::make_shared<spdlog::logger>("tianlai-store", sinks.begin(), sinks.end());
-    logger->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [thread %t] %v");
     logger->set_level(debug ? spdlog::level::debug : spdlog::level::info);
     logger->flush_on(spdlog::level::warn);
     spdlog::register_logger(logger);

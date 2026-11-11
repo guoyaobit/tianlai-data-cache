@@ -21,7 +21,7 @@ static Bytes block(unsigned port, bool bad_missing = false) {
     put64(body, 100); put64(body, 1); put32(body, 8848); put32(body, 18);
     body.resize(FRAME_HEADER + 18 * 8848, 0);
     auto *raw = body.data() + FRAME_HEADER;
-    raw[0] = 0xf0; raw[1] = 0; raw[2] = 1; // trace 1, integration 0
+    raw[0] = 0x00; raw[1] = 0; raw[2] = 1; // ignored marker 0, trace 1, integration 0
     raw[6] = (port % 2) * 18; raw[7] = 24 + port / 2;
     raw[8] = 0x5a; raw[16] = 0x33;
     if (bad_missing) body[FRAME_HEADER + 8848] = 1;

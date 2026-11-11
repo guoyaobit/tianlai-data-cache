@@ -404,7 +404,7 @@ class EventWriter {
                 if (mask & (1ULL << b)) {
                     auto trace = uint32_t(raw[0] & 15) << 16 | uint32_t(raw[1]) << 8 | raw[2];
                     auto integration = uint32_t(raw[3] & 127) << 16 | uint32_t(raw[4]) << 8 | raw[5];
-                    require(raw[0] >> 4 == 15 && integration < per_trace && trace * per_trace + integration == period &&
+                    require(integration < per_trace && trace * per_trace + integration == period &&
                             raw[6] == b / packets_per_board + board && raw[7] == packet + b % packets_per_board,
                             "raw input header mismatch");
                 } else {

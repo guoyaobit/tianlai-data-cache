@@ -15,28 +15,23 @@
 
 static const unsigned BATCH_SIZE = 512;
 static void logFirstUdpPacket(unsigned port, const unsigned char *data, size_t bytes,
-                              size_t frameBytes, unsigned integrationPerTrace, bool &logged) {
+                              size_t frameBytes, bool &logged) {
     if (logged)
         return;
     logged = true;
     if (bytes < 8) {
-        LOG("Receive port " + std::to_string(port) +
-                " first UDP payload is too short: frame_bytes=" +
-                std::to_string(frameBytes) + " payload_bytes=" + std::to_string(bytes),
+        LOG("RX" + std::to_string(port) + " short first payload: bytes=" +
+                std::to_string(frameBytes) + "/" + std::to_string(bytes),
             WARN);
         return;
     }
     const auto header = decodeInput(data);
-    LOG("Receive port " + std::to_string(port) +
-            " first captured UDP packet: packet_id=" + std::to_string(header.packetId) +
+    LOG("RX" + std::to_string(port) +
+            " first packet: id=" + std::to_string(header.packetId) +
             " board=" + std::to_string(header.board) +
-            " trace_period_id=" + std::to_string(header.trace) +
-            " integration_period_id=" + std::to_string(header.integration) +
-            " absolute_period=" +
-            std::to_string(header.absolute(integrationPerTrace)) +
-            " valid=" + std::to_string(header.valid) +
-            " frame_bytes=" + std::to_string(frameBytes) +
-            " payload_bytes=" + std::to_string(bytes),
+            " period=" + std::to_string(header.trace) + ":" +
+            std::to_string(header.integration) +
+            " bytes=" + std::to_string(frameBytes) + "/" + std::to_string(bytes),
         INFO);
 }
 // Validate a raw payload packet and write it to the matching receive-port buffer by absolute integration period and board position.
@@ -49,7 +44,7 @@ static void receivePacket(CacheRuntime *para, unsigned p, const unsigned char *d
         return;
     }
     InputHeader h = decodeInput(data);
-    if (h.valid != 15 || h.packetId < port.packetId ||
+    if (h.packetId < port.packetId ||
         h.packetId >= port.packetId + port.packetsPerBoard || h.board < port.boardBegin ||
         h.board >= port.boardBegin + port.boardNum || h.integration >= cfg.integrationPerTrace) {
         ++para->ignoredPackets;
@@ -62,12 +57,11 @@ static void receivePacket(CacheRuntime *para, unsigned p, const unsigned char *d
         if (!firstPacketLogged) {
             noteAcceptedPacket(*para);
             firstPacketLogged = true;
-            LOG("Receive port " + std::to_string(p) +
-                " first accepted UDP packet: packet_id=" + std::to_string(h.packetId) +
+            LOG("RX" + std::to_string(p) +
+                " first accepted: id=" + std::to_string(h.packetId) +
                 " board=" + std::to_string(h.board) +
-                " trace_period_id=" + std::to_string(h.trace) +
-                " integration_period_id=" + std::to_string(h.integration) +
-                " absolute_period=" + std::to_string(absolutePeriod),
+                " period=" + std::to_string(h.trace) + ":" +
+                std::to_string(h.integration),
                 INFO);
         }
     }
@@ -100,8 +94,7 @@ static void simulationReceive(CacheRuntime *para, unsigned p) {
             continue;
         auto n = recv(fd, packet, sizeof(packet), 0);
         if (n >= 0) {
-            logFirstUdpPacket(p, packet, size_t(n), size_t(n),
-                              para->config->integrationPerTrace, firstUdpLogged);
+            logFirstUdpPacket(p, packet, size_t(n), size_t(n), firstUdpLogged);
             receivePacket(para, p, packet, size_t(n), firstPacketLogged);
         }
     }
@@ -117,9 +110,8 @@ void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
             if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus))
                 throw std::runtime_error("receive CPU affinity failed");
         }
-        LOG("Receive port " + std::to_string(p) +
-                " thread: device=" + para->config->getDeviceName(p) +
-                " cpu_id=" + std::to_string(cpu) +
+        LOG("RX" + std::to_string(p) + " thread: device=" +
+                para->config->getDeviceName(p) + " cpu=" + std::to_string(cpu) +
                 " simulation=" + (para->simulation ? "true" : "false"),
             DEBUG);
         if (para->simulation) {
@@ -144,8 +136,8 @@ void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
         bool firstUdpLogged = false;
         bool firstPacketLogged = false;
         ++para->initializedPorts;
-        LOG("Receive port " + std::to_string(p) +
-                " packetId=" + std::to_string(para->config->receivePorts[p].packetId) + ".." +
+        LOG("RX" + std::to_string(p) +
+                " ready: packet=" + std::to_string(para->config->receivePorts[p].packetId) + ".." +
                 std::to_string(para->config->receivePorts[p].packetId +
                                para->config->receivePorts[p].packetsPerBoard - 1),
             START);
@@ -158,16 +150,15 @@ void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
                 try {
                     const auto frameBytes = ixcap_get_pkt_size(packets[i]);
                     if (inputPayload(raw, frameBytes, data, bytes)) {
-                        logFirstUdpPacket(p, data, bytes, frameBytes,
-                                          para->config->integrationPerTrace, firstUdpLogged);
+                        logFirstUdpPacket(p, data, bytes, frameBytes, firstUdpLogged);
                         receivePacket(para, p, data, bytes, firstPacketLogged);
                     } else {
                         ++para->ignoredPackets;
                         if (!firstUnparsedFrameLogged) {
                             firstUnparsedFrameLogged = true;
-                            LOG("Receive port " + std::to_string(p) +
-                                    " captured a frame but Ethernet/IPv4/UDP parsing failed: "
-                                    "frame_bytes=" + std::to_string(frameBytes),
+                            LOG("RX" + std::to_string(p) +
+                                    " first frame parse failed: bytes=" +
+                                    std::to_string(frameBytes),
                                 WARN);
                         }
                     }

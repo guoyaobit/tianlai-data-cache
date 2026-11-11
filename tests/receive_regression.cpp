@@ -175,7 +175,7 @@ int main() {
     // Header bits and strict JSON fields.
     auto p = packet(120ULL * 50000 + 45000, 35);
     auto h = decodeInput(p.data());
-    assert(h.trace == 120 && h.integration == 45000 && h.board == 35 && h.packetId == 24 && h.valid == 15);
+    assert(h.trace == 120 && h.integration == 45000 && h.board == 35 && h.packetId == 24);
     rejects([] { parseControl("{\"version\":1,\"version\":1}"); });
     rejects([] { parseUnsigned("18446744073709551616"); });
     rejects([] { parseUnsigned("-1"); });
