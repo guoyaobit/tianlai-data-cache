@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Managed by Ansible. Reapply promiscuous mode whenever a receive NIC appears.
+set -u
+
+interface="${1:-}"
+[[ -n "$interface" && -e "/sys/class/net/$interface/device" ]] || exit 0
+pci=$(basename "$(readlink -f "/sys/class/net/$interface/device")")
+
+case "$pci" in
+{% for device in tianlai_receive_devices %}
+    "{{ device }}") exec /usr/sbin/ip link set dev "$interface" promisc on ;;
+{% endfor %}
+esac
+exit 0

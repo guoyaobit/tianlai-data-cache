@@ -27,6 +27,35 @@
     - "'cache_nodes' in group_names"
     - discovered_receive_devices_raw is not skipped
 
+- name: Install the receive-NIC ixgbe restore helper before network configuration
+  ansible.builtin.copy:
+    src: files/rebind_ixgbe.sh
+    dest: /usr/local/sbin/tianlai-rebind-ixgbe
+    mode: '0755'
+  when: "'cache_nodes' in group_names"
+
+- name: Immediately terminate a running cache before configuring receive NICs
+  ansible.builtin.command:
+    argv: [systemctl, kill, --kill-whom=all, --signal=SIGKILL, tianlai-cache.service]
+  register: cache_force_stop
+  changed_when: cache_force_stop.rc == 0
+  failed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Keep the cache stopped during receive-network configuration
+  ansible.builtin.systemd:
+    name: tianlai-cache.service
+    state: stopped
+  failed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Restore configured receive PCI devices to ixgbe for network configuration
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/usr/local/sbin/tianlai-rebind-ixgbe', 'success'] + tianlai_receive_devices }}
+  changed_when: true
+  when: "'cache_nodes' in group_names"
+
 - name: Require a valid cache data IPv4 address before changing Netplan
   ansible.builtin.assert:
     that:
@@ -79,12 +108,40 @@
     tianlai_jumbo_interfaces: "{{ (jumbo_interface_raw.stdout | from_json).interfaces | map(attribute='name') | list }}"
   changed_when: false
 
+- name: Map receive PCI devices to Linux interfaces
+  ansible.builtin.script:
+    cmd: >-
+      files/map_receive_interfaces.py
+      {{ tianlai_receive_devices | join(' ') }}
+    executable: /usr/bin/python3
+  register: receive_interface_map_raw
+  changed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Decode receive PCI interface mapping
+  ansible.builtin.set_fact:
+    tianlai_receive_interface_report: "{{ receive_interface_map_raw.stdout | from_json }}"
+  changed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Require one Linux interface for every receive PCI device
+  ansible.builtin.assert:
+    that:
+      - tianlai_receive_interface_report.missing_pci_addresses | length == 0
+      - tianlai_receive_interface_report.ambiguous_pci_addresses | length == 0
+      - tianlai_receive_interface_report.interfaces | length == tianlai_receive_devices | length
+    fail_msg: >-
+      Receive PCI devices did not return as Linux ixgbe interfaces:
+      {{ tianlai_receive_interface_report }}
+  when: "'cache_nodes' in group_names"
+
 - name: Separate generic receive-side interfaces from configured data interfaces
   ansible.builtin.set_fact:
     tianlai_receive_netplan_interfaces: >-
-      {{ tianlai_jumbo_interfaces |
+      {{ tianlai_receive_interface_report.interfaces if 'cache_nodes' in group_names else
+      (tianlai_jumbo_interfaces |
       difference([tianlai_send_interface] if 'cache_nodes' in group_names else []) |
-      difference([tianlai_storage_receive_interface] if 'storage' in group_names else []) }}
+      difference([tianlai_storage_receive_interface] if 'storage' in group_names else [])) }}
   changed_when: false
 
 - name: Check the fixed cache data interface
@@ -132,6 +189,13 @@
     name: NetworkManager.service
     state: reloaded
   when: ignore_carrier_configuration.changed
+
+- name: Install persistent receive-NIC promiscuous-mode dispatcher
+  ansible.builtin.template:
+    src: templates/tianlai-receive-promisc.j2
+    dest: /etc/NetworkManager/dispatcher.d/20-tianlai-receive-promisc
+    mode: '0755'
+  when: "'cache_nodes' in group_names"
 
 - name: Find existing Netplan configuration files
   ansible.builtin.find:
@@ -240,6 +304,28 @@
     ((send_netplan is defined) and (send_netplan.changed | default(false))) or
     ((storage_netplan is defined) and (storage_netplan.changed | default(false)))
 
+- name: Enable promiscuous mode on receive interfaces
+  ansible.builtin.command:
+    argv: [ip, link, set, dev, "{{ item }}", promisc, 'on']
+  loop: "{{ tianlai_receive_netplan_interfaces }}"
+  changed_when: true
+  when: "'cache_nodes' in group_names"
+
+- name: Read receive-interface promiscuity
+  ansible.builtin.command:
+    argv: [ip, -j, -d, link, show, dev, "{{ item }}"]
+  loop: "{{ tianlai_receive_netplan_interfaces }}"
+  register: receive_promiscuity
+  changed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Require promiscuous mode on every receive interface
+  ansible.builtin.assert:
+    that: "((item.stdout | from_json | first).promiscuity | int) > 0"
+    fail_msg: "{{ item.item }} did not enter promiscuous mode"
+  loop: "{{ receive_promiscuity.results }}"
+  when: "'cache_nodes' in group_names"
+
 - name: Read NetworkManager ownership for managed data interfaces
   ansible.builtin.command:
     argv: [nmcli, -g, GENERAL.STATE, device, show, "{{ item }}"]
@@ -341,6 +427,7 @@
       mtu: "{{ tianlai_jumbo_mtu }}"
       receive_netplan_file: /etc/netplan/98-tianlai-receive.yaml
       receive_interfaces: "{{ tianlai_receive_netplan_interfaces }}"
+      receive_promiscuous: "{{ true if 'cache_nodes' in group_names else 'not applicable' }}"
       send_netplan_file: "{{ '/etc/netplan/99-tianlai-send.yaml' if 'cache_nodes' in group_names else 'not applicable' }}"
       storage_netplan_file: "{{ '/etc/netplan/99-tianlai-storage.yaml' if 'storage' in group_names else 'not applicable' }}"
       cache_send_interface: "{{ tianlai_send_interface if 'cache_nodes' in group_names else 'not applicable' }}"
