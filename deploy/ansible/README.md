@@ -13,7 +13,7 @@
 - 数据网口不要求物理链路处于UP状态。部署会为缓存发送口、存储100G口和已识别的高速数据口设置NetworkManager `ignore-carrier`，因此光纤暂未连接时仍可写入静态IP、MTU和代码。管理网SSH必须可达，否则Ansible无法向该节点传输文件；恢复后可用 `--limit` 单独重跑失败节点。
 - 消色散后端须在`tianlai_backend_ip:tianlai_notify_port`监听TCP/JSON。存储服务从`tianlai_controller_ip`连接并发送`CAPTURE_RESULT`；后端持久化结果后在同一连接回复`ACK_RESULT`。Playbook不部署后端，也不修改相关防火墙。
 - 管理网需放通后端→控制器TCP 18999、控制器→缓存节点TCP 19000、存储服务器→后端TCP 19001；实际端口以清单为准。
-- 当前规划中控制器业务地址为 `192.168.200.250`，消色散后端地址为 `192.168.200.10`，存储数据地址为 `192.168.210.250`，默认落盘目录为 `/data/raw-store`；部署前确认这些地址和挂载点与现场一致。
+- 当前规划中状态查询和触发控制统一使用管理网：缓存节点为 `172.0.0.128～141`，控制器/存储服务器为 `172.0.0.142`。消色散后端地址为 `192.168.200.10`，存储数据地址为 `192.168.210.250`，默认落盘目录为 `/data/raw-store`；部署前确认这些地址和挂载点与现场一致。
 - 如果目标上安装的 ixcap 是共享库，确保运行时动态链接器可找到该库。脚本只检查文件存在，不负责驱动、权限或网卡初始化。
 
 ## SSH登录和sudo密码
@@ -141,11 +141,11 @@ systemctl status tianlai-cache.service
 systemctl status tianlai-controller.service
 ```
 
-存储服务器会安装`/opt/tianlai-store/tools/cache_status.py`。它同时显示本机落盘服务的监听、接收写盘、后端通知状态，以及各缓存节点所处运行阶段、已初始化接收口、事件状态和累计接收包数：
+存储服务器会安装`tianlai-status`命令。它通过172管理网同时显示本机落盘服务状态和全部缓存节点的运行阶段、接收口、事件及累计包数：
 
 ```bash
-python3 /opt/tianlai-store/tools/cache_status.py
-python3 /opt/tianlai-store/tools/cache_status.py --watch 2
+tianlai-status
+tianlai-status --watch 2
 ```
 
 节点管理查询端口先于大内存分配启动，所以汇总工具能显示`PREPARING_MEMORY`；也可在相应节点执行`journalctl -u tianlai-cache.service -f`查看完整状态切换日志。

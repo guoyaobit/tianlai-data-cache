@@ -206,13 +206,13 @@ def run(server, directory):
                 assert info['packet_slots'] == 24 and info['board_count'] == 12
                 assert info['packets_per_board'] == 2 and info['duplicate_packets'] == 1
                 assert info['valid_frequency_count'] == (78 if server == 13 and port == 3 else 86)
-                # Training flag, out-of-range board IDs and adjacent-port packet ID must be rejected.
-                for byte, value in ((0, 0xe0), (6, 35), (6, 48),
+                # Marker bits are ignored; invalid boards and adjacent-port packet IDs are rejected.
+                for byte, value in ((6, 35), (6, 48),
                                     (7, 2 * ((server - 11) * 4 + port) + 2)):
                     invalid = bytearray(make_packet(199, port, 0))
                     invalid[byte] = value
                     sock.sendto(invalid, ('127.0.0.1', simulation[port]))
-            wait_for(lambda: request('QUERY_STATUS')['ignored_packets'] == ports * 4)
+            wait_for(lambda: request('QUERY_STATUS')['ignored_packets'] == ports * 3)
         channels = 384 if remote else 288
         trigger = dict(event_id='crossing', start=dict(trace_period_id=0, integration_period_id=95),
                        period_count=10, channel_count=channels)

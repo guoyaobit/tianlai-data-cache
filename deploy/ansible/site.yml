@@ -12,6 +12,7 @@
           - groups['controller'][0] == groups['storage'][0]
           - ansible_user | default('') == 'ubuntu'
           - tianlai_controller_ip is match('^[0-9.]+$')
+          - tianlai_controller_ip == hostvars[groups['storage'][0]].ansible_host
           - tianlai_backend_ip is match('^[0-9.]+$')
           - tianlai_storage_ip is match('^[0-9.]+$')
           - tianlai_storage_directory is match('^/[^ ]+$')
@@ -407,6 +408,13 @@
         mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
       loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py]
       notify: stop controller after deployment
+    - name: Install simple status command
+      ansible.builtin.copy:
+        dest: /usr/local/bin/tianlai-status
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py "$@"
     - name: Render controller node list
       ansible.builtin.template:
         src: templates/nodes.json.j2

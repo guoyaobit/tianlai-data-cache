@@ -44,6 +44,9 @@ for field in ('listeners_ready', 'active_transfers', 'completed_lane_transfers',
               'written_bytes'):
     assert field in STORAGE
 assert 'cache_status.py' in SITE and 'cache_status.py' in UPDATE
+assert '/usr/local/bin/tianlai-status' in SITE
+assert '/usr/local/bin/tianlai-status' in UPDATE
+assert 'cache_status.py "$@"' in SITE and 'cache_status.py "$@"' in UPDATE
 
 sys.path.insert(0, str(ROOT / 'tools'))
 spec = importlib.util.spec_from_file_location('cache_status', ROOT / 'tools/cache_status.py')

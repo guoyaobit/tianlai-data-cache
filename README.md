@@ -53,9 +53,9 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
   `debug: true` 启用详细诊断日志，省略或设为 `false` 时保持 INFO 级别。日志由 spdlog
   输出，带毫秒时间和线程号；指定文件时同时输出到 stderr，文件按 50 MiB 轮转，保留最多
   5 个备份。WARN 及以上立即刷新，其他日志按约 3 秒周期刷新；日志并非事件持久化凭据。
-- 缓存程序以`Runtime state:`日志和`QUERY_STATUS.runtime_state`公开当前阶段；存储程序通过`/run/tianlai-storage-status.json`公开监听、接收写盘及后端通知状态。Ansible部署后可在存储服务器运行`python3 /opt/tianlai-store/tools/cache_status.py --watch 2`统一查看。
+- 缓存程序以`Runtime state:`日志和`QUERY_STATUS.runtime_state`公开当前阶段；存储程序通过`/run/tianlai-storage-status.json`公开监听、接收写盘及后端通知状态。Ansible部署后可在存储服务器运行`tianlai-status --watch 2`统一查看。
 
-节点 YAML 的 `controlBindIp` 按部署说明填入缓存服务器内网规划地址 `172.0.0.128～141`（server 0～13 对应 tianlaistore1～14），须现场核对。控制器业务地址为 `192.168.200.250`，消色散后端地址为 `192.168.200.10`，存储数据网地址为 `192.168.210.250`。当前配置统一使用 YAML。
+节点 YAML 的 `controlBindIp` 使用 `172.0.0.128～141`（server 0～13 对应 tianlaistore1～14），控制器/存储服务器管理地址为 `172.0.0.142`。状态查询和触发控制统一走该172管理网；消色散后端地址为 `192.168.200.10`，存储数据网地址为 `192.168.210.250`。当前配置统一使用 YAML。
 程序在正式启动时拒绝未填写的 PCI 地址或发送接口。
 
 ```bash
@@ -130,7 +130,7 @@ sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
 ```bash
 python3 tools/controller.py --nodes tools/nodes_example.json \
   --journal /data/store-control \
-  --bind 192.168.200.250 --allow-source 192.168.200.10
+  --bind 172.0.0.142 --allow-source 192.168.200.10
 ```
 
 `--allow-source` 是允许发触发的外部控制机；节点 YAML 的 `controlPeerIp` 应当是调度机。
@@ -140,7 +140,7 @@ python3 tools/controller.py --nodes tools/nodes_example.json \
 修改 `tools/trigger_example.json` 中的任务、事件及周期范围，在外部控制机执行：
 
 ```bash
-python3 tools/trigger.py --host 192.168.200.250 --file tools/trigger_example.json
+python3 tools/trigger.py --host 172.0.0.142 --file tools/trigger_example.json
 ```
 
 在触发JSON中设置`"channel_count":288`或`384`；省略时默认384。返回PREPARING表示请求正在处理；查询事件得到PREPARED/STORING后才表明所选模式全部节点已保护。控制器只有确认所有节点STORED后才统一RELEASE，单节点故障不会提前释放其他节点缓存。

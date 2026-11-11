@@ -246,3 +246,10 @@
             state: absent
     - name: Apply safe controller permissions
       ansible.builtin.include_tasks: tasks/install_permissions.yml
+    - name: Install simple status command
+      ansible.builtin.copy:
+        dest: /usr/local/bin/tianlai-status
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py "$@"

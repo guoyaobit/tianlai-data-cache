@@ -2,7 +2,7 @@
 # Cache-node network, NIC, and logging settings.
 SERVERID: 5  # Unique cache node ID (0-13).
 controlBindIp: "172.0.0.133"  # Local management IP for control commands.
-controlPeerIp: "192.168.200.250"  # Controller IP allowed to send commands.
+controlPeerIp: "172.0.0.142"  # Controller IP allowed to send commands.
 controlPort: 19000  # Local management TCP/JSON control port.
 logFilePath: "-"  # Log path; "-" writes only to stderr.
 deviceName0: "CHANGE_ME_PCI_0"  # ixcap PCI address for this receive port.

@@ -98,7 +98,7 @@ cd F0-2
    ```bash
    python3 tools/controller.py --nodes tools/nodes_example.json \
      --journal /data/store-control \
-     --bind 192.168.200.250 --allow-source 192.168.200.10
+     --bind 172.0.0.142 --allow-source 192.168.200.10
    ```
 
    此处地址为示例。控制器内部固定使用`tianlai`，外部请求不填写采集编号。控制器和落盘服务是同机的两个独立进程：控制器走管理网，落盘服务走高速数据网。控制器默认 `--period-us 200 --integration-per-trace 50000`，须与所有节点对应配置一致；程序不会自动验证此一致性。生产默认必须配置 0～13 全部节点；`--allow-partial` 只用于模拟或部分节点联调。不要启动两个控制器同时管理相同节点。
@@ -107,7 +107,7 @@ cd F0-2
 
    ```bash
    python3 tools/result_listener.py --bind 192.168.200.10 --port 19001 \
-     --allow-source 192.168.200.250
+     --allow-source 172.0.0.142
    ```
 
    示例程序打印后立即确认，仅供联调；生产后端应持久化处理结果后再确认。288路事件在节点0～10共22个lane形成持久化标记后发送`status=STORED`；384路事件需要节点0～13共28个lane。
@@ -117,8 +117,8 @@ cd F0-2
 在存储/控制服务器上可直接汇总查看所有已启用缓存节点，`--watch 2`表示每2秒刷新：
 
 ```bash
-python3 /opt/tianlai-store/tools/cache_status.py
-python3 /opt/tianlai-store/tools/cache_status.py --watch 2
+tianlai-status
+tianlai-status --watch 2
 ```
 
 工具首先显示存储服务状态：`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`或`STOPPING`，同时显示28个lane监听端点、活动传输、已完成lane及累计写入字节。随后显示各缓存节点的`PREPARING_MEMORY`（准备内存）、`WAITING_FOR_DATA`（等待接收数据）、`CACHING_DATA`（缓存数据中）、`PREPARING_EVENT`（准备触发数据）、`EVENT_READY`（触发数据已准备）、`SENDING_CACHED_DATA`（发送缓存数据）、`STORAGE_CONFIRMED`（存储已确认）、`SEND_FAILED`和`ERROR`。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发；也可在对应缓存节点通过`journalctl -u tianlai-cache.service -f`查看标准化的`Runtime state:`日志。
@@ -131,7 +131,7 @@ python3 /opt/tianlai-store/tools/cache_status.py --watch 2
 cat > /tmp/tianlai-status.json <<'EOF'
 {"version":1,"command":"QUERY_STATUS","channel_count":288}
 EOF
-python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-status.json
+python3 tools/trigger.py --host 172.0.0.142 --file /tmp/tianlai-status.json
 ```
 
 控制器响应中的`node_runtime_states`和`runtime_state_counts`提供各节点运行阶段汇总。确认 `accept_trigger` 为 `true`，并确保所需起止周期位于返回的 `oldest_period` 与 `settled_end` 所示范围内；结束边界为不包含端点。然后提交触发：
@@ -140,7 +140,7 @@ python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-status.json
 cat > /tmp/tianlai-capture.json <<'EOF'
 {"version":1,"command":"CAPTURE","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"period_count":15000}
 EOF
-python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-capture.json
+python3 tools/trigger.py --host 172.0.0.142 --file /tmp/tianlai-capture.json
 ```
 
 `channel_count`选择288或384；省略时默认384。默认每个积分周期200微秒，15000个周期为3秒。示例起点及长度仅说明格式，现场须选择当前有效的历史区间。首次回复`PREPARING`不表示已经写盘完成；可按事件编号查询：
@@ -151,7 +151,7 @@ python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-capture.json
 cat > /tmp/tianlai-event.json <<'EOF'
 {"version":1,"command":"QUERY_EVENT","event_id":"event-000001"}
 EOF
-python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-event.json
+python3 tools/trigger.py --host 172.0.0.142 --file /tmp/tianlai-event.json
 ```
 
 常见状态：`PREPARING`正在保护、`PREPARED`表示全体已保护、`STORING`正在双lane回传、`STORED`表示全体已持久化、`RELEASING`正在统一释放、`COMPLETED`表示全部完成。检查`missing_by_server`以及每台节点的`lane-0.stored.json`和`lane-1.stored.json`。

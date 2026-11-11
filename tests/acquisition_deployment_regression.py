@@ -16,6 +16,7 @@ deploy_script = (ANSIBLE / "deploy.sh").read_text(encoding="utf-8")
 permissions = (ANSIBLE / "tasks" / "install_permissions.yml").read_text(encoding="utf-8")
 
 assert "tianlai_acquisition_id is match" not in site
+assert "tianlai_controller_ip == hostvars[groups['storage'][0]].ansible_host" in site
 assert 'hosts: "cache_nodes:storage:controller"' in site
 assert "hosts: localhost" not in site
 assert site.count("run_once: true") >= 4
@@ -42,10 +43,10 @@ assert "Restore receive NICs to ixgbe after deployment" in site
 assert "tianlai_acquisition_id" not in settings
 assert "tianlai_acquisition_id" not in inventory_yml
 assert "tianlai_acquisition_id" not in inventory_ini
-assert 'tianlai_controller_ip: "192.168.200.250"' in inventory_yml
+assert 'tianlai_controller_ip: "172.0.0.142"' in inventory_yml
 assert 'tianlai_backend_ip: "192.168.200.10"' in inventory_yml
 assert 'tianlai_storage_directory: /data/raw-store' in inventory_yml
-assert "tianlai_controller_ip: 192.168.200.250" in settings
+assert "tianlai_controller_ip: 172.0.0.142" in settings
 assert "tianlai_backend_ip: 192.168.200.10" in settings
 assert "ansible_ssh_private_key_file" not in settings
 assert "ansible_ssh_private_key_file" not in site
