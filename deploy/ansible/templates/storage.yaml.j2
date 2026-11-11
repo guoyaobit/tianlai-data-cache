@@ -1,6 +1,10 @@
 # Ansible-generated; edit inventory/group_vars and redeploy.
 directory: {{ tianlai_storage_directory | to_json }}  # Mounted path for event files and persistence markers.
 ioThreads: {{ tianlai_storage_io_threads | int }}  # ZeroMQ I/O workers for the single 100 GbE interface.
+expectedServerIds:  # Enabled cache-node IDs; excluded debug nodes are not awaited.
+{% for host in groups['cache_nodes'] if host not in tianlai_disabled_cache_nodes %}
+  - {{ hostvars[host].tianlai_server_id | int }}
+{% endfor %}
 receivers:  # Both logical lanes terminate on the same physical interface and IP.
 {% for server_id in range(0, 14) %}
 {% for host in groups['cache_nodes'] if (hostvars[host].tianlai_server_id | int) == server_id %}

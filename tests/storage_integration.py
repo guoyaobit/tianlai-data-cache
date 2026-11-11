@@ -129,6 +129,7 @@ def main():
             receivers = receivers.replace('    - ', '  - ').replace('\n      ', '\n    ')
             config.write_text(
                 f'directory: "{root.as_posix()}"\nioThreads: 2\n'
+                f'expectedServerIds: {list(range(14))}\n'
                 f'receivers:\n{receivers}\n'
                 f'backendAddress: "127.0.0.1"\nbackendPort: {notify_port}\n'
                 'backendBindAddress: "127.0.0.1"\n', encoding='utf-8')

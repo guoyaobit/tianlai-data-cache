@@ -14,6 +14,10 @@ tianlai_cache_send_interface: ens2f0
 tianlai_f0_receive_interfaces: [ens4f0, ens4f1, ens5f0, ens5f1, ens1f0, ens1f1, ens3f0, ens3f1]
 # Ordered receive interfaces on cache nodes 4-11.
 tianlai_f3_10_receive_interfaces: [ens4f0, ens4f1, ens5f0, ens5f1]
+# Cache hosts excluded from controller scheduling during debugging.
+tianlai_disabled_cache_nodes: []
+# Physical CPU cores reserved per NIC NUMA node.
+tianlai_receive_reserved_cores_per_numa: 1
 # Fixed 100 GbE receive interface on the storage server.
 tianlai_storage_receive_interface: enp152s0f0np0
 # server ID 0-13 maps to 192.168.210.100-113/24.

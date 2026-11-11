@@ -71,14 +71,13 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     chunkPeriods = number(cfg, "chunkPeriods", 1, 64);
     socketTimeoutSeconds = number(cfg, "socketTimeoutSeconds", 1, 300);
     debug = boolean(cfg, "debug", false);
+    if (cfg["acquisitionId"])
+        throw std::runtime_error("acquisitionId is fixed internally; remove it from YAML");
     if (cfg["sendRateBitsPerSecond"])
         throw std::runtime_error("sendRateBitsPerSecond is obsolete; storage transfer is unlimited");
     if (cfg["udpFragmentBytes"])
         throw std::runtime_error("udpFragmentBytes is obsolete; remove it for ZeroMQ storage transport");
     prefaultMemory = number(cfg, "prefaultMemory", 0, 1) != 0;
-    acquisitionId = field(cfg, "acquisitionId");
-    if (!validId(acquisitionId))
-        throw std::runtime_error("invalid acquisitionId");
     controlBindIp = ip(node, "controlBindIp");
     controlPeerIp = ip(node, "controlPeerIp");
     if (controlPeerIp == "0.0.0.0")

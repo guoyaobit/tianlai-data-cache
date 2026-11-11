@@ -38,7 +38,7 @@ BMC/HDM带外电源控制脚本位于[`deploy/bmc/bmc_power.sh`](deploy/bmc/bmc_
 
 | 文件 / 字段 | 要填写或核对的内容 |
 | --- | --- |
-| `receive_config.yaml` / `acquisitionId` | 内部固定为 `tianlai`，现场无需修改。 |
+| `acquisition_id` | 内部固定为`tianlai`，不再写入缓存YAML。 |
 | `integrationPerTrace` / `periodMicroseconds` | 默认 50000 / 200；须与前端实际包头一致。 |
 | `halfBufferSeconds` / `maxEventSeconds` | 默认 50 / 5；当前代码对事件长度有 5 秒上限。 |
 | `transitionMiB` / `reserveMemoryMiB` | 默认每台 32768 / 49152 MiB；分别为全机过渡区及系统预留。 |

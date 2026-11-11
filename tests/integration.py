@@ -106,7 +106,7 @@ def run(server, directory):
     binary = ROOT / variant / ('tianlai-store-' + variant.lower() + '-simulation')
     ports, boards, payload = (8, 36, 2304) if server < 3 else (4, 24, 8256) if remote else (4, 18, 8832)
     cfg = read_config(ROOT / variant / 'receive_config.yaml')
-    for key, value in dict(acquisitionId='test-acq', integrationPerTrace=100, periodMicroseconds=10000,
+    for key, value in dict(integrationPerTrace=100, periodMicroseconds=10000,
                            halfBufferSeconds=1, maxEventSeconds=1, transitionMiB=8,
                            reserveMemoryMiB=0, prefaultMemory=0, reorderPeriods=1,
                            settleMilliseconds=20, transitionWarnPercent=80,
@@ -136,7 +136,7 @@ def run(server, directory):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     def request(command, **fields):
-        return rpc(node, 'test-acq', command, **fields)
+        return rpc(node, 'tianlai', command, **fields)
 
     def ready_status():
         status = request('QUERY_STATUS')
@@ -254,7 +254,7 @@ def run(server, directory):
         request('RELEASE', event_id='crossing')
         assert request('RELEASE', event_id='crossing')['status'] == 'RELEASED'
         for port in range(ports):
-            path = directory / 'disk/test-acq/crossing' / f'server-{server}/port-{port}.bin'
+            path = directory / 'disk/tianlai/crossing' / f'server-{server}/port-{port}.bin'
             content = path.read_bytes()
             stride = 24 + boards * (payload + 16)
             assert len(content) == 10 * stride
@@ -265,13 +265,13 @@ def run(server, directory):
                     at = i * stride + 24 + board * (payload + 16)
                     expected = make_packet(period, port, board) if mask & (1 << board) else bytes(payload + 16)
                     assert content[at:at + payload + 16] == expected
-        event_path = directory / 'disk/test-acq/crossing' / f'server-{server}'
+        event_path = directory / 'disk/tianlai/crossing' / f'server-{server}'
         stored = [json.loads((event_path / f'lane-{lane}.stored.json').read_text())
                   for lane in range(2)]
         assert set(stored[0]['missing_packets']) == {str(p) for p in range(0, ports, 2)}
         assert set(stored[1]['missing_packets']) == {str(p) for p in range(1, ports, 2)}
         if remote:
-            meta = json.loads((directory / 'disk/test-acq/crossing' /
+            meta = json.loads((directory / 'disk/tianlai/crossing' /
                                f'server-{server}/lane-0.meta.json').read_text())
             assert meta['profile'] == 'remote96' and meta['packets_per_board'] == 2
             assert meta['physical_board_count'] == 12 and meta['frequency_bins_per_port'] == 86
@@ -295,9 +295,9 @@ def run(server, directory):
             raise AssertionError('cancelled event resurrected')
         except RuntimeError as error:
             assert 'EVENT_ID_CONFLICT' in str(error)
-        controller = Controller([node], 'test-acq', directory / 'journal', allow_partial=True,
+        controller = Controller([node], 'tianlai', directory / 'journal', allow_partial=True,
                                 integration_per_trace=100, period_microseconds=10000)
-        message = dict(version=1, acquisition_id='test-acq', command='CAPTURE', event_id='controller-event',
+        message = dict(version=1, acquisition_id='tianlai', command='CAPTURE', event_id='controller-event',
                        start=dict(trace_period_id=5, integration_period_id=95), period_count=10)
         controller.dispatch(message)
         result = wait_for(lambda: controller.events['controller-event']
@@ -306,12 +306,12 @@ def run(server, directory):
         assert controller.dispatch(message)['status'] == 'COMPLETED'
         # Verify the external TCP/JSON entry point and command-line trigger client.
         (directory / 'nodes.json').write_text(json.dumps([node]))
-        (directory / 'query.json').write_text(json.dumps(dict(version=1, acquisition_id='test-acq',
+        (directory / 'query.json').write_text(json.dumps(dict(version=1, acquisition_id='tianlai',
                                                              command='QUERY_STATUS')))
         external_port = free_port(socket.SOCK_STREAM)
         controller_process = subprocess.Popen([
             'python3', str(ROOT / 'tools/controller.py'), '--nodes', str(directory / 'nodes.json'),
-            '--acquisition', 'test-acq', '--journal', str(directory / 'external-journal'),
+            '--acquisition', 'tianlai', '--journal', str(directory / 'external-journal'),
             '--bind', '127.0.0.1', '--port', str(external_port), '--allow-source', '127.0.0.1', '--allow-partial',
             '--integration-per-trace', '100', '--period-us', '10000'],
             stdout=log, stderr=log)

@@ -82,17 +82,19 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
 COMPLETED 只表示事件保存完成，不代表已经恢复完整 100 秒历史；再次触发应先查 READY。
 部分节点失败或超时，不自动假定那些节点没有执行过请求，也不自动删除其他节点的数据。
 控制器 `QUERY_STATUS` 只有在所有节点可触发且共同区间 `oldest_period < settled_end` 时才返回 READY；即使 READY，目标区间仍需落在共同区间内，节点可能因区间过期或未定稿而拒绝。控制器先检查包头计数的位宽，节点再按实际 `integrationPerTrace` 检查积分编号和范围。
+
+调试模式排除已知离线缓存节点时，控制器响应包含`partial_node_set=true`和`participating_server_ids`；事件记录也保存`participating_server_ids`。此类结果只代表列出的参与节点，不得解释为完整288或384路数据。
 事件日志写入失败时不会在内存中发布未成功记录的状态；无法写入暂停状态时仍在内存中暂停，重启后须结合日志和各节点状态人工核对，不能假定失败操作未执行。
 
 ### 写盘完成主动通知
 
-C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～13（384路）各自两个lane全部持久化且元数据一致后，先写入事件级`storage-complete.json`，再通过TCP/JSON通知消色散后端：
+C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～13（384路）各自两个lane全部持久化且元数据一致后，先写入事件级`storage-complete.json`，再通过TCP/JSON通知消色散后端。调试部署明确排除离线缓存节点时，只等待`expectedServerIds`与所选通道模式的交集：
 
 ```json
-{"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"tianlai","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0}}
+{"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"tianlai","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0},"partial_node_set":false,"participating_server_ids":[0,1,2,3,4,5,6,7,8,9,10]}
 ```
 
-`STORED`精确表示所选模式的11台或14台数据均已写盘并形成持久化标记；它不表示控制器已经完成缓存释放。缺包数量见`missing_by_server`，因此该通知也不是零丢包保证。
+生产模式下，`STORED`精确表示所选模式的11台或14台数据均已写盘并形成持久化标记；它不表示控制器已经完成缓存释放。`partial_node_set=true`时仅表示`participating_server_ids`列出的调试节点完成，不能解释为完整288路或384路数据。缺包数量见`missing_by_server`，因此该通知也不是零丢包保证。
 
 后端应按全局唯一的`event_id`幂等地持久化并处理结果，再在同一TCP连接回复：
 

@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
             atomic_json(node / (prefix + ".stored.json"), stored);
         }
     }
-    const auto notice = build_completion_notice(complete);
+    const auto notice = build_completion_notice(complete, default_server_ids());
     assert(notice && notice->at("status") == "STORED");
     assert(notice->at("channel_count") == 384);
     assert(notice->at("missing_by_server").at("0") == 3);
@@ -127,9 +127,16 @@ int main(int argc, char **argv) {
             atomic_json(node / (prefix + ".stored.json"), stored);
         }
     }
-    const auto notice288 = build_completion_notice(complete288);
+    const auto notice288 = build_completion_notice(complete288, default_server_ids());
     assert(notice288 && notice288->at("channel_count") == 288);
     assert(notice288->at("missing_by_server").size() == 11);
+    // Debug deployments complete using only explicitly enabled cache servers.
+    fs::remove(complete / "storage-complete.json");
+    const std::vector<unsigned> partial_servers{1, 3, 5, 8, 13};
+    const auto partial = build_completion_notice(complete, partial_servers);
+    assert(partial && partial->at("partial_node_set") == true);
+    assert(partial->at("participating_server_ids") == partial_servers);
+    assert(partial->at("missing_by_server").size() == partial_servers.size());
     // The lane thread processes metadata, blocks and END without a second worker.
     std::map<std::string, ActiveTransfer> sessions;
     auto response = process_transfer(sessions, "client", metadata("session"), root, shared, 3, 0);

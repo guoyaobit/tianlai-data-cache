@@ -6,7 +6,7 @@ Wants=network-online.target tianlai-storage.service
 [Service]
 Type=simple
 WorkingDirectory={{ tianlai_root }}/tools
-ExecStart=/usr/bin/python3 {{ tianlai_root }}/tools/controller.py --nodes {{ tianlai_root }}/config/nodes.json --journal {{ tianlai_root }}/journal --bind {{ tianlai_controller_ip }} --port {{ tianlai_controller_port }} --allow-source {{ tianlai_backend_ip }} --period-us {{ tianlai_period_us }} --integration-per-trace {{ tianlai_integration_per_trace }}
+ExecStart=/usr/bin/python3 {{ tianlai_root }}/tools/controller.py --nodes {{ tianlai_root }}/config/nodes.json --journal {{ tianlai_root }}/journal --bind {{ tianlai_controller_ip }} --port {{ tianlai_controller_port }} --allow-source {{ tianlai_backend_ip }} --period-us {{ tianlai_period_us }} --integration-per-trace {{ tianlai_integration_per_trace }}{% if tianlai_disabled_cache_nodes | length > 0 %} --allow-partial{% endif %}
 Restart=always
 RestartSec=2
 

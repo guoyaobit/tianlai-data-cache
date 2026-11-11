@@ -54,7 +54,9 @@ assert site.count("tasks/install_permissions.yml") == 4
 assert 'owner: root' in permissions
 assert 'group: "{{ ansible_user }}"' in permissions
 assert "mode: 'u=rwX,g=rX,o='" in permissions
-assert 'acquisitionId: "tianlai"' in recv_template
+assert 'acquisitionId:' not in recv_template
+assert 'acquisitionId = "tianlai"' in (ROOT / "Common/include/yaml_config.h").read_text(encoding="utf-8")
+assert 'acquisitionId is fixed internally' in (ROOT / "Common/src/yaml_config.cpp").read_text(encoding="utf-8")
 assert "--acquisition" not in controller_template
 assert not (ANSIBLE / "configure_acquisition.sh").exists()
 assert not (ANSIBLE / "configure_acquisition.yml").exists()

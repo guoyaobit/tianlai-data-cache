@@ -28,7 +28,8 @@ int main(int argc, char **argv) {
         fs::create_directories(directory);
         std::signal(SIGINT, stop_handler);
         std::signal(SIGTERM, stop_handler);
-        serve(directory, endpoints, 4, notify_address, notify_port, notify_bind);
+        serve(directory, endpoints, 4, default_server_ids(),
+              notify_address, notify_port, notify_bind);
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "[FATAL] " << error.what() << '\n';

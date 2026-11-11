@@ -1,5 +1,4 @@
 # Settings shared by all receive ports.
-acquisitionId: "tianlai"  # Internal fixed ID; external triggers omit it.
 integrationPerTrace: {{ tianlai_integration_per_trace | int }}  # Periods per trace; must match upstream/controller.
 periodMicroseconds: {{ tianlai_period_us | int }}  # Integration period (us); match upstream/controller.
 halfBufferSeconds: 50  # Duration of each A/B buffer (s).

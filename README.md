@@ -45,11 +45,10 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 - Ansible部署默认以 `ens2f0` 的Intel双口万兆卡型号为基准，排除该发送卡并自动发现其他同型号接收端口，端口可以有Linux网口或尚未加载驱动；手工运行时将 `deviceName0..7` 或 `deviceName0..3` 改为实际接收 PCI 地址。
 - 填写单个存储网口对应的 `sendEthName`、本地IPv4、存储端IPv4及两个逻辑lane端口。
 - `controlBindIp/controlPort` 是管理网 TCP/JSON 监听地址；`controlPeerIp` 只允许调度机地址。
-- 节点间内部固定使用 `acquisitionId: tianlai`；现场无需配置，消色散后端触发时省略该字段。
+- 节点间内部固定使用`acquisition_id=tianlai`；缓存YAML不再包含该固定项，消色散后端触发时也可省略该字段。
 - `transitionWarnPercent` 默认 80；过渡区达到该占用比例时记录一次 WARN，并在查询结果中置警告标志。
 - `chunkPeriods` 默认 64；它控制单个 ZeroMQ 数据块的积分周期数，应结合消息内存和吞吐实测调整。
-- 配置适合网卡 NUMA 拓扑的 `cpuIdN`；默认 -1 不绑定。内存预触页默认开启；
-  部署时还需设置进程 NUMA 内存策略，确保网卡/线程/缓存的本地性。
+- Ansible根据接收网卡NUMA拓扑自动填写`cpuIdN`并避开每个NUMA的首个物理核；手工配置时`-1`表示不绑定。内存预触页默认开启，仍需结合现场验证网卡、线程和缓存的本地性。
 - `logFilePath` 是日志文件全路径；`-` 只输出到 stderr。`receive_config.yaml` 中可选的
   `debug: true` 启用详细诊断日志，省略或设为 `false` 时保持 INFO 级别。日志由 spdlog
   输出，带毫秒时间和线程号；指定文件时同时输出到 stderr，文件按 50 MiB 轮转，保留最多
@@ -148,7 +147,7 @@ QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
 内部固定标识仍进入缓存事件和TLSTORE1元数据。升级时必须先停止触发并处理完旧事件，在维护窗口统一更新控制器、14台缓存服务和存储服务，不能混跑协议版本不同的进程。
 所选模式的11台或14台节点持久化完成后，C++存储服务通过TCP/JSON直接向消色散后端发送
 `CAPTURE_RESULT`；后端持久化结果后向报文来源地址回复 `ACK_RESULT`。未确认结果会落盘保存并在重启后继续重试。示例接收器为 `tools/result_listener.py`，协议和缺包含义见 `PROTOCOL.md`。默认要求配置全部
-14台，单节点联调用`--allow-partial`，不能用该模式表示288或384路全部完成。
+14台。调试时可通过Ansible的`tianlai_disabled_cache_nodes`明确排除离线节点；该模式不能表示288或384路全部完成。
 原始输入头的 `ifTrace` 不充当触发位，也不修改保留字节。
 协议字段和状态详见 [PROTOCOL.md](PROTOCOL.md)。
 
@@ -176,7 +175,7 @@ make storage
 ./Storage/tianlai-storage --config Storage/storage.yaml
 ```
 
-`sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。最终确认丢失时，已完成lane在元数据阶段直接返回STORED；288路需要22个lane、384路需要28个lane持久化标记一致，才生成`storage-complete.json`并通知后端。
+`sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。最终确认丢失时，已完成lane在元数据阶段直接返回STORED；生产模式下288路需要22个lane、384路需要28个lane持久化标记一致，才生成`storage-complete.json`并通知后端。调试排除离线节点时，控制器与落盘端使用同一启用节点列表，完成通知明确标记`partial_node_set`及实际参与节点。
 
 ZeroMQ 数据通道不使用 UDP 分片参数；旧配置中的 udpFragmentBytes 必须删除。TCP/IP MTU 仍须按实际网络配置。ZeroMQ 不会补回 FPGA 到缓存服务器之间丢失的 UDP 包；旧 UDP/TCP 存储发送端与 ZeroMQ 接收器不兼容，需协调同时更新。
 

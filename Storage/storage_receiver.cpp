@@ -23,6 +23,7 @@
 #include <exception>
 #include <initializer_list>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -360,15 +361,30 @@ static json read_json_file(const fs::path &path) {
 
 // Builds one result after both lanes from all nodes selected by channel_count are durable.
 // The result itself is persisted before it can be sent to the backend.
-static std::optional<json> build_completion_notice(const fs::path &event_directory) {
-    const auto first_path = event_directory / "server-0" / "lane-0.meta.json";
+static std::vector<unsigned> default_server_ids() {
+    std::vector<unsigned> result;
+    for (unsigned server = 0; server < CACHE_NODE_COUNT; ++server) result.push_back(server);
+    return result;
+}
+
+static std::optional<json> build_completion_notice(
+        const fs::path &event_directory, const std::vector<unsigned> &configured_servers) {
+    require(!configured_servers.empty(), "expected server list is empty");
+    auto first_server = configured_servers.front();
+    const auto first_path = event_directory / ("server-" + std::to_string(first_server)) /
+                            "lane-0.meta.json";
     if (!fs::is_regular_file(first_path)) return std::nullopt;
     const json first = read_json_file(first_path);
     const auto channel_count = integer(first, "channel_count");
     require(channel_count == 288 || channel_count == 384, "invalid event channel count");
-    const unsigned expected_nodes = channel_count == 288 ? 11U : CACHE_NODE_COUNT;
+    const unsigned complete_node_count = channel_count == 288 ? 11U : CACHE_NODE_COUNT;
+    std::vector<unsigned> participating_servers;
+    std::copy_if(configured_servers.begin(), configured_servers.end(),
+                 std::back_inserter(participating_servers),
+                 [complete_node_count](unsigned server) { return server < complete_node_count; });
+    require(!participating_servers.empty(), "no configured server participates in this channel mode");
     json missing = json::object();
-    for (unsigned server = 0; server < expected_nodes; ++server) {
+    for (unsigned server : participating_servers) {
         const auto directory = event_directory / ("server-" + std::to_string(server));
         uint64_t absent = 0;
         for (unsigned lane = 0; lane < LANE_COUNT; ++lane) {
@@ -386,7 +402,7 @@ static std::optional<json> build_completion_notice(const fs::path &event_directo
                     integer(marker, "lane") == lane && marker.at("event_id") == meta.at("event_id") &&
                     marker.at("acquisition_id") == meta.at("acquisition_id"),
                     "node completion marker mismatch");
-            if (server != 0 || lane != 0) {
+            if (server != first_server || lane != 0) {
                 for (const char *field : {"format", "acquisition_id", "event_id", "start_period",
                                           "period_count", "integration_per_trace", "period_microseconds",
                                           "channel_count"})
@@ -417,7 +433,9 @@ static std::optional<json> build_completion_notice(const fs::path &event_directo
                    {"end_exclusive", {{"trace_period_id", end / per_trace},
                                       {"integration_period_id", end % per_trace}}},
                    {"period_count", count}, {"period_microseconds", integer(first, "period_microseconds")},
-                   {"integration_per_trace", per_trace}, {"missing_by_server", missing}};
+                   {"integration_per_trace", per_trace}, {"missing_by_server", missing},
+                   {"partial_node_set", participating_servers.size() != complete_node_count},
+                   {"participating_server_ids", participating_servers}};
     const auto path = event_directory / "storage-complete.json";
     if (fs::exists(path)) require(read_json_file(path) == notice, "stored event result conflicts");
     else atomic_json(path, notice);
@@ -496,6 +514,7 @@ class CompletionNotifier {
     fs::path root;
     std::string target_address, source_address;
     unsigned target_port;
+    std::vector<unsigned> expected_servers;
     std::mutex mutex;
     std::condition_variable condition;
     bool stopped = false;
@@ -582,7 +601,7 @@ class CompletionNotifier {
                             // a valid reply atomically replaces it below.
                         }
                     }
-                    auto notice = build_completion_notice(event.path());
+                    auto notice = build_completion_notice(event.path(), expected_servers);
                     if (notice) send(event.path(), *notice);
                 } catch (const std::exception &caught) {
                     std::cerr << "completion notifier: " << caught.what() << '\n';
@@ -615,9 +634,11 @@ class CompletionNotifier {
     }
 
   public:
-    CompletionNotifier(fs::path base, std::string target, unsigned port, std::string source)
+    CompletionNotifier(fs::path base, std::string target, unsigned port, std::string source,
+                       std::vector<unsigned> servers)
         : root(std::move(base)), target_address(std::move(target)), source_address(std::move(source)),
-          target_port(port), worker(&CompletionNotifier::run, this) {}
+          target_port(port), expected_servers(std::move(servers)),
+          worker(&CompletionNotifier::run, this) {}
     ~CompletionNotifier() {
         { std::lock_guard<std::mutex> lock(mutex); stopped = true; }
         condition.notify_one();
@@ -749,7 +770,7 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
 }
 
 static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &endpoints,
-                  unsigned io_threads,
+                  unsigned io_threads, const std::vector<unsigned> &expected_servers,
                   const std::string &notify_address, unsigned notify_port,
                   const std::string &notify_bind) {
     void *context = zmq_ctx_new();
@@ -759,7 +780,7 @@ static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &end
         throw std::runtime_error("ZeroMQ I/O thread configuration failed");
     }
     Shared shared;
-    CompletionNotifier notifier(root, notify_address, notify_port, notify_bind);
+    CompletionNotifier notifier(root, notify_address, notify_port, notify_bind, expected_servers);
     std::atomic<bool> shutdown{false};
     std::mutex error_mutex;
     std::exception_ptr first_error;
@@ -797,6 +818,7 @@ struct StorageConfig {
     std::string backend_address, backend_bind_address;
     unsigned backend_port = 0, io_threads = 2;
     std::vector<ReceiverEndpoint> receivers;
+    std::vector<unsigned> expected_servers;
 };
 
 static void require_yaml_keys(const YAML::Node &node, std::initializer_list<const char *> expected,
@@ -814,7 +836,7 @@ static void require_yaml_keys(const YAML::Node &node, std::initializer_list<cons
 
 static StorageConfig load_storage_config(const fs::path &path) {
     const auto root = YAML::LoadFile(path.string());
-    require_yaml_keys(root, {"directory", "ioThreads", "receivers", "backendAddress",
+    require_yaml_keys(root, {"directory", "ioThreads", "expectedServerIds", "receivers", "backendAddress",
                              "backendPort", "backendBindAddress"}, "root");
     StorageConfig config;
     config.directory = root["directory"].as<std::string>();
@@ -822,6 +844,17 @@ static StorageConfig load_storage_config(const fs::path &path) {
     config.backend_address = root["backendAddress"].as<std::string>();
     config.backend_port = root["backendPort"].as<unsigned>();
     config.backend_bind_address = root["backendBindAddress"].as<std::string>();
+    const auto expected_servers = root["expectedServerIds"];
+    require(expected_servers.IsSequence() && expected_servers.size() >= 1 &&
+            expected_servers.size() <= CACHE_NODE_COUNT, "invalid expectedServerIds");
+    std::set<unsigned> unique_expected_servers;
+    for (const auto &entry : expected_servers) {
+        const auto server = entry.as<unsigned>();
+        require(server < CACHE_NODE_COUNT && unique_expected_servers.insert(server).second,
+                "invalid or duplicate expected server ID");
+        config.expected_servers.push_back(server);
+    }
+    std::sort(config.expected_servers.begin(), config.expected_servers.end());
     const auto receivers = root["receivers"];
     require(receivers.IsSequence() && receivers.size() == STORAGE_PORT_COUNT,
             "receivers must contain exactly 28 entries");
@@ -871,6 +904,9 @@ int main(int argc, char **argv) {
         const auto config = load_storage_config(argv[2]);
         if (check_only) {
             std::cout << "storage directory: " << config.directory << '\n';
+            std::cout << "expected servers:";
+            for (unsigned server : config.expected_servers) std::cout << ' ' << server;
+            std::cout << '\n';
             for (const auto &receiver : config.receivers)
                 std::cout << "server " << receiver.server << " lane " << receiver.lane << ": "
                           << receiver.address << ':' << receiver.port << " <- "
@@ -881,7 +917,7 @@ int main(int argc, char **argv) {
         }
         fs::create_directories(config.directory);
         std::signal(SIGINT, stop_handler); std::signal(SIGTERM, stop_handler);
-        serve(config.directory, config.receivers, config.io_threads,
+        serve(config.directory, config.receivers, config.io_threads, config.expected_servers,
               config.backend_address, config.backend_port,
               config.backend_bind_address);
         return 0;

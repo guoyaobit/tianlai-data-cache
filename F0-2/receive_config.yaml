@@ -1,6 +1,5 @@
 # Example: verify addresses, PCI IDs, and acquisition ID.
 # Settings shared by all receive ports.
-acquisitionId: "tianlai"  # Internal fixed ID; external triggers omit it.
 debug: false  # Enable verbose diagnostic logs.
 integrationPerTrace: 50000  # Periods per trace; must match upstream/controller.
 periodMicroseconds: 200  # Integration period (us); match upstream/controller.

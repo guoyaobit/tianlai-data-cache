@@ -50,7 +50,7 @@ class YamlConfig {
     unsigned controlPort = 19000, socketTimeoutSeconds = 15;
     uint64_t transitionBytes = 32ULL << 30, reserveMemoryBytes = 48ULL << 30;
     bool prefaultMemory = true, debug = false;
-    std::string acquisitionId, controlBindIp, controlPeerIp, logFilePath;
+    std::string acquisitionId = "tianlai", controlBindIp, controlPeerIp, logFilePath;
     std::vector<ReceivePortConfig> receivePorts;
     SendLinkConfig sendLink;
 };

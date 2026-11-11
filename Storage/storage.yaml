@@ -1,6 +1,7 @@
 # Storage example; verify addresses before deployment.
 directory: "/data/raw-store"  # Use a mounted array path validated for capacity/throughput.
 ioThreads: 2  # ZeroMQ I/O workers for the 100 GbE receiver.
+expectedServerIds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]  # Cache nodes required for completion.
 receivers:  # Both logical lanes share one physical 100 GbE interface and IP.
   - serverId: 0
     lane: 0

@@ -238,8 +238,9 @@ class Controller:
         if not ID.fullmatch(event_id):
             raise ValueError('invalid event_id')
         channel_count = None if resume else message.get('channel_count', 384)
+        selected_nodes = None
         if not resume:
-            self.event_nodes(channel_count)
+            selected_nodes = self.event_nodes(channel_count)
         normalized = None if resume else self.capture_range(message)
         with self.lock:
             existing = self.events.get(event_id)
@@ -256,11 +257,15 @@ class Controller:
                     raise ValueError('only PAUSED events may resume')
             else:
                 start, count, end = normalized
+                participant_ids = [node['server_id'] for node in selected_nodes]
+                expected_count = 11 if channel_count == 288 else 14
                 self.events[event_id] = dict(event_id=event_id, acquisition_id=self.acquisition,
                     start=start, end_exclusive=end, period_count=count,
                     channel_count=channel_count,
                     period_microseconds=self.period_microseconds, integration_per_trace=self.integration_per_trace,
-                    status='PREPARING', active_server_ids=[])
+                    status='PREPARING', active_server_ids=[],
+                    partial_node_set=len(participant_ids) != expected_count,
+                    participating_server_ids=participant_ids)
             self.running = event_id
             try:
                 atomic_json(self.journal / f'{event_id}.json', self.events[event_id])
@@ -396,7 +401,9 @@ class Controller:
             end = min(s['settled_end'] for s in states)
             ready = not busy and oldest < end and all(s['accept_trigger'] for s in states)
             return dict(status='READY' if ready else 'BUSY_OR_WARMING', accept_trigger=ready,
-                        channel_count=channel_count, oldest_period=oldest, settled_end=end)
+                        channel_count=channel_count, oldest_period=oldest, settled_end=end,
+                        partial_node_set=len(nodes) != (11 if channel_count == 288 else 14),
+                        participating_server_ids=[node['server_id'] for node in nodes])
         raise ValueError('unknown controller command')
 
 

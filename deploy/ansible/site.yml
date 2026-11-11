@@ -41,6 +41,10 @@
           - tianlai_f3_10_receive_interfaces | length == 4
           - tianlai_f3_10_receive_interfaces | unique | list | length == 4
           - tianlai_cache_send_interface not in tianlai_f3_10_receive_interfaces
+          - tianlai_disabled_cache_nodes | unique | list | length == tianlai_disabled_cache_nodes | length
+          - tianlai_disabled_cache_nodes | difference(groups['cache_nodes']) | length == 0
+          - tianlai_disabled_cache_nodes | length < groups['cache_nodes'] | length
+          - tianlai_receive_reserved_cores_per_numa | int >= 0
           - tianlai_storage_receive_interface == 'enp152s0f0np0'
           - tianlai_cache_send_network is match('^[0-9]+\.[0-9]+\.[0-9]+$')
           - tianlai_cache_send_host_offset | int >= 1

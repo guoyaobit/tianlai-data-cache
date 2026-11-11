@@ -6,7 +6,7 @@ controlPort: {{ tianlai_control_port | int }}  # Local management TCP/JSON contr
 logFilePath: "-"  # Log path; "-" writes only to stderr.
 {% for device in tianlai_receive_devices %}
 deviceName{{ loop.index0 }}: {{ device | to_json }}  # ixcap PCI address for this receive port.
-cpuId{{ loop.index0 }}: -1  # Receive-thread CPU ID; -1 disables affinity.
+cpuId{{ loop.index0 }}: {{ tianlai_receive_cpu_ids[loop.index0] | int }}  # NUMA-local physical CPU.
 {% endfor %}
 sendEthName: {{ tianlai_send_interface | to_json }}  # Both logical lanes share this physical storage-network interface.
 sendSourceIp: {{ tianlai_send_ip | to_json }}

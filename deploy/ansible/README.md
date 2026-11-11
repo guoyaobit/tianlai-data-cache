@@ -32,7 +32,17 @@ ssh-copy-id ubuntu@SERVER_IP
 bash deploy.sh
 ```
 
-`deploy.sh`先检查清单和语法，再在本次选择的实际目标主机变量上下文中执行一次完整性预检。执行顺序为：必要网络配置、存储/缓存/控制器代码复制与编译安装、最后生成网卡报告；报告问题不会阻止前面的代码部署。可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。节点内部固定使用 `acquisitionId: tianlai`，无需在清单或部署命令中填写。部署完成后存储和控制器自动启动；`tianlai-cache.service`保持禁用和停止，并将配置的接收PCI设备逐个恢复到ixgbe驱动。
+`deploy.sh`先检查清单和语法，再在本次选择的实际目标主机变量上下文中执行一次完整性预检。执行顺序为：必要网络配置、存储/缓存/控制器代码复制与编译安装、最后生成网卡报告；报告问题不会阻止前面的代码部署。可附加Ansible参数，例如`bash deploy.sh --limit tianlaistore1`。默认读取`inventory.yml`，使用INI清单时执行`TIANLAI_INVENTORY=inventory.ini bash deploy.sh`。`ansible.cfg`启用15路并发和SSH pipelining，减少批量部署连接次数。节点内部固定使用`acquisition_id=tianlai`，不再写入缓存YAML。部署完成后存储和控制器自动启动；`tianlai-cache.service`保持禁用和停止，并将配置的接收PCI设备逐个恢复到ixgbe驱动。
+
+调试时可在`inventory.yml`的`all.vars`中明确列出离线缓存节点：
+
+```yaml
+tianlai_disabled_cache_nodes: [tianlaistore5, tianlaistore9]
+```
+
+控制器节点清单和落盘端等待列表都会排除这些主机，并自动启用部分节点模式。至少保留一个缓存节点，名称必须属于`cache_nodes`且不能重复。此模式生成的数据不完整，不得作为288或384路完整结果；恢复生产前必须清空该列表并重新部署存储服务器上的控制器和落盘服务。Ansible仍会尝试部署离线主机，现场可配合`--limit`只更新在线节点及存储服务器。
+
+部署会读取每个接收PCI设备的NUMA节点，并为接收线程选择同NUMA的不同物理CPU核；默认每个NUMA节点预留第一个物理核。最终`cpuIdN`写入`server.yaml`，NUMA未知或可用物理核不足时部署停止。预留数量由`tianlai_receive_reserved_cores_per_numa`配置。
 
 首次完整部署完成后，可只更新项目源代码和程序，不修改Netplan、YAML业务配置、采集任务ID、systemd单元或系统软件包：
 

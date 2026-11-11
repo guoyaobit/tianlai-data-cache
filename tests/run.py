@@ -39,6 +39,8 @@ subprocess.run([sys.executable, str(root / 'tests/network_inventory_regression.p
 subprocess.run([sys.executable, str(root / 'tests/jumbo_mtu_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/network_promiscuous_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/receive_interface_order_regression.py')], check=True, timeout=30)
+subprocess.run([sys.executable, str(root / 'tests/receive_cpu_assignment_regression.py')], check=True, timeout=30)
+subprocess.run([sys.executable, str(root / 'tests/partial_cache_nodes_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/acquisition_deployment_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/bmc_power_regression.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'tests/zmq_connection_logging_regression.py')], check=True, timeout=30)

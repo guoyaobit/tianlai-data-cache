@@ -108,6 +108,32 @@
     - "'cache_nodes' in group_names"
     - tianlai_server_id | int < 11
 
+- name: Assign receive threads to physical CPUs on their NIC NUMA nodes
+  ansible.builtin.script:
+    cmd: >-
+      files/assign_receive_cpus.py
+      --reserve-cores-per-node {{ tianlai_receive_reserved_cores_per_numa | int }}
+      {{ tianlai_receive_devices | join(' ') }}
+    executable: /usr/bin/python3
+  register: receive_cpu_assignment_raw
+  changed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Decode receive CPU assignments
+  ansible.builtin.set_fact:
+    tianlai_receive_cpu_report: "{{ receive_cpu_assignment_raw.stdout | from_json }}"
+    tianlai_receive_cpu_ids: "{{ (receive_cpu_assignment_raw.stdout | from_json).cpu_ids }}"
+  changed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Require one unique NUMA-local CPU for every receive thread
+  ansible.builtin.assert:
+    that:
+      - tianlai_receive_cpu_ids | length == tianlai_receive_devices | length
+      - tianlai_receive_cpu_ids | unique | list | length == tianlai_receive_cpu_ids | length
+    fail_msg: "Invalid receive CPU assignment: {{ tianlai_receive_cpu_report }}"
+  when: "'cache_nodes' in group_names"
+
 - name: Require a valid cache data IPv4 address before changing Netplan
   ansible.builtin.assert:
     that:

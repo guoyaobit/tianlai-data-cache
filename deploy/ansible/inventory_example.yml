@@ -15,6 +15,8 @@ all:
     # First TCP port for storage data listeners.
     tianlai_storage_port: 20000
     tianlai_storage_lane1_port: 20100
+    # Debug only: exclude known-offline cache hosts from controller scheduling.
+    tianlai_disabled_cache_nodes: []
     tianlai_storage_io_threads: 2
   children:
     cache_nodes:
