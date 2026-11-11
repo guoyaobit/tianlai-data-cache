@@ -1,5 +1,6 @@
 # Ansible-generated; edit inventory/group_vars and redeploy.
 directory: {{ tianlai_storage_directory | to_json }}  # Mounted path for event files and persistence markers.
+statusFile: "/run/tianlai-storage-status.json"  # Live storage receiver status for local monitoring.
 ioThreads: {{ tianlai_storage_io_threads | int }}  # ZeroMQ I/O workers for the single 100 GbE interface.
 expectedServerIds:  # Enabled cache-node IDs; excluded debug nodes are not awaited.
 {% for host in groups['cache_nodes'] if host not in tianlai_disabled_cache_nodes %}

@@ -115,12 +115,16 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
 | QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、过渡区峰值和 error |
 | RELEASE | event_id | 只有该节点全部接收口数据可靠落盘后，即 STORED 状态，才允许释放冻结区 |
 | CANCEL | event_id | 未发送或发送失败时放弃事件；PREPARING 时延后安全释放 |
-| QUERY_STATUS | 无 | READY/BUSY/WARMING、共同周期范围、最繁忙口过渡区占用/容量/警告、最近冻结耗时等 |
+| QUERY_STATUS | 无 | READY/BUSY/WARMING、runtime_state、状态持续时间、接收口数量、累计收包、共同周期范围及过渡区指标等 |
 | QUERY_PORT | port | 单口周期范围、收包计数、过渡区占用/容量/峰值/警告、最近冻结耗时和冻结次数 |
 
 节点主要状态：PREPARING → PREPARED → SENDING → STORED → RELEASED。
 发送失败为 SEND_FAILED，仍保护数据；准备失败为 REJECTED；明确取消为 CANCELLED。
 释放后历史不足时节点 QUERY_STATUS 返回 WARMING，而不是 READY。
+
+`runtime_state`描述进程当前工作阶段，与事件状态分开：`PREPARING_MEMORY`、`WAITING_FOR_DATA`、`CACHING_DATA`、`PREPARING_EVENT`、`EVENT_READY`、`SENDING_CACHED_DATA`、`STORAGE_CONFIRMED`、`SEND_FAILED`、`ERROR`和`STOPPING`。节点响应同时包含`runtime_state_age_ms`、`initialized_ports/receive_ports`及`received_packets`。控制器`QUERY_STATUS`用`node_runtime_states`和`runtime_state_counts`汇总所选节点。
+
+存储服务将本机实时状态写入`statusFile`（部署默认`/run/tianlai-storage-status.json`）。状态包括`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`和`STOPPING`；文件还包含监听端点、活动传输、完成/中止lane、累计写入字节及最近错误。状态文件是监控信息，不代替lane持久化标记或`storage-complete.json`。
 
 控制器只有在所选模式全部节点PREPARED后才并行发出STORE；全部节点STORED后才并行发出RELEASE。288路使用11个节点，384路使用14个节点；每节点使用两个ZeroMQ连接，任一lane失败都会使节点进入SEND_FAILED，其他已落盘节点也暂不释放缓存。
 节点RPC断线或超时时使用同一request_id重新建立TCP连接，最多进行6次指数退避重试；准备和写盘长任务通过QUERY_EVENT等待。

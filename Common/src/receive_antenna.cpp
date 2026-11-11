@@ -14,6 +14,31 @@
 #endif
 
 static const unsigned BATCH_SIZE = 512;
+static void logFirstUdpPacket(unsigned port, const unsigned char *data, size_t bytes,
+                              size_t frameBytes, unsigned integrationPerTrace, bool &logged) {
+    if (logged)
+        return;
+    logged = true;
+    if (bytes < 8) {
+        LOG("Receive port " + std::to_string(port) +
+                " first UDP payload is too short: frame_bytes=" +
+                std::to_string(frameBytes) + " payload_bytes=" + std::to_string(bytes),
+            WARN);
+        return;
+    }
+    const auto header = decodeInput(data);
+    LOG("Receive port " + std::to_string(port) +
+            " first captured UDP packet: packet_id=" + std::to_string(header.packetId) +
+            " board=" + std::to_string(header.board) +
+            " trace_period_id=" + std::to_string(header.trace) +
+            " integration_period_id=" + std::to_string(header.integration) +
+            " absolute_period=" +
+            std::to_string(header.absolute(integrationPerTrace)) +
+            " valid=" + std::to_string(header.valid) +
+            " frame_bytes=" + std::to_string(frameBytes) +
+            " payload_bytes=" + std::to_string(bytes),
+        INFO);
+}
 // Validate a raw payload packet and write it to the matching receive-port buffer by absolute integration period and board position.
 static void receivePacket(CacheRuntime *para, unsigned p, const unsigned char *data, size_t bytes,
                           bool &firstPacketLogged) {
@@ -33,16 +58,18 @@ static void receivePacket(CacheRuntime *para, unsigned p, const unsigned char *d
     const unsigned slot =
         (h.board - port.boardBegin) * port.packetsPerBoard + h.packetId - port.packetId;
     const uint64_t absolutePeriod = h.absolute(cfg.integrationPerTrace);
-    if (para->receiveBuffers[p]->receive(absolutePeriod, slot, h.ifTrace, data) &&
-        !firstPacketLogged) {
-        firstPacketLogged = true;
-        LOG("Receive port " + std::to_string(p) +
-                " first UDP packet: packet_id=" + std::to_string(h.packetId) +
+    if (para->receiveBuffers[p]->receive(absolutePeriod, slot, h.ifTrace, data)) {
+        if (!firstPacketLogged) {
+            noteAcceptedPacket(*para);
+            firstPacketLogged = true;
+            LOG("Receive port " + std::to_string(p) +
+                " first accepted UDP packet: packet_id=" + std::to_string(h.packetId) +
                 " board=" + std::to_string(h.board) +
                 " trace_period_id=" + std::to_string(h.trace) +
                 " integration_period_id=" + std::to_string(h.integration) +
                 " absolute_period=" + std::to_string(absolutePeriod),
-            INFO);
+                INFO);
+        }
     }
 }
 static void simulationReceive(CacheRuntime *para, unsigned p) {
@@ -65,14 +92,18 @@ static void simulationReceive(CacheRuntime *para, unsigned p) {
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buffer, sizeof(buffer));
     ++para->initializedPorts;
     unsigned char packet[16384];
+    bool firstUdpLogged = false;
     bool firstPacketLogged = false;
     while (para->flags->ifRecvAntenna) {
         pollfd poller{fd, POLLIN, 0};
         if (poll(&poller, 1, 100) <= 0)
             continue;
         auto n = recv(fd, packet, sizeof(packet), 0);
-        if (n >= 0)
+        if (n >= 0) {
+            logFirstUdpPacket(p, packet, size_t(n), size_t(n),
+                              para->config->integrationPerTrace, firstUdpLogged);
             receivePacket(para, p, packet, size_t(n), firstPacketLogged);
+        }
     }
 }
 // Run each receive port independently, receive packets in batches after NIC initialization, and stop all threads on error.
@@ -109,6 +140,8 @@ void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
         if (!capture)
             throw std::runtime_error("ixcap_init failed on port " + std::to_string(p));
         ixcap_pkt_buf *packets[BATCH_SIZE];
+        bool firstUnparsedFrameLogged = false;
+        bool firstUdpLogged = false;
         bool firstPacketLogged = false;
         ++para->initializedPorts;
         LOG("Receive port " + std::to_string(p) +
@@ -123,10 +156,21 @@ void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
                 const unsigned char *data;
                 size_t bytes;
                 try {
-                    if (inputPayload(raw, ixcap_get_pkt_size(packets[i]), data, bytes))
+                    const auto frameBytes = ixcap_get_pkt_size(packets[i]);
+                    if (inputPayload(raw, frameBytes, data, bytes)) {
+                        logFirstUdpPacket(p, data, bytes, frameBytes,
+                                          para->config->integrationPerTrace, firstUdpLogged);
                         receivePacket(para, p, data, bytes, firstPacketLogged);
-                    else
+                    } else {
                         ++para->ignoredPackets;
+                        if (!firstUnparsedFrameLogged) {
+                            firstUnparsedFrameLogged = true;
+                            LOG("Receive port " + std::to_string(p) +
+                                    " captured a frame but Ethernet/IPv4/UDP parsing failed: "
+                                    "frame_bytes=" + std::to_string(frameBytes),
+                                WARN);
+                        }
+                    }
                 } catch (...) {
                     for (uint32_t j = i; j < count; ++j)
                         ixcap_free_pkt_buf(packets[j]);
@@ -139,6 +183,7 @@ void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
     } catch (const std::exception &e) {
         LOG(e.what(), FATAL);
         para->failed = true;
+        setRuntimeState(*para, RuntimeState::Error);
         para->flags->threadStop();
     }
 }

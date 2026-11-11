@@ -141,6 +141,15 @@ systemctl status tianlai-cache.service
 systemctl status tianlai-controller.service
 ```
 
+存储服务器会安装`/opt/tianlai-store/tools/cache_status.py`。它同时显示本机落盘服务的监听、接收写盘、后端通知状态，以及各缓存节点所处运行阶段、已初始化接收口、事件状态和累计接收包数：
+
+```bash
+python3 /opt/tianlai-store/tools/cache_status.py
+python3 /opt/tianlai-store/tools/cache_status.py --watch 2
+```
+
+节点管理查询端口先于大内存分配启动，所以汇总工具能显示`PREPARING_MEMORY`；也可在相应节点执行`journalctl -u tianlai-cache.service -f`查看完整状态切换日志。
+
 从Ansible master启动全部缓存节点：
 
 ```bash

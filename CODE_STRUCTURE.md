@@ -27,7 +27,7 @@
 
 1. `Common/src/receive_antenna.cpp` 接收数据，`receive_pool` 模块管理数据缓存和事件保护。
 2. `tools/controller.py` 接收消色散后端的触发，请求各缓存节点保护指定积分周期范围。
-3. `Common/src/event_state.cpp` 实现事件状态机，`control_tcp.cpp`负责长度前缀TCP/JSON控制收发，`protocol.cpp`负责协议解析；`send_store.cpp`和`zmq_store.cpp`负责发送事件数据。
+3. `Common/src/event_state.cpp` 实现事件状态机，`runtime_state.cpp`维护准备内存、等待数据、缓存和发送等进程运行阶段，`control_tcp.cpp`负责长度前缀TCP/JSON控制收发，`protocol.cpp`负责协议解析；`send_store.cpp`和`zmq_store.cpp`负责发送事件数据。
 4. `Storage/tianlai-storage`使用28个ZeroMQ端点接收双lane数据，每个活动lane独立校验并写入互不重叠的端口文件。
 5. 14个节点全部落盘后，C++存储服务通过TCP/JSON连接消色散后端并等待确认；后端也可通过控制器的`QUERY_EVENT`查询调度状态。
 

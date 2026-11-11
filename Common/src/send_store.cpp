@@ -144,9 +144,11 @@ void InitSendStoreThread(CacheRuntime *para) {
         if (error.empty()) {
             para->event.state = EventState::Stored;
             para->event.error.clear();
+            setRuntimeState(*para, RuntimeState::StorageConfirmed);
         } else {
             para->event.state = EventState::SendFailed;
             para->event.error = error.substr(0, 300);
+            setRuntimeState(*para, RuntimeState::SendFailed);
         }
         logMessage = "Event " + event.id + " " + eventStateName(para->event.state) +
                      " send_ms=" + std::to_string(para->event.sendMilliseconds) +

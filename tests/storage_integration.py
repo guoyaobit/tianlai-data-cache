@@ -128,7 +128,8 @@ def main():
                 for server in range(14) for lane in range(2))
             receivers = receivers.replace('    - ', '  - ').replace('\n      ', '\n    ')
             config.write_text(
-                f'directory: "{root.as_posix()}"\nioThreads: 2\n'
+                f'directory: "{root.as_posix()}"\n'
+                f'statusFile: "{(root / "storage-status.json").as_posix()}"\nioThreads: 2\n'
                 f'expectedServerIds: {list(range(14))}\n'
                 f'receivers:\n{receivers}\n'
                 f'backendAddress: "127.0.0.1"\nbackendPort: {notify_port}\n'
@@ -151,6 +152,10 @@ def main():
                     if time.monotonic() >= deadline:
                         raise TimeoutError('storage service did not start')
                     time.sleep(.05)
+            status_file = root / 'storage-status.json'
+            status = json.loads(status_file.read_text())
+            assert status['state'] == 'WAITING_FOR_DATA'
+            assert status['listeners_ready'] == status['listener_count'] == 28
             with ThreadPoolExecutor(max_workers=28) as pool:
                 futures = [pool.submit(send_event, context, port + lane * 14 + server,
                                        root, server, lane)
@@ -180,6 +185,15 @@ def main():
                 if time.monotonic() >= deadline:
                     raise TimeoutError('storage did not persist the backend acknowledgment')
                 time.sleep(.05)
+            deadline = time.monotonic() + 10
+            while True:
+                status = json.loads(status_file.read_text())
+                if status['state'] == 'WAITING_FOR_DATA' and status['completed_lane_transfers'] == 28:
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f'storage status did not settle: {status}')
+                time.sleep(.05)
+            assert status['written_bytes'] > 0 and status['active_transfers'] == 0
             # A lost node-side final reply now returns the durable result at metadata,
             # without clearing the completion marker or rewriting the files.
             send_event(context, port + 3, root, 3, 0)

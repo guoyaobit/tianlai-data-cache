@@ -34,6 +34,22 @@ enum class EventState {
     Cancelled
 };
 
+enum class RuntimeState {
+    Starting,
+    PreparingMemory,
+    WaitingForData,
+    CachingData,
+    PreparingEvent,
+    EventReady,
+    SendingCachedData,
+    StorageConfirmed,
+    SendFailed,
+    Error,
+    Stopping
+};
+
+const char *runtimeStateName(RuntimeState state);
+
 inline const char *eventStateName(EventState state) {
     switch (state) {
     case EventState::Idle: return "IDLE";
@@ -76,9 +92,16 @@ struct CacheRuntime {
     std::map<std::string, EventInfo> history;
     std::deque<std::string> historyOrder;
     std::atomic<unsigned> initializedPorts{0};
+    std::atomic<bool> hasAcceptedData{false};
     std::atomic<uint64_t> ignoredPackets{0};
     std::atomic<bool> failed{false};
+    std::atomic<RuntimeState> runtimeState{RuntimeState::Starting};
+    std::atomic<uint64_t> runtimeStateChangedMs{0};
 };
+void setRuntimeState(CacheRuntime &runtime, RuntimeState state);
+void setPassiveRuntimeState(CacheRuntime &runtime);
+void noteAcceptedPacket(CacheRuntime &runtime);
+uint64_t runtimeStateAgeMilliseconds(const CacheRuntime &runtime);
 void InitRecvAntennaThread(CacheRuntime *para, unsigned port);
 void InitControlThread(CacheRuntime *para);
 void InitSendStoreThread(CacheRuntime *para);

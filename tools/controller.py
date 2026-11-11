@@ -400,10 +400,19 @@ class Controller:
             oldest = max(s['oldest_period'] for s in states)
             end = min(s['settled_end'] for s in states)
             ready = not busy and oldest < end and all(s['accept_trigger'] for s in states)
+            node_runtime_states = {
+                str(node['server_id']): state.get('runtime_state', state.get('status', 'UNKNOWN'))
+                for node, state in zip(nodes, states)
+            }
+            runtime_state_counts = {}
+            for state in node_runtime_states.values():
+                runtime_state_counts[state] = runtime_state_counts.get(state, 0) + 1
             return dict(status='READY' if ready else 'BUSY_OR_WARMING', accept_trigger=ready,
                         channel_count=channel_count, oldest_period=oldest, settled_end=end,
                         partial_node_set=len(nodes) != (11 if channel_count == 288 else 14),
-                        participating_server_ids=[node['server_id'] for node in nodes])
+                        participating_server_ids=[node['server_id'] for node in nodes],
+                        node_runtime_states=node_runtime_states,
+                        runtime_state_counts=runtime_state_counts)
         raise ValueError('unknown controller command')
 
 

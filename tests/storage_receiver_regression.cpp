@@ -42,6 +42,19 @@ int main(int argc, char **argv) {
     assert(argc == 2);
     const fs::path root(argv[1]);
     fs::create_directories(root);
+    {
+        const auto status_path = root / "runtime-status.json";
+        StorageRuntimeStatus status(status_path, 2);
+        status.listenerReady(); status.listenerReady();
+        json snapshot = read_json_file(status_path);
+        assert(snapshot.at("state") == "WAITING_FOR_DATA");
+        status.transferStarted(); status.addWrittenBytes(4096); status.transferFinished(true);
+        snapshot = read_json_file(status_path);
+        assert(snapshot.at("completed_lane_transfers") == 1);
+        assert(snapshot.at("written_bytes") == 4096);
+        status.stop();
+        assert(read_json_file(status_path).at("state") == "STOPPING");
+    }
     Shared shared;
     {
         EventWriter wrong_endpoint(root, shared, 0, 0);

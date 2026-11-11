@@ -29,6 +29,7 @@ int main(int argc, char **argv) {
         std::signal(SIGINT, stop_handler);
         std::signal(SIGTERM, stop_handler);
         serve(directory, endpoints, 4, default_server_ids(),
+              fs::path(directory) / "storage-status.json",
               notify_address, notify_port, notify_bind);
         return 0;
     } catch (const std::exception &error) {

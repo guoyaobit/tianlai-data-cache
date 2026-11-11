@@ -206,12 +206,12 @@
           ansible.builtin.copy:
             src: "{{ playbook_dir }}/../../tools/{{ item }}"
             dest: "{{ controller_update_temp.path }}/{{ item }}"
-            mode: '0644'
-          loop: [controller.py, durable_json.py, tcp_json.py]
+            mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
+          loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py]
         - name: Check controller Python syntax
           ansible.builtin.command:
             argv: [/usr/bin/python3, -m, py_compile, "{{ controller_update_temp.path }}/{{ item }}"]
-          loop: [controller.py, durable_json.py, tcp_json.py]
+          loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py]
           changed_when: false
         - name: Read controller service state
           ansible.builtin.service_facts:
@@ -231,8 +231,8 @@
                 remote_src: true
                 src: "{{ controller_update_temp.path }}/{{ item }}"
                 dest: "{{ tianlai_root }}/tools/{{ item }}"
-                mode: '0644'
-              loop: [controller.py, durable_json.py, tcp_json.py]
+                mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
+              loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py]
           always:
             - name: Restore running controller
               ansible.builtin.systemd:

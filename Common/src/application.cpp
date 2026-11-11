@@ -18,6 +18,7 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
     CacheRuntime para;
     para.flags = &flags;
     std::thread signalThread;
+    std::thread startupThread;
     try {
         if (argc < 2) {
             std::cerr << "Usage: " << argv[0]
@@ -85,7 +86,6 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
             WARN);
         std::signal(SIGINT, stopHandler);
         std::signal(SIGTERM, stopHandler);
-        Prepare(para);
         // Config must outlive all threads, including exceptional shutdown.
         try {
             signalThread = std::thread([&]() {
@@ -93,21 +93,44 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 flags.threadStop();
             });
-            for (unsigned p = 0; p < config.receivePorts.size(); ++p)
-                para.receiveThreads.emplace_back(InitRecvAntennaThread, &para, p);
+            setRuntimeState(para, RuntimeState::PreparingMemory);
+            startupThread = std::thread([&]() {
+                try {
+                    Prepare(para);
+                    if (!flags.ifControl)
+                        return;
+                    setRuntimeState(para, RuntimeState::WaitingForData);
+                    for (unsigned p = 0; p < config.receivePorts.size(); ++p)
+                        para.receiveThreads.emplace_back(InitRecvAntennaThread, &para, p);
+                } catch (const std::exception &error) {
+                    LOG(error.what(), FATAL);
+                    para.failed = true;
+                    setRuntimeState(para, RuntimeState::Error);
+                    flags.threadStop();
+                }
+            });
             InitControlThread(&para);
         } catch (...) {
+            flags.threadStop();
+            if (startupThread.joinable())
+                startupThread.join();
             Finish(para);
             if (signalThread.joinable())
                 signalThread.join();
             throw;
         }
+        if (startupThread.joinable())
+            startupThread.join();
         Finish(para);
         if (signalThread.joinable())
             signalThread.join();
         return para.failed ? 1 : 0;
     } catch (const std::exception &e) {
+        if (para.config)
+            setRuntimeState(para, RuntimeState::Error);
         flags.threadStop();
+        if (startupThread.joinable())
+            startupThread.join();
         if (signalThread.joinable())
             signalThread.join();
         std::cerr << "[FATAL] " << e.what() << "\n";
@@ -136,6 +159,8 @@ static void Prepare(CacheRuntime &para) {
         throw std::runtime_error(
             "insufficient available RAM for A/B/transition and system reserve");
     LOG("Allocating " + std::to_string(c.allocationBytes()) + " bytes, no CUDA dependency.", START);
+    std::vector<std::unique_ptr<ReceiveRingBuffer>> buffers;
+    buffers.reserve(c.receivePorts.size());
     for (unsigned index = 0; index < c.receivePorts.size(); ++index) {
         const auto &port = c.receivePorts[index];
         LOG("Receive port " + std::to_string(index) +
@@ -146,7 +171,7 @@ static void Prepare(CacheRuntime &para) {
                 std::to_string(port.packetSlots() *
                                uint64_t(c.inputDataBytes + INPUT_HEADER_BYTES)),
             DEBUG);
-        para.receiveBuffers.emplace_back(
+        buffers.emplace_back(
             new ReceiveRingBuffer(index, c.halfPeriods(), c.transitionPeriods(),
                                   c.maxEventPeriods(), port.packetSlots(),
                                   port.packetsPerBoard, c.inputDataBytes + INPUT_HEADER_BYTES,
@@ -154,9 +179,12 @@ static void Prepare(CacheRuntime &para) {
                                   c.settleMilliseconds, c.transitionWarnPercent,
                                   c.prefaultMemory));
     }
+    std::lock_guard<std::mutex> lock(para.eventMutex);
+    para.receiveBuffers = std::move(buffers);
 }
 
 static void Finish(CacheRuntime &para) {
+    setRuntimeState(para, RuntimeState::Stopping);
     para.flags->threadStop();
     for (auto &thread : para.receiveThreads)
         if (thread.joinable())

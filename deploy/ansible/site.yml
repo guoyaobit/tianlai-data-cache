@@ -404,8 +404,8 @@
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../tools/{{ item }}"
         dest: "{{ tianlai_root }}/tools/{{ item }}"
-        mode: '0644'
-      loop: [controller.py, durable_json.py, tcp_json.py]
+        mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
+      loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py]
       notify: stop controller after deployment
     - name: Render controller node list
       ansible.builtin.template:

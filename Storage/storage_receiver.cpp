@@ -130,6 +130,106 @@ static void atomic_json(const fs::path &path, const json &value) {
     } catch (...) { if (fd >= 0) ::close(fd); throw; }
 }
 
+class StorageRuntimeStatus {
+    fs::path path;
+    const unsigned listener_count;
+    unsigned listeners_ready = 0, active_transfers = 0;
+    uint64_t completed_transfers = 0, aborted_transfers = 0;
+    std::atomic<uint64_t> written_bytes{0};
+    bool notifying = false, failed = false, stopping = false;
+    std::string state = "STARTING", last_error;
+    std::chrono::steady_clock::time_point state_changed = std::chrono::steady_clock::now();
+    std::mutex mutex;
+
+    std::string current_state() const {
+        if (failed) return "ERROR";
+        if (stopping) return "STOPPING";
+        if (notifying) return "NOTIFYING_BACKEND";
+        if (active_transfers) return "RECEIVING_AND_WRITING";
+        if (listeners_ready < listener_count) return "STARTING";
+        return "WAITING_FOR_DATA";
+    }
+
+    void publish() {
+        const auto next = current_state();
+        if (next != state) {
+            state = next;
+            state_changed = std::chrono::steady_clock::now();
+            std::cout << "storage runtime state: " << state << std::endl;
+        }
+        const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - state_changed)
+                             .count();
+        const auto updated = std::chrono::duration_cast<std::chrono::seconds>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count();
+        try {
+            atomic_json(path, {{"version", 1}, {"service", "tianlai-storage"},
+                               {"pid", static_cast<uint64_t>(::getpid())}, {"state", state},
+                               {"state_age_ms", age}, {"updated_unix", updated},
+                               {"listeners_ready", listeners_ready},
+                               {"listener_count", listener_count},
+                               {"active_transfers", active_transfers},
+                               {"completed_lane_transfers", completed_transfers},
+                               {"aborted_lane_transfers", aborted_transfers},
+                               {"written_bytes", written_bytes.load(std::memory_order_relaxed)},
+                               {"last_error", last_error}});
+            ::chmod(path.string().c_str(), 0644);
+        } catch (const std::exception &error) {
+            std::cerr << "storage status update failed: " << error.what() << '\n';
+        }
+    }
+
+  public:
+    StorageRuntimeStatus(fs::path status_path, unsigned listeners)
+        : path(std::move(status_path)), listener_count(listeners) {
+        require(path.is_absolute() && listener_count, "invalid storage status configuration");
+        publish();
+    }
+    void listenerReady() {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (listeners_ready < listener_count) ++listeners_ready;
+        publish();
+    }
+    void transferStarted() {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++active_transfers;
+        publish();
+    }
+    void addWrittenBytes(uint64_t bytes) {
+        written_bytes.fetch_add(bytes, std::memory_order_relaxed);
+    }
+    void transferFinished(bool completed) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (active_transfers) --active_transfers;
+        if (completed) ++completed_transfers;
+        else ++aborted_transfers;
+        publish();
+    }
+    void notificationStarted() {
+        std::lock_guard<std::mutex> lock(mutex);
+        notifying = true;
+        publish();
+    }
+    void notificationFinished(const std::string &error) {
+        std::lock_guard<std::mutex> lock(mutex);
+        notifying = false;
+        last_error = error;
+        publish();
+    }
+    void fail(const std::string &error) {
+        std::lock_guard<std::mutex> lock(mutex);
+        failed = true;
+        last_error = error;
+        publish();
+    }
+    void stop() {
+        std::lock_guard<std::mutex> lock(mutex);
+        stopping = true;
+        publish();
+    }
+};
+
 struct Shared {
     std::mutex mutex;
     std::set<unsigned> active;
@@ -139,13 +239,14 @@ struct Shared {
 class EventWriter {
     fs::path root, directory;
     Shared &shared;
+    StorageRuntimeStatus *runtime = nullptr;
     unsigned expected_server = UINT_MAX, expected_lane = UINT_MAX;
     json metadata;
     std::string event, acquisition;
     unsigned server = 0, lane = 0, ports = 0, boards = 0;
     unsigned packet_bytes = 0, packets_per_board = 1;
     uint64_t start = 0, count = 0, per_trace = 0, stride = 0;
-    bool claimed = false;
+    bool claimed = false, runtime_active = false;
     std::vector<int> files;
     std::vector<uint64_t> progress, missing;
     std::vector<bool> selected;
@@ -165,10 +266,15 @@ class EventWriter {
 
   public:
     EventWriter(fs::path base, Shared &state, unsigned server_id = UINT_MAX,
-                unsigned lane_id = UINT_MAX)
-        : root(std::move(base)), shared(state), expected_server(server_id), expected_lane(lane_id) {}
+                unsigned lane_id = UINT_MAX, StorageRuntimeStatus *status = nullptr)
+        : root(std::move(base)), shared(state), runtime(status),
+          expected_server(server_id), expected_lane(lane_id) {}
     ~EventWriter() {
         for (int fd : files) if (fd >= 0) ::close(fd);
+        if (runtime_active && runtime) {
+            try { runtime->transferFinished(false); }
+            catch (...) { std::cerr << "storage status cleanup failed\n"; }
+        }
         if (claimed) {
             std::lock_guard<std::mutex> lock(shared.mutex);
             shared.active.erase(server * LANE_COUNT + lane);
@@ -265,6 +371,10 @@ class EventWriter {
             if (::ftruncate(files[p], static_cast<off_t>(count * stride))) throw system_error("resize event file");
         }
         last_data_sync = std::chrono::steady_clock::now();
+        if (runtime) {
+            runtime->transferStarted();
+            runtime_active = true;
+        }
         return {};
     }
     // A block acknowledgment means validated and written. Only STORED is durable.
@@ -304,6 +414,7 @@ class EventWriter {
             }
         }
         write_all(files[port], body, size, (first - start) * stride);
+        if (runtime) runtime->addWrittenBytes(size);
         unsynced_bytes += size;
         sync_data(false);
         progress[port] += n; missing[port] += absent;
@@ -324,6 +435,10 @@ class EventWriter {
             marker["missing_packets"][std::to_string(p)] = missing[p];
         }
         atomic_json(directory / ("lane-" + std::to_string(lane) + ".stored.json"), marker);
+        if (runtime_active && runtime) {
+            runtime->transferFinished(true);
+            runtime_active = false;
+        }
         return framed_json(ack);
     }
 };
@@ -515,6 +630,7 @@ class CompletionNotifier {
     std::string target_address, source_address;
     unsigned target_port;
     std::vector<unsigned> expected_servers;
+    StorageRuntimeStatus &runtime;
     std::mutex mutex;
     std::condition_variable condition;
     bool stopped = false;
@@ -602,7 +718,16 @@ class CompletionNotifier {
                         }
                     }
                     auto notice = build_completion_notice(event.path(), expected_servers);
-                    if (notice) send(event.path(), *notice);
+                    if (notice) {
+                        runtime.notificationStarted();
+                        try {
+                            send(event.path(), *notice);
+                            runtime.notificationFinished("");
+                        } catch (const std::exception &error) {
+                            runtime.notificationFinished(error.what());
+                            throw;
+                        }
+                    }
                 } catch (const std::exception &caught) {
                     std::cerr << "completion notifier: " << caught.what() << '\n';
                 }
@@ -635,9 +760,9 @@ class CompletionNotifier {
 
   public:
     CompletionNotifier(fs::path base, std::string target, unsigned port, std::string source,
-                       std::vector<unsigned> servers)
+                       std::vector<unsigned> servers, StorageRuntimeStatus &status)
         : root(std::move(base)), target_address(std::move(target)), source_address(std::move(source)),
-          target_port(port), expected_servers(std::move(servers)),
+          target_port(port), expected_servers(std::move(servers)), runtime(status),
           worker(&CompletionNotifier::run, this) {}
     ~CompletionNotifier() {
         { std::lock_guard<std::mutex> lock(mutex); stopped = true; }
@@ -669,12 +794,14 @@ struct ActiveTransfer {
 // without creating more lane-level parallelism.
 static std::pair<Bytes, bool> process_transfer(
         std::map<std::string, ActiveTransfer> &sessions, const std::string &identity,
-        const Bytes &body, const fs::path &root, Shared &shared, unsigned server, unsigned lane) {
+        const Bytes &body, const fs::path &root, Shared &shared, unsigned server, unsigned lane,
+        StorageRuntimeStatus *runtime = nullptr) {
     auto it = sessions.find(identity);
     if (it == sessions.end()) {
         require(sessions.size() < MAX_SESSIONS_PER_PORT, "receiver port busy");
         require(body.size() <= 1204, "metadata exceeds limit");
-        auto writer = std::unique_ptr<EventWriter>(new EventWriter(root, shared, server, lane));
+        auto writer = std::unique_ptr<EventWriter>(
+            new EventWriter(root, shared, server, lane, runtime));
         auto existing = writer->begin(body);
         if (!existing.empty()) return {std::move(existing), true};
         sessions.emplace(identity, ActiveTransfer{std::move(writer),
@@ -697,7 +824,8 @@ static std::pair<Bytes, bool> process_transfer(
 static void serve_port(void *context, const fs::path &root, const std::string &address, unsigned port,
                        unsigned server, unsigned lane,
                        const std::string &allowed_source, Shared &shared,
-                       CompletionNotifier &notifier, const std::atomic<bool> &shutdown) {
+                       CompletionNotifier &notifier, StorageRuntimeStatus &runtime,
+                       const std::atomic<bool> &shutdown) {
     void *router = zmq_socket(context, ZMQ_ROUTER);
     if (!router) throw std::runtime_error("ZeroMQ ROUTER creation failed");
     std::map<std::string, ActiveTransfer> sessions;
@@ -710,6 +838,7 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
         auto endpoint = "tcp://" + address + ":" + std::to_string(port);
         if (zmq_bind(router, endpoint.c_str()))
             throw std::runtime_error(std::string("ZeroMQ bind: ") + zmq_strerror(zmq_errno()));
+        runtime.listenerReady();
         std::cout << "storage server " << server << " lane " << lane << " listening on "
                   << endpoint << std::endl;
         while (!stopping && !shutdown.load(std::memory_order_relaxed)) {
@@ -752,7 +881,8 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
                 continue;
             }
             try {
-                auto result = process_transfer(sessions, identity, body, root, shared, server, lane);
+                auto result = process_transfer(sessions, identity, body, root, shared, server, lane,
+                                               &runtime);
                 reply(router, identity, result.first);
                 if (result.second) notifier.wake();
             } catch (const std::exception &error) {
@@ -771,6 +901,7 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
 
 static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &endpoints,
                   unsigned io_threads, const std::vector<unsigned> &expected_servers,
+                  const fs::path &status_file,
                   const std::string &notify_address, unsigned notify_port,
                   const std::string &notify_bind) {
     void *context = zmq_ctx_new();
@@ -780,7 +911,9 @@ static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &end
         throw std::runtime_error("ZeroMQ I/O thread configuration failed");
     }
     Shared shared;
-    CompletionNotifier notifier(root, notify_address, notify_port, notify_bind, expected_servers);
+    StorageRuntimeStatus runtime(status_file, static_cast<unsigned>(endpoints.size()));
+    CompletionNotifier notifier(root, notify_address, notify_port, notify_bind, expected_servers,
+                                runtime);
     std::atomic<bool> shutdown{false};
     std::mutex error_mutex;
     std::exception_ptr first_error;
@@ -791,8 +924,17 @@ static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &end
                 try {
                     const auto &endpoint = endpoints.at(index);
                     serve_port(context, root, endpoint.address, endpoint.port, endpoint.server,
-                               endpoint.lane, endpoint.allowed_source, shared, notifier, shutdown);
+                               endpoint.lane, endpoint.allowed_source, shared, notifier, runtime,
+                               shutdown);
+                } catch (const std::exception &error) {
+                    runtime.fail(error.what());
+                    {
+                        std::lock_guard<std::mutex> lock(error_mutex);
+                        if (!first_error) first_error = std::current_exception();
+                    }
+                    shutdown.store(true, std::memory_order_relaxed);
                 } catch (...) {
+                    runtime.fail("unknown storage receiver failure");
                     {
                         std::lock_guard<std::mutex> lock(error_mutex);
                         if (!first_error) first_error = std::current_exception();
@@ -802,19 +944,21 @@ static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &end
             });
         }
     } catch (...) {
+        runtime.fail("storage receiver thread creation failed");
         shutdown.store(true, std::memory_order_relaxed);
         for (auto &thread : receivers) if (thread.joinable()) thread.join();
         zmq_ctx_term(context);
         throw;
     }
     for (auto &thread : receivers) if (thread.joinable()) thread.join();
+    runtime.stop();
     zmq_ctx_term(context);
     if (first_error) std::rethrow_exception(first_error);
 }
 
 #ifndef STORAGE_RECEIVER_NO_MAIN
 struct StorageConfig {
-    fs::path directory;
+    fs::path directory, status_file;
     std::string backend_address, backend_bind_address;
     unsigned backend_port = 0, io_threads = 2;
     std::vector<ReceiverEndpoint> receivers;
@@ -822,7 +966,8 @@ struct StorageConfig {
 };
 
 static void require_yaml_keys(const YAML::Node &node, std::initializer_list<const char *> expected,
-                              const char *section) {
+                              const char *section,
+                              std::initializer_list<const char *> optional = {}) {
     require(node.IsMap(), "storage YAML section must be a mapping");
     std::set<std::string> actual;
     for (const auto &entry : node) {
@@ -831,15 +976,26 @@ static void require_yaml_keys(const YAML::Node &node, std::initializer_list<cons
     }
     std::set<std::string> wanted;
     for (const auto *key : expected) wanted.insert(key);
-    if (actual != wanted) throw std::runtime_error(std::string("invalid or missing keys in ") + section);
+    std::set<std::string> allowed = wanted;
+    for (const auto *key : optional) allowed.insert(key);
+    std::vector<std::string> missing, unknown;
+    std::set_difference(wanted.begin(), wanted.end(), actual.begin(), actual.end(),
+                        std::back_inserter(missing));
+    std::set_difference(actual.begin(), actual.end(), allowed.begin(), allowed.end(),
+                        std::back_inserter(unknown));
+    if (!missing.empty() || !unknown.empty())
+        throw std::runtime_error(std::string("invalid or missing keys in ") + section);
 }
 
 static StorageConfig load_storage_config(const fs::path &path) {
     const auto root = YAML::LoadFile(path.string());
-    require_yaml_keys(root, {"directory", "ioThreads", "expectedServerIds", "receivers", "backendAddress",
-                             "backendPort", "backendBindAddress"}, "root");
+    require_yaml_keys(root, {"directory", "ioThreads", "expectedServerIds", "receivers",
+                             "backendAddress", "backendPort", "backendBindAddress"},
+                      "root", {"statusFile"});
     StorageConfig config;
     config.directory = root["directory"].as<std::string>();
+    config.status_file = root["statusFile"] ? root["statusFile"].as<std::string>()
+                                              : "/run/tianlai-storage-status.json";
     config.io_threads = root["ioThreads"].as<unsigned>();
     config.backend_address = root["backendAddress"].as<std::string>();
     config.backend_port = root["backendPort"].as<unsigned>();
@@ -884,7 +1040,8 @@ static StorageConfig load_storage_config(const fs::path &path) {
     }
 
     in_addr parsed{};
-    require(config.directory.is_absolute() && config.io_threads >= 1 && config.io_threads <= 32 &&
+    require(config.directory.is_absolute() && config.status_file.is_absolute() &&
+                config.io_threads >= 1 && config.io_threads <= 32 &&
                 ::inet_pton(AF_INET, config.backend_address.c_str(), &parsed) == 1 &&
                 ::inet_pton(AF_INET, config.backend_bind_address.c_str(), &parsed) == 1 &&
                 config.backend_port >= 1 && config.backend_port <= 65535,
@@ -904,6 +1061,7 @@ int main(int argc, char **argv) {
         const auto config = load_storage_config(argv[2]);
         if (check_only) {
             std::cout << "storage directory: " << config.directory << '\n';
+            std::cout << "status file: " << config.status_file << '\n';
             std::cout << "expected servers:";
             for (unsigned server : config.expected_servers) std::cout << ' ' << server;
             std::cout << '\n';
@@ -918,6 +1076,7 @@ int main(int argc, char **argv) {
         fs::create_directories(config.directory);
         std::signal(SIGINT, stop_handler); std::signal(SIGTERM, stop_handler);
         serve(config.directory, config.receivers, config.io_threads, config.expected_servers,
+              config.status_file,
               config.backend_address, config.backend_port,
               config.backend_bind_address);
         return 0;

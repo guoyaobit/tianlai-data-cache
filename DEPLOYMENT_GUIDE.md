@@ -114,6 +114,17 @@ cd F0-2
 
 ## 5. 检查状态与发送触发
 
+在存储/控制服务器上可直接汇总查看所有已启用缓存节点，`--watch 2`表示每2秒刷新：
+
+```bash
+python3 /opt/tianlai-store/tools/cache_status.py
+python3 /opt/tianlai-store/tools/cache_status.py --watch 2
+```
+
+工具首先显示存储服务状态：`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`或`STOPPING`，同时显示28个lane监听端点、活动传输、已完成lane及累计写入字节。随后显示各缓存节点的`PREPARING_MEMORY`（准备内存）、`WAITING_FOR_DATA`（等待接收数据）、`CACHING_DATA`（缓存数据中）、`PREPARING_EVENT`（准备触发数据）、`EVENT_READY`（触发数据已准备）、`SENDING_CACHED_DATA`（发送缓存数据）、`STORAGE_CONFIRMED`（存储已确认）、`SEND_FAILED`和`ERROR`。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发；也可在对应缓存节点通过`journalctl -u tianlai-cache.service -f`查看标准化的`Runtime state:`日志。
+
+每个接收线程会打印第一条成功解析的UDP数据头，包括`packet_id`、板卡号、trace/integration周期和长度；随后再打印第一条实际写入环形缓冲区的数据。如果ixcap已经收到帧但以太网/IPv4/UDP解析失败，会打印首个失败帧的长度，便于区分“没有流量”和“帧格式不匹配”。
+
 通过后端或`tools/trigger.py`发送带4字节长度前缀的TCP JSON。以下示例使用临时请求文件；请替换控制器地址及全局唯一的事件编号。`trigger.py`可自动生成`request_id`。
 
 ```bash
@@ -123,7 +134,7 @@ EOF
 python3 tools/trigger.py --host 192.168.200.250 --file /tmp/tianlai-status.json
 ```
 
-确认 `accept_trigger` 为 `true`，并确保所需起止周期位于返回的 `oldest_period` 与 `settled_end` 所示范围内；结束边界为不包含端点。然后提交触发：
+控制器响应中的`node_runtime_states`和`runtime_state_counts`提供各节点运行阶段汇总。确认 `accept_trigger` 为 `true`，并确保所需起止周期位于返回的 `oldest_period` 与 `settled_end` 所示范围内；结束边界为不包含端点。然后提交触发：
 
 ```bash
 cat > /tmp/tianlai-capture.json <<'EOF'

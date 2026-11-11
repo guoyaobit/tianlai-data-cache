@@ -142,6 +142,10 @@ def run(server, directory):
         status = request('QUERY_STATUS')
         return status if status['accept_trigger'] else None
 
+    def initialized_status():
+        status = request('QUERY_STATUS')
+        return status if status['initialized_ports'] == ports else None
+
     def make_packet(period, port, local_board):
         trace, integration = divmod(period, 100)
         board_begin = 0 if server < 3 else 36 if remote else (port % 2) * 18
@@ -183,9 +187,12 @@ def run(server, directory):
         wait_for(lambda: all(request('QUERY_PORT', port=p)['latest_period'] == end - 1 for p in range(ports)))
 
     try:
-        wait_for(lambda: request('QUERY_STATUS')['initialized_ports'] == ports)
+        initial = wait_for(initialized_status)
+        assert initial['runtime_state'] == 'WAITING_FOR_DATA'
         feed(0, 200)
         status = wait_for(ready_status)
+        assert status['runtime_state'] == 'CACHING_DATA'
+        assert status['receive_ports'] == ports and status['received_packets'] > 0
         assert status['transition_capacity_periods'] > 0
         assert status['transition_used_periods'] == 0 and not status['transition_warning']
         if not remote:
@@ -211,6 +218,7 @@ def run(server, directory):
                        period_count=10, channel_count=channels)
         assert request('PREPARE', **trigger)['status'] == 'PREPARING'
         wait_for(lambda: request('QUERY_EVENT', event_id='crossing')['status'] == 'PREPARED')
+        assert request('QUERY_STATUS')['runtime_state'] == 'EVENT_READY'
         event = request('QUERY_EVENT', event_id='crossing')
         assert event['channel_count'] == channels
         assert event['missing_packets'] == sum(
@@ -236,7 +244,7 @@ def run(server, directory):
         feed(200, 450)  # More than one live-half rotation while the event is frozen.
         request('STORE', event_id='crossing')
         wait_for(lambda: request('QUERY_EVENT', event_id='crossing')['status'] == 'SEND_FAILED')
-        assert request('QUERY_STATUS')['status'] == 'BUSY'
+        assert request('QUERY_STATUS')['runtime_state'] == 'SEND_FAILED'
         receiver = DropFirstAckReceiver(directory / 'disk', ['127.0.0.1'])
         threads = [threading.Thread(target=receiver.listen,
                    args=(('127.0.0.1', destinations[lane]), lane, stop_receiver), daemon=True) for lane in range(2)]
@@ -251,8 +259,10 @@ def run(server, directory):
         assert request('QUERY_STATUS')['status'] == 'BUSY'
         request('STORE', event_id='crossing')
         wait_for(lambda: request('QUERY_EVENT', event_id='crossing')['status'] == 'STORED')
+        assert request('QUERY_STATUS')['runtime_state'] == 'STORAGE_CONFIRMED'
         request('RELEASE', event_id='crossing')
         assert request('RELEASE', event_id='crossing')['status'] == 'RELEASED'
+        assert request('QUERY_STATUS')['runtime_state'] == 'CACHING_DATA'
         for port in range(ports):
             path = directory / 'disk/tianlai/crossing' / f'server-{server}/port-{port}.bin'
             content = path.read_bytes()

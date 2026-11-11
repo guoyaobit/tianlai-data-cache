@@ -58,6 +58,7 @@ static void prepareEvent(CacheRuntime *para) {
             transitionCapacity = std::max(transitionCapacity, status.transitionCapacity);
         }
         std::string message, debugMessage;
+        bool prepared = false;
         {
             std::lock_guard<std::mutex> lock(para->eventMutex);
             para->event.missing = missing;
@@ -74,6 +75,7 @@ static void prepareEvent(CacheRuntime *para) {
                 remember(*para);
             } else {
                 para->event.state = EventState::Prepared;
+                prepared = true;
             }
             message = "Event " + para->event.id + " " + eventStateName(para->event.state) +
                       " freeze_ms=" + std::to_string(para->event.freezeMilliseconds);
@@ -87,6 +89,10 @@ static void prepareEvent(CacheRuntime *para) {
         }
         LOG(message, INFO);
         LOG(debugMessage, DEBUG);
+        if (prepared)
+            setRuntimeState(*para, RuntimeState::EventReady);
+        else
+            setPassiveRuntimeState(*para);
     } catch (const std::exception &error) {
         // Finish any partially started freezes before releasing their banks.
         try {
@@ -108,6 +114,10 @@ static void prepareEvent(CacheRuntime *para) {
             message = "Event rejected: " + para->event.error;
         }
         LOG(message, WARN);
+        if (para->failed)
+            setRuntimeState(*para, RuntimeState::Error);
+        else
+            setPassiveRuntimeState(*para);
     }
 }
 // Validate control requests and advance node event state; allow RELEASE only after persistence is confirmed.
@@ -130,8 +140,10 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             uint64_t transitionUsed = 0;
             uint64_t transitionCapacity = 0;
             uint64_t lastFreezeMilliseconds = 0;
+            uint64_t receivedPackets = 0;
             bool transitionWarning = false;
-            bool ready = !isActiveEventState(para.event.state) && !para.failed;
+            bool ready = para.runtimeState.load() == RuntimeState::CachingData &&
+                         !isActiveEventState(para.event.state) && !para.failed;
             for (const auto &pool : para.receiveBuffers) {
                 auto s = pool->status();
                 oldest = std::max(oldest, s.oldest);
@@ -141,8 +153,11 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                 lastFreezeMilliseconds =
                     std::max(lastFreezeMilliseconds, s.lastFreezeMilliseconds);
                 transitionWarning = transitionWarning || s.transitionWarning;
+                receivedPackets += s.received;
                 ready = ready && s.ready;
             }
+            if (para.receiveBuffers.empty())
+                end = 0;
             ready = ready && para.initializedPorts == para.receiveBuffers.size();
             const char *status = "WARMING";
             if (para.failed)
@@ -152,11 +167,18 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             else if (isActiveEventState(para.event.state))
                 status = "BUSY";
             return reply("\"status\":" + quoteJson(status) +
+                         ",\"runtime_state\":" +
+                         quoteJson(runtimeStateName(para.runtimeState.load())) +
+                         ",\"runtime_state_age_ms\":" +
+                         std::to_string(runtimeStateAgeMilliseconds(para)) +
                          ",\"accept_trigger\":" + (ready ? "true" : "false") +
                          ",\"oldest_period\":" + std::to_string(oldest) + ",\"settled_end\":" +
                          std::to_string(end) + ",\"event_id\":" + quoteJson(para.event.id) +
                          ",\"event_state\":" + quoteJson(eventStateName(para.event.state)) +
                          ",\"initialized_ports\":" + std::to_string(para.initializedPorts.load()) +
+                         ",\"receive_ports\":" +
+                         std::to_string(para.receiveBuffers.size()) +
+                         ",\"received_packets\":" + std::to_string(receivedPackets) +
                          ",\"ignored_packets\":" + std::to_string(para.ignoredPackets.load()) +
                          ",\"transition_used_periods\":" +
                          std::to_string(transitionUsed) +
@@ -234,6 +256,8 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             }
             if (para.failed || isActiveEventState(para.event.state))
                 throw std::runtime_error("BUSY");
+            if (para.runtimeState.load() != RuntimeState::CachingData)
+                throw std::runtime_error("NOT_READY");
             if (para.initializedPorts != para.receiveBuffers.size())
                 throw std::runtime_error("NOT_READY");
             for (const auto &pool : para.receiveBuffers) {
@@ -253,12 +277,14 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             para.event.start = start;
             para.event.count = count;
             para.event.state = EventState::Preparing;
+            setRuntimeState(para, RuntimeState::PreparingEvent);
             try {
                 para.eventThread = std::thread(prepareEvent, &para);
             } catch (...) {
                 para.event.state = EventState::Rejected;
                 para.event.error = "prepare thread creation failed";
                 remember(para);
+                setPassiveRuntimeState(para);
                 throw;
             }
             return reply(eventJson(para.event));
@@ -289,11 +315,13 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                 e.sendMilliseconds = 0;
                 e.sendRateBitsPerSecond = 0;
                 e.error.clear();
+                setRuntimeState(para, RuntimeState::SendingCachedData);
                 try {
                     para.eventThread = std::thread(InitSendStoreThread, &para);
                 } catch (...) {
                     e.state = EventState::SendFailed;
                     e.error = "send thread creation failed";
+                    setRuntimeState(para, RuntimeState::SendFailed);
                     throw;
                 }
             } else if (e.state != EventState::Sending && e.state != EventState::Stored &&
@@ -305,6 +333,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                     pool->release();
                 e.state = EventState::Released;
                 remember(para);
+                setPassiveRuntimeState(para);
             } else if (e.state != EventState::Released)
                 throw std::runtime_error("NOT_DURABLY_STORED");
         } else if (command == "CANCEL") {
@@ -315,6 +344,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                     pool->release();
                 e.state = EventState::Cancelled;
                 remember(para);
+                setPassiveRuntimeState(para);
             } else if (e.state != EventState::Cancelled && e.state != EventState::Rejected)
                 throw std::runtime_error("CANNOT_CANCEL_CURRENT_STATE");
         } else

@@ -30,7 +30,7 @@ for path in [ROOT / "Storage/storage.yaml", ROOT / "deploy/ansible/templates/sto
     text = path.read_text(encoding="utf-8")
     assert "storage:" not in text, path
     assert "backend:" not in text, path
-    for key in ("directory:", "ioThreads:", "expectedServerIds:", "receivers:", "backendAddress:",
+    for key in ("directory:", "statusFile:", "ioThreads:", "expectedServerIds:", "receivers:", "backendAddress:",
                 "backendPort:", "backendBindAddress:"):
         assert re.search(rf"^{key}", text, re.MULTILINE), (path, key)
 
