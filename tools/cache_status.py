@@ -57,15 +57,19 @@ def snapshot(nodes, acquisition, timeout):
 
 
 def print_table(results):
-    print(f"{'NODE':<5} {'HOST':<16} {'STATE':<22} {'DESCRIPTION':<14} "
-          f"{'PORTS':<8} {'EVENT':<13} {'RECEIVED':>12}")
+    print(f"{'NODE':<5} {'HOST':<16} {'STATE':<22} {'PORTS':<8} {'EVENT':<13} "
+          f"{'RECEIVED':>12} {'LOST':>10} {'LATE':>10} {'LOSS_PORTS'}")
     for item in results:
         state = item.get('runtime_state', 'UNKNOWN')
         ports = (f"{item.get('initialized_ports', 0)}/{item.get('receive_ports', 0)}"
                  if state != 'OFFLINE' else '-')
+        losses = item.get('lost_by_port', {})
+        loss_ports = ','.join(f'{port}:{count}' for port, count in
+                              sorted(losses.items(), key=lambda entry: int(entry[0]))) or '-'
         print(f"{item['server_id']:<5} {item.get('host', '-'):<16} {state:<22} "
-              f"{STATE_TEXT.get(state, '未知状态'):<14} {ports:<8} "
-              f"{item.get('event_state', '-'):<13} {item.get('received_packets', 0):>12}")
+              f"{ports:<8} {item.get('event_state', '-'):<13} "
+              f"{item.get('received_packets', 0):>12} {item.get('lost_packets', 0):>10} "
+              f"{item.get('late_packets', 0):>10} {loss_ports}")
 
 
 def storage_snapshot(path):

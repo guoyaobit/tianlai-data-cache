@@ -120,6 +120,9 @@ PoolStatus ReceiveRingBuffer::statusUnlocked() const {
     s.duplicate = duplicate;
     s.late = late;
     s.conflicting = conflicting;
+    s.lost = lostPackets;
+    s.lossPeriods = lossPeriods;
+    s.lastLossPeriod = lastLossPeriod;
     s.transitionCapacity = transitionCapacity;
     if (mode == TRANSITION && latest >= transitionStart)
         s.transitionUsed = std::min<uint64_t>(transitionCapacity, latest - transitionStart + 1);
@@ -152,6 +155,9 @@ void ReceiveRingBuffer::addPacketLoss(uint64_t firstPeriod, uint64_t lastPeriod,
     pendingLastMissingPeriod = lastPeriod;
     pendingMissingPackets += missing;
     pendingMissingPeriods += affected;
+    lostPackets += missing;
+    lossPeriods += affected;
+    lastLossPeriod = lastPeriod;
 }
 void ReceiveRingBuffer::logPacketLoss(std::chrono::steady_clock::time_point now) {
     if (!pendingMissingPeriods)
@@ -265,7 +271,10 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
     std::memcpy(dst->packet(p, packetSlot), packet, packetBytes);
     h.boardMask |= bit;
     ++received;
-    detectPacketLoss(now, previousLatest);
+    // Only the first packet that advances the period can finalize older
+    // periods. Avoid repeating the same scan for every board packet.
+    if (latest > previousLatest)
+        detectPacketLoss(now, previousLatest);
     return true;
 }
 // Validate the event range and redirect subsequent packets to the transition area so data pending storage is not overwritten during collation.

@@ -122,7 +122,7 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
 发送失败为 SEND_FAILED，仍保护数据；准备失败为 REJECTED；明确取消为 CANCELLED。
 释放后历史不足时节点 QUERY_STATUS 返回 WARMING，而不是 READY。
 
-`runtime_state`描述进程当前工作阶段，与事件状态分开：`PREPARING_MEMORY`、`WAITING_FOR_DATA`、`CACHING_DATA`、`PREPARING_EVENT`、`EVENT_READY`、`SENDING_CACHED_DATA`、`STORAGE_CONFIRMED`、`SEND_FAILED`、`ERROR`和`STOPPING`。节点响应同时包含`runtime_state_age_ms`、`initialized_ports/receive_ports`及`received_packets`。控制器`QUERY_STATUS`用`node_runtime_states`和`runtime_state_counts`汇总所选节点。
+`runtime_state`描述进程当前工作阶段，与事件状态分开：`PREPARING_MEMORY`、`WAITING_FOR_DATA`、`CACHING_DATA`、`PREPARING_EVENT`、`EVENT_READY`、`SENDING_CACHED_DATA`、`STORAGE_CONFIRMED`、`SEND_FAILED`、`ERROR`和`STOPPING`。节点响应同时包含`runtime_state_age_ms`、`initialized_ports/receive_ports`、`received_packets`以及进程启动以来的`lost_packets`、`loss_periods`、`last_loss_period`、`late_packets`和`lost_by_port`。`loss_periods`按端口-周期累计；进程重启后这些运行计数清零。控制器`QUERY_STATUS`用`node_runtime_states`和`runtime_state_counts`汇总所选节点。
 
 存储服务将本机实时状态写入`statusFile`（部署默认`/run/tianlai-storage-status.json`）。状态包括`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`和`STOPPING`；文件还包含监听端点、活动传输、完成/中止lane、累计写入字节及最近错误。状态文件是监控信息，不代替lane持久化标记或`storage-complete.json`。
 

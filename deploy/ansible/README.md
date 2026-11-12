@@ -141,7 +141,7 @@ systemctl status tianlai-cache.service
 systemctl status tianlai-controller.service
 ```
 
-存储服务器会安装`tianlai-status`命令。它通过172管理网同时显示本机落盘服务状态和全部缓存节点的运行阶段、接收口、事件及累计包数：
+存储服务器会安装`tianlai-status`命令。它通过172管理网同时显示本机落盘服务状态和全部缓存节点的运行阶段、接收口、事件、累计收包、缺包、迟到包及按端口缺包统计：
 
 ```bash
 tianlai-status

@@ -64,6 +64,9 @@ int main() {
                          "Receive port 7 packet loss: missing_packets=1 affected_periods=1 "
                          "period_range=3..3") != warningLogs.end());
     }
+    auto lossStatus = lossAlert.status();
+    assert(lossStatus.lost == 1 && lossStatus.lossPeriods == 1 &&
+           lossStatus.lastLossPeriod == 3 && lossStatus.late == 0);
     // An out-of-order period completed inside the reorder window is not loss.
     ReceiveRingBuffer reordered(8, 10, 20, 5, 2, 1, 32, 2, 100000, 80, false);
     for (unsigned p = 0; p < 3; ++p)

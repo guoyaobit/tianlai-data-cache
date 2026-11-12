@@ -121,7 +121,7 @@ tianlai-status
 tianlai-status --watch 2
 ```
 
-工具首先显示存储服务状态：`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`或`STOPPING`，同时显示28个lane监听端点、活动传输、已完成lane及累计写入字节。随后显示各缓存节点的`PREPARING_MEMORY`（准备内存）、`WAITING_FOR_DATA`（等待接收数据）、`CACHING_DATA`（缓存数据中）、`PREPARING_EVENT`（准备触发数据）、`EVENT_READY`（触发数据已准备）、`SENDING_CACHED_DATA`（发送缓存数据）、`STORAGE_CONFIRMED`（存储已确认）、`SEND_FAILED`和`ERROR`。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发；也可在对应缓存节点通过`journalctl -u tianlai-cache.service -f`查看标准化的`Runtime state:`日志。
+工具首先显示存储服务状态：`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`或`STOPPING`，同时显示28个lane监听端点、活动传输、已完成lane及累计写入字节。随后显示各缓存节点的运行阶段、累计收包、累计缺包、迟到包和按端口缺包统计；`LOSS_PORTS`中的`3:6`表示端口3累计缺6包。详细的受影响周期数和最近缺包周期可通过`tianlai-status --json`查看。计数从缓存进程启动开始，进程重启后清零。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发；也可在对应缓存节点通过`journalctl -u tianlai-cache.service -f`查看标准化的`Runtime state:`日志。
 
 每个接收线程会打印第一条成功解析的UDP数据头，包括`packet_id`、板卡号、trace/integration周期和长度；随后再打印第一条实际写入环形缓冲区的数据。如果ixcap已经收到帧但以太网/IPv4/UDP解析失败，会打印首个失败帧的长度，便于区分“没有流量”和“帧格式不匹配”。
 

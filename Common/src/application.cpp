@@ -1,8 +1,11 @@
 #include "functions.h"
 #include "log_output.h"
 #include <csignal>
+#include <exception>
 #include <fstream>
 #include <iostream>
+#include <pthread.h>
+#include <sched.h>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -152,6 +155,41 @@ static uint64_t availableMemory() {
     throw std::runtime_error("cannot read MemAvailable");
 }
 
+// First-touch each large port buffer on the same CPU used by its receive
+// thread. Linux then places the pages on that CPU's NUMA node when possible.
+static std::unique_ptr<ReceiveRingBuffer> allocatePortBuffer(
+        unsigned index, const ReceivePortConfig &port, const YamlConfig &config) {
+    std::unique_ptr<ReceiveRingBuffer> result;
+    std::exception_ptr failure;
+    std::thread worker([&]() {
+        try {
+            if (port.cpuId >= 0) {
+                if (port.cpuId >= CPU_SETSIZE)
+                    throw std::runtime_error("buffer allocation CPU ID is out of range");
+                cpu_set_t cpus;
+                CPU_ZERO(&cpus);
+                CPU_SET(port.cpuId, &cpus);
+                if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus))
+                    throw std::runtime_error(
+                        "buffer allocation CPU affinity failed for port " +
+                        std::to_string(index) + " cpu " + std::to_string(port.cpuId));
+            }
+            result.reset(new ReceiveRingBuffer(
+                index, config.halfPeriods(), config.transitionPeriods(),
+                config.maxEventPeriods(), port.packetSlots(), port.packetsPerBoard,
+                config.inputDataBytes + INPUT_HEADER_BYTES, config.reorderPeriods,
+                config.settleMilliseconds, config.transitionWarnPercent,
+                config.prefaultMemory));
+        } catch (...) {
+            failure = std::current_exception();
+        }
+    });
+    worker.join();
+    if (failure)
+        std::rethrow_exception(failure);
+    return result;
+}
+
 // Check available memory and create double buffers plus a transition area for each receive port.
 static void Prepare(CacheRuntime &para) {
     const auto &c = *para.config;
@@ -167,17 +205,12 @@ static void Prepare(CacheRuntime &para) {
                 " buffer: packet_slots=" + std::to_string(port.packetSlots()) +
                 " physical_boards=" + std::to_string(port.boardNum) +
                 " packets_per_board=" + std::to_string(port.packetsPerBoard) +
+                " cpu=" + std::to_string(port.cpuId) +
                 " frame_bytes=" +
                 std::to_string(port.packetSlots() *
                                uint64_t(c.inputDataBytes + INPUT_HEADER_BYTES)),
             DEBUG);
-        buffers.emplace_back(
-            new ReceiveRingBuffer(index, c.halfPeriods(), c.transitionPeriods(),
-                                  c.maxEventPeriods(), port.packetSlots(),
-                                  port.packetsPerBoard, c.inputDataBytes + INPUT_HEADER_BYTES,
-                                  c.reorderPeriods,
-                                  c.settleMilliseconds, c.transitionWarnPercent,
-                                  c.prefaultMemory));
+        buffers.emplace_back(allocatePortBuffer(index, port, c));
     }
     std::lock_guard<std::mutex> lock(para.eventMutex);
     para.receiveBuffers = std::move(buffers);

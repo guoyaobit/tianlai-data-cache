@@ -2,7 +2,9 @@
 """Verify cache runtime phases and the deployed status viewer."""
 
 from pathlib import Path
+from contextlib import redirect_stdout
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -36,6 +38,9 @@ assert 'noteAcceptedPacket(*para)' in RECEIVER
 assert '\\"runtime_state\\"' in EVENT
 assert '\\"runtime_state_age_ms\\"' in EVENT
 assert '\\"received_packets\\"' in EVENT
+for field in ('lost_packets', 'loss_periods', 'last_loss_period', 'late_packets',
+              'lost_by_port'):
+    assert f'\\"{field}\\"' in EVENT
 assert 'RuntimeState::SendingCachedData' in EVENT
 assert 'RuntimeState::StorageConfirmed' in SENDER
 for state in ('RECEIVING_AND_WRITING', 'NOTIFYING_BACKEND', 'WAITING_FOR_DATA'):
@@ -55,6 +60,14 @@ spec.loader.exec_module(module)
 assert module.STATE_TEXT['PREPARING_MEMORY'] == '准备内存'
 assert module.STATE_TEXT['SENDING_CACHED_DATA'] == '发送缓存数据'
 assert module.STATE_TEXT['RECEIVING_AND_WRITING'] == '接收并写盘'
+assert 'LOSS_PORTS' in (ROOT / 'tools/cache_status.py').read_text(encoding='utf-8')
+table = io.StringIO()
+with redirect_stdout(table):
+    module.print_table([dict(server_id=1, host='172.0.0.129',
+                             runtime_state='CACHING_DATA', initialized_ports=8,
+                             receive_ports=8, event_state='IDLE', received_packets=1000,
+                             lost_packets=6, late_packets=2, lost_by_port={'3': 6})])
+assert 'LOST' in table.getvalue() and '3:6' in table.getvalue()
 with tempfile.TemporaryDirectory() as directory:
     status_path = Path(directory) / 'storage.json'
     status_path.write_text(json.dumps(dict(pid=os.getpid(), state='WAITING_FOR_DATA')),

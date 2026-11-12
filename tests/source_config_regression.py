@@ -57,6 +57,18 @@ def check_receive_logging_and_marker():
     assert "raw[0] = 0x00" in storage_test
 
 
+def check_receive_performance_guards():
+    application = read("Common/src/application.cpp")
+    receive_pool = read("Common/src/receive_pool.cpp")
+    assert "allocatePortBuffer(index, port, c)" in application
+    assert "pthread_setaffinity_np" in application
+    assert application.index("pthread_setaffinity_np") < application.index(
+        "new ReceiveRingBuffer"
+    )
+    assert "if (latest > previousLatest)" in receive_pool
+    assert "detectPacketLoss(now, previousLatest)" in receive_pool
+
+
 def check_simulation_config():
     configs = sorted((ROOT / "F0-2").glob("server_*.yaml"))
     configs += sorted((ROOT / "F3-10").glob("server_*.yaml"))
@@ -111,6 +123,7 @@ def check_yaml_style():
 if __name__ == "__main__":
     check_zmq_logging()
     check_receive_logging_and_marker()
+    check_receive_performance_guards()
     check_simulation_config()
     check_yaml_style()
     print("source and configuration regression checks passed")

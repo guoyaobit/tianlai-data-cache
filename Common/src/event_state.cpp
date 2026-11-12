@@ -141,11 +141,16 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             uint64_t transitionCapacity = 0;
             uint64_t lastFreezeMilliseconds = 0;
             uint64_t receivedPackets = 0;
+            uint64_t lostPackets = 0;
+            uint64_t lossPeriods = 0;
+            uint64_t lastLossPeriod = 0;
+            uint64_t latePackets = 0;
+            std::string lostByPort = "{";
             bool transitionWarning = false;
             bool ready = para.runtimeState.load() == RuntimeState::CachingData &&
                          !isActiveEventState(para.event.state) && !para.failed;
-            for (const auto &pool : para.receiveBuffers) {
-                auto s = pool->status();
+            for (size_t index = 0; index < para.receiveBuffers.size(); ++index) {
+                auto s = para.receiveBuffers[index]->status();
                 oldest = std::max(oldest, s.oldest);
                 end = std::min(end, s.settledEnd);
                 transitionUsed = std::max(transitionUsed, s.transitionUsed);
@@ -154,8 +159,19 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                     std::max(lastFreezeMilliseconds, s.lastFreezeMilliseconds);
                 transitionWarning = transitionWarning || s.transitionWarning;
                 receivedPackets += s.received;
+                lostPackets += s.lost;
+                lossPeriods += s.lossPeriods;
+                lastLossPeriod = std::max(lastLossPeriod, s.lastLossPeriod);
+                latePackets += s.late;
+                if (s.lost) {
+                    if (lostByPort.size() > 1)
+                        lostByPort += ',';
+                    lostByPort += quoteJson(std::to_string(index)) + ':' +
+                                  std::to_string(s.lost);
+                }
                 ready = ready && s.ready;
             }
+            lostByPort += '}';
             if (para.receiveBuffers.empty())
                 end = 0;
             ready = ready && para.initializedPorts == para.receiveBuffers.size();
@@ -179,6 +195,11 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                          ",\"receive_ports\":" +
                          std::to_string(para.receiveBuffers.size()) +
                          ",\"received_packets\":" + std::to_string(receivedPackets) +
+                         ",\"lost_packets\":" + std::to_string(lostPackets) +
+                         ",\"loss_periods\":" + std::to_string(lossPeriods) +
+                         ",\"last_loss_period\":" + std::to_string(lastLossPeriod) +
+                         ",\"late_packets\":" + std::to_string(latePackets) +
+                         ",\"lost_by_port\":" + lostByPort +
                          ",\"ignored_packets\":" + std::to_string(para.ignoredPackets.load()) +
                          ",\"transition_used_periods\":" +
                          std::to_string(transitionUsed) +
@@ -209,6 +230,9 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                          ",\"settled_end\":" + std::to_string(s.settledEnd) +
                          ",\"latest_period\":" + std::to_string(s.latest) +
                          ",\"received_packets\":" + std::to_string(s.received) +
+                         ",\"lost_packets\":" + std::to_string(s.lost) +
+                         ",\"loss_periods\":" + std::to_string(s.lossPeriods) +
+                         ",\"last_loss_period\":" + std::to_string(s.lastLossPeriod) +
                          ",\"duplicate_packets\":" + std::to_string(s.duplicate) +
                          ",\"late_packets\":" + std::to_string(s.late) +
                          ",\"conflicting_packets\":" + std::to_string(s.conflicting) +

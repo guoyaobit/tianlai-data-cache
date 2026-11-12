@@ -193,6 +193,9 @@ def run(server, directory):
         status = wait_for(ready_status)
         assert status['runtime_state'] == 'CACHING_DATA'
         assert status['receive_ports'] == ports and status['received_packets'] > 0
+        assert all(field in status for field in
+                   ('lost_packets', 'loss_periods', 'last_loss_period', 'late_packets',
+                    'lost_by_port'))
         assert status['transition_capacity_periods'] > 0
         assert status['transition_used_periods'] == 0 and not status['transition_warning']
         if not remote:

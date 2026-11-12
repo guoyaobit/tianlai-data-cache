@@ -20,6 +20,9 @@ struct PoolStatus {
     uint64_t duplicate = 0;
     uint64_t late = 0;
     uint64_t conflicting = 0;
+    uint64_t lost = 0;
+    uint64_t lossPeriods = 0;
+    uint64_t lastLossPeriod = 0;
     uint64_t transitionCapacity = 0;
     uint64_t transitionUsed = 0;
     uint64_t transitionPeak = 0;
@@ -110,6 +113,9 @@ class ReceiveRingBuffer {
     uint64_t pendingMissingPeriods = 0;
     uint64_t pendingFirstMissingPeriod = 0;
     uint64_t pendingLastMissingPeriod = 0;
+    uint64_t lostPackets = 0;
+    uint64_t lossPeriods = 0;
+    uint64_t lastLossPeriod = 0;
     bool transitionWarningLogged = false;
     std::chrono::steady_clock::time_point freezeStarted;
     std::chrono::steady_clock::time_point lastReceive;
