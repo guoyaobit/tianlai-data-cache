@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <memory>
 #include <vector>
+#include <spdlog/async.h>
+#include <spdlog/async_logger.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
@@ -29,8 +31,9 @@ spdlog::level::level_enum severity(LogLevel level) {
 } // namespace
 
 void initLogOut(const std::string &path, bool debug) {
-    // Initialise before starting receive and control threads; the mt sinks are
-    // safe for concurrent writers. File rotation bounds long-running log growth.
+    // Keep console and file I/O away from the packet receive threads. The
+    // bounded queue drops the oldest log entry instead of stalling live input
+    // if journald or the disk is temporarily slow.
     std::vector<spdlog::sink_ptr> sinks;
     auto consoleSink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
     // Journald already supplies time, host and process metadata. Avoid repeating
@@ -48,7 +51,11 @@ void initLogOut(const std::string &path, bool debug) {
         fileSink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [T%t] %v");
         sinks.push_back(fileSink);
     }
-    logger = std::make_shared<spdlog::logger>("tianlai-store", sinks.begin(), sinks.end());
+    constexpr size_t queueSize = 8192;
+    spdlog::init_thread_pool(queueSize, 1);
+    logger = std::make_shared<spdlog::async_logger>(
+        "tianlai-store", sinks.begin(), sinks.end(), spdlog::thread_pool(),
+        spdlog::async_overflow_policy::overrun_oldest);
     logger->set_level(debug ? spdlog::level::debug : spdlog::level::info);
     logger->flush_on(spdlog::level::warn);
     spdlog::register_logger(logger);

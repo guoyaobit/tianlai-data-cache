@@ -37,14 +37,15 @@ struct ReceiveRingBuffer::BoardBuffer {
 };
 
 struct ReceiveRingBuffer::Buffer {
-    size_t capacity, stride;
+    size_t capacity, stride, packetSize;
     unsigned packetsPerBoard;
     unsigned char *data;
     std::vector<RcvFrameHeader> headers;
     std::vector<BoardBuffer> boardViews;
     Buffer(unsigned char *address, size_t count, size_t frameBytes,
            unsigned packetSlots, unsigned packetsPerPhysicalBoard, size_t packetBytes)
-        : capacity(count), stride(frameBytes), packetsPerBoard(packetsPerPhysicalBoard),
+        : capacity(count), stride(frameBytes), packetSize(packetBytes),
+          packetsPerBoard(packetsPerPhysicalBoard),
           data(address), headers(count) {
         const unsigned physicalBoards = packetSlots / packetsPerBoard;
         boardViews.reserve(physicalBoards);
@@ -65,12 +66,13 @@ struct ReceiveRingBuffer::Buffer {
         return data + (p % capacity) * stride;
     }
     unsigned char *packet(uint64_t p, unsigned packetSlot) {
-        return boardViews[packetSlot / packetsPerBoard].packet(
-            p, packetSlot % packetsPerBoard);
+        // The logical board views describe ownership, but ingress uses the
+        // contiguous frame directly to avoid division and a vector lookup for
+        // every packet in the receive hot path.
+        return frame(p) + size_t(packetSlot) * packetSize;
     }
     const unsigned char *packet(uint64_t p, unsigned packetSlot) const {
-        return boardViews[packetSlot / packetsPerBoard].packet(
-            p, packetSlot % packetsPerBoard);
+        return frame(p) + size_t(packetSlot) * packetSize;
     }
     void reset() {
         std::fill(headers.begin(), headers.end(), RcvFrameHeader{});
@@ -209,12 +211,23 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
     std::lock_guard<std::mutex> lock(mutex);
     if (packetSlot >= packetSlots || p == UINT64_MAX)
         throw std::runtime_error("invalid receive index");
-    // A single timestamp defines both finalization and last-receive time for this packet.
-    const auto now = std::chrono::steady_clock::now();
-    if (haveData && (p < oldest || p < settledEndUnlocked(now))) {
+    // Sequence-based finalization handles the normal high-rate path without a
+    // clock read for every board packet. Timeout-based finalization is sampled
+    // when the integration period advances and by status/freeze operations.
+    const uint64_t sequenceSettledEnd = haveData
+        ? std::max(finalizedEnd, latest >= reorder ? latest - reorder + 1 : 0)
+        : 0;
+    if (haveData && (p < oldest || p < sequenceSettledEnd)) {
         ++late;
         return false;
     }
+    const bool periodAdvanced = !haveData || p > latest;
+    // A sparse fallback sample keeps idle-settlement timing representative
+    // during unusual out-of-order traffic without restoring per-packet clocks.
+    const bool sampleClock = periodAdvanced || (received & 63U) == 0;
+    std::chrono::steady_clock::time_point now;
+    if (sampleClock)
+        now = std::chrono::steady_clock::now();
     if (!haveData) {
         oldest = p;
         anchor = p;
@@ -244,7 +257,8 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
     const uint64_t retention = mode == NORMAL ? 2 * half : half;
     if (latest + 1 > retention)
         oldest = std::max(oldest, latest + 1 - retention);
-    lastReceive = now;
+    if (sampleClock)
+        lastReceive = now;
 
     // During consolidation both original banks are read-only. After it, only
     // the bank not holding the event may receive new packets.

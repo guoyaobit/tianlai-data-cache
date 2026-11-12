@@ -49,6 +49,7 @@ inline int munmap(void* p, size_t) { return VirtualFree(p, 0, MEM_RELEASE) ? 0 :
             prefix + '    std::cout << "portable receive pool regression passed\\n";\n}\n',
             encoding='utf-8')
         (tmp / 'protocol_stub.cpp').write_text('''#include "protocol.h"
+#include "functions.h"
 void put32(std::vector<unsigned char>& v, uint32_t n) {
     for (int i=3; i>=0; --i) v.push_back((n>>(8*i))&255);
 }
@@ -67,6 +68,7 @@ std::string getId(const boost::property_tree::ptree&, const std::string& key) {
 uint64_t getNumber(const boost::property_tree::ptree&, const std::string& key) {
     return key == "lane" ? parsed_lane : 0;
 }
+void setRuntimeState(CacheRuntime&, RuntimeState) {}
 ''')
         binary = tmp / 'pool_test.exe'
         subprocess.run([args.cxx, '-std=c++14', '-O2', '-pthread', '-I' + str(tmp),

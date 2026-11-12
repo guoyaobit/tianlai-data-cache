@@ -11,6 +11,7 @@
 #include <thread>
 static void Prepare(CacheRuntime &para);
 static void Finish(CacheRuntime &para);
+static void isolateReceiveCpus(const YamlConfig &config);
 static volatile std::sig_atomic_t stopped = 0;
 static void stopHandler(int) {
     stopped = 1;
@@ -51,7 +52,8 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
             const auto &port = config.receivePorts[p];
             std::cout << "port=" << p << " packetId=" << port.packetId
                       << " boards=" << port.boardBegin << ".."
-                      << port.boardBegin + port.boardNum - 1 << " device=" << port.deviceName;
+                      << port.boardBegin + port.boardNum - 1 << " device=" << port.deviceName
+                      << " cpu=" << port.cpuId;
             if (port.packetsPerBoard > 1)
                 std::cout << " packetIdEnd=" << port.packetId + port.packetsPerBoard - 1
                           << " packetsPerFrame=" << port.packetSlots()
@@ -77,6 +79,10 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
                 link.sourceIp == "0.0.0.0" || link.destinationIp == "0.0.0.0")
                 throw std::runtime_error("configure the storage send interface before running");
         }
+        // Background workers inherit this mask. Receive workers later replace
+        // it with their dedicated NUMA-local CPU, preventing logging, control,
+        // event collation and storage sending from preempting packet capture.
+        isolateReceiveCpus(config);
         initLogOut(config.logFilePath, config.debug);
         LOG("Runtime config: server=" + std::to_string(config.serverId) +
                 " receive_ports=" + std::to_string(config.receivePorts.size()) +
@@ -139,6 +145,29 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
         std::cerr << "[FATAL] " << e.what() << "\n";
         return 1;
     }
+}
+
+static void isolateReceiveCpus(const YamlConfig &config) {
+    cpu_set_t background;
+    CPU_ZERO(&background);
+    if (sched_getaffinity(0, sizeof(background), &background))
+        throw std::runtime_error("cannot read process CPU affinity");
+    bool changed = false;
+    for (const auto &port : config.receivePorts) {
+        if (port.cpuId >= 0 && port.cpuId < CPU_SETSIZE && CPU_ISSET(port.cpuId, &background)) {
+            CPU_CLR(port.cpuId, &background);
+            changed = true;
+        }
+    }
+    if (!changed)
+        return;
+    bool available = false;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+        available = available || CPU_ISSET(cpu, &background);
+    if (!available)
+        throw std::runtime_error("receive CPUs leave no CPU for background threads");
+    if (pthread_setaffinity_np(pthread_self(), sizeof(background), &background))
+        throw std::runtime_error("background CPU affinity failed");
 }
 
 // Initialise and stop the receive workers alongside the application lifecycle.
