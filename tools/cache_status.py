@@ -7,19 +7,42 @@ import json
 import os
 from pathlib import Path
 import socket
+import struct
 import sys
 import time
 import uuid
 
-from tcp_json import receive_frame, send_frame
-
-
 DEFAULT_CONTROL_PORT = 19000
+MAX_JSON_BYTES = 1200
+LENGTH = struct.Struct('!I')
 DEFAULT_CACHE_NODES = [
     dict(server_id=server_id, host=f'172.0.0.{128 + server_id}',
          port=DEFAULT_CONTROL_PORT)
     for server_id in range(14)
 ]
+
+
+def receive_exact(connection, size):
+    data = bytearray()
+    while len(data) < size:
+        chunk = connection.recv(size - len(data))
+        if not chunk:
+            raise ConnectionError('TCP connection closed before the frame completed')
+        data.extend(chunk)
+    return bytes(data)
+
+
+def receive_frame(connection):
+    size = LENGTH.unpack(receive_exact(connection, LENGTH.size))[0]
+    if not 1 <= size <= MAX_JSON_BYTES:
+        raise ValueError('invalid TCP JSON frame length')
+    return receive_exact(connection, size)
+
+
+def send_frame(connection, body):
+    if not 1 <= len(body) <= MAX_JSON_BYTES:
+        raise ValueError('invalid TCP JSON frame length')
+    connection.sendall(LENGTH.pack(len(body)) + body)
 
 STATE_TEXT = {
     'STARTING': '启动中',

@@ -237,8 +237,8 @@
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../tools/{{ item }}"
         dest: "{{ tianlai_root }}/tools/{{ item }}"
-        mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
-      loop: [cache_status.py, tcp_json.py]
+        mode: '0755'
+      loop: [cache_status.py]
     - name: Render cache status node list
       ansible.builtin.template:
         src: templates/nodes.json.j2

@@ -61,6 +61,11 @@ assert 'cache_status.py --integration-per-trace' in SITE
 assert 'cache_status.py --integration-per-trace' in UPDATE
 assert 'Install cache status tool on cache nodes' in SITE
 assert 'Update cache status tool' in UPDATE
+cache_tool = (ROOT / 'tools/cache_status.py').read_text(encoding='utf-8')
+display_deploy = (ROOT / 'tools/deploy_tlcache.sh').read_text(encoding='utf-8')
+assert 'from tcp_json' not in cache_tool
+assert '172.0.0.61' in display_deploy and 'ubuntu' in display_deploy
+assert 'sshpass' not in display_deploy and 'ansible_password' not in display_deploy
 
 sys.path.insert(0, str(ROOT / 'tools'))
 spec = importlib.util.spec_from_file_location('cache_status', ROOT / 'tools/cache_status.py')
