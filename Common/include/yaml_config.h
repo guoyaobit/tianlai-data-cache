@@ -44,7 +44,7 @@ class YamlConfig {
     uint64_t allocationBytes() const;
     StoreMode mode;
     unsigned serverId = 0, inputDataBytes = 0, integrationPerTrace = 50000;
-    unsigned periodMicroseconds = 200, halfBufferSeconds = 50, maxEventSeconds = 5;
+    unsigned periodMicroseconds = 200, halfBufferSeconds = 50, maxEventSeconds = 50;
     unsigned reorderPeriods = 50, settleMilliseconds = 20, transitionWarnPercent = 80;
     unsigned chunkPeriods = 64;
     unsigned controlPort = 19000, socketTimeoutSeconds = 15;

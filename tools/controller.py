@@ -16,6 +16,7 @@ from tcp_json import MAX_JSON_BYTES, receive_frame, send_frame
 
 
 MAX_CONTROL_BYTES = MAX_JSON_BYTES
+MAX_CAPTURE_MICROSECONDS = 50_000_000
 RPC_ATTEMPTS = 6
 REPLAY_TTL_SECONDS = 300
 REPLAY_MAX_ENTRIES = 1024
@@ -246,7 +247,8 @@ class Controller:
             count = duration * 1000 // self.period_microseconds
         else:
             count = message['period_count']
-        if (type(count) is not int or count < 1 or count * self.period_microseconds > 5000000 or
+        if (type(count) is not int or count < 1 or
+                count * self.period_microseconds > MAX_CAPTURE_MICROSECONDS or
                 trace * self.integration_per_trace + integration + count > (1 << 20) * self.integration_per_trace):
             raise ValueError('invalid trigger range')
         end = trace * self.integration_per_trace + integration + count

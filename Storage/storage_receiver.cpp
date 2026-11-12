@@ -46,6 +46,7 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 using Bytes = std::vector<unsigned char>;
 constexpr size_t MAX_MESSAGE = 13 * 1024 * 1024;
+constexpr uint64_t MAX_EVENT_MICROSECONDS = 50ULL * 1000 * 1000;
 constexpr size_t MAX_SESSIONS_PER_PORT = 1;
 constexpr uint64_t DATA_SYNC_BYTES = 256ULL * 1024 * 1024;
 constexpr auto DATA_SYNC_INTERVAL = std::chrono::seconds(1);
@@ -336,7 +337,8 @@ class EventWriter {
                 node < (channels == 288 ? 11U : CACHE_NODE_COUNT) && lane_value < LANE_COUNT &&
                 period_us >= 1 && period_us <= 1000000 &&
                 1000000 % period_us == 0 && per_trace >= 1 && per_trace <= 0x800000 &&
-                start < (1ULL << 20) * per_trace && count >= 1 && count <= 5000000 / period_us &&
+                start < (1ULL << 20) * per_trace && count >= 1 &&
+                count <= MAX_EVENT_MICROSECONDS / period_us &&
                 start + count <= (1ULL << 20) * per_trace, "invalid stream metadata");
         server = static_cast<unsigned>(node);
         lane = static_cast<unsigned>(lane_value);

@@ -49,23 +49,24 @@ for field in ('listeners_ready', 'active_transfers', 'completed_lane_transfers',
               'written_bytes'):
     assert field in STORAGE
 assert 'cache_status.py' in SITE and 'cache_status.py' in UPDATE
-assert SITE.count('/usr/local/bin/tlcache') == 2
-assert UPDATE.count('/usr/local/bin/tlcache') == 2
-assert '/usr/local/bin/tltrigger' not in SITE
-assert '/usr/local/bin/tltrigger' not in UPDATE
-assert 'trigger.py' not in SITE
-assert 'trigger.py' not in UPDATE
-assert SITE.count('path: /usr/local/bin/tianlai-status') == 2
-assert UPDATE.count('path: /usr/local/bin/tianlai-status') == 2
+assert SITE.count('/usr/local/bin/tlcache') == 3
+assert UPDATE.count('/usr/local/bin/tlcache') == 3
+assert SITE.count('/usr/local/bin/tltrigger') == 2
+assert UPDATE.count('/usr/local/bin/tltrigger') == 2
+assert 'trigger.py' in SITE
+assert 'trigger.py' in UPDATE
+assert SITE.count('path: /usr/local/bin/tianlai-status') == 3
+assert UPDATE.count('path: /usr/local/bin/tianlai-status') == 3
 assert 'cache_status.py --integration-per-trace' in SITE
 assert 'cache_status.py --integration-per-trace' in UPDATE
 assert 'Install cache status tool on cache nodes' in SITE
 assert 'Update cache status tool' in UPDATE
 cache_tool = (ROOT / 'tools/cache_status.py').read_text(encoding='utf-8')
-display_deploy = (ROOT / 'tools/deploy_tlcache.sh').read_text(encoding='utf-8')
+inventory = (ROOT / 'deploy/ansible/inventory_example.yml').read_text(encoding='utf-8')
 assert 'from tcp_json' not in cache_tool
-assert '172.0.0.61' in display_deploy and 'ubuntu' in display_deploy
-assert 'sshpass' not in display_deploy and 'ansible_password' not in display_deploy
+assert 'display:' in inventory and 'ansible_host: "172.0.0.61"' in inventory
+assert 'Install display-node management clients' in SITE
+assert 'Update display-node management clients' in UPDATE
 
 sys.path.insert(0, str(ROOT / 'tools'))
 spec = importlib.util.spec_from_file_location('cache_status', ROOT / 'tools/cache_status.py')

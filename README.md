@@ -54,7 +54,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
   输出，带毫秒时间和线程号；指定文件时同时输出到 stderr，文件按 50 MiB 轮转，保留最多
   5 个备份。WARN 及以上立即刷新，其他日志按约 3 秒周期刷新；日志并非事件持久化凭据。
 - 缓存程序以`Runtime state:`日志和`QUERY_STATUS.runtime_state`公开当前阶段；存储程序通过142控制器的只读`QUERY_STORAGE`公开监听、接收写盘及后端通知状态。部署后可在任意缓存、存储或显控节点运行`tlcache --watch 2`，同时查看存储节点和14台缓存节点；`tlcache period`查询积分周期。
-- 显控节点为`172.0.0.61`，使用`ubuntu`账户。它不纳入Ansible，在master执行`bash tools/deploy_tlcache.sh`可独立安装单文件`tlcache`；SSH密码仅交互输入，不写入仓库。
+- 显控节点为`172.0.0.61`，使用`ubuntu`账户，并作为inventory中的`display`角色由Ansible统一管理。全量部署和软件更新会同时更新其`tlcache`、`tltrigger`及节点清单，不修改显控节点网络配置。
 
 节点 YAML 的 `controlBindIp` 使用 `172.0.0.128～141`（server 0～13 对应 tianlaistore1～14），控制器/存储服务器管理地址为 `172.0.0.142`。状态查询和触发控制统一走该172管理网；消色散后端地址为 `192.168.200.10`，存储数据网地址为 `192.168.210.250`。当前配置统一使用 YAML。
 程序在正式启动时拒绝未填写的 PCI 地址或发送接口。
@@ -146,7 +146,9 @@ tltrigger capture 3
 
 使用`tltrigger status --channels 288`查询288路状态，使用`tltrigger event EVENT_ID`查询写盘进度；高级联调仍支持`tltrigger --file tools/trigger_example.json`。
 
-`tltrigger`不在Ansible管理范围内。在master节点单独执行`bash tools/deploy_tltrigger.sh`，默认只部署或更新`172.0.0.142`，无需编译、sudo或重启服务。
+单次触发支持1～50秒，保存完整50秒可执行`tltrigger capture 50 --channels 384`。50秒384路数据约2.37 TB，传输和落盘期间该事件持续占用冻结缓冲区，完成或取消前不能接受下一事件；部署前须验证100G链路、阵列持续写入速度和剩余容量。
+
+`tltrigger`由Ansible统一安装到控制器和显控节点；`deploy.sh`负责首次安装，`update_software.sh`随其他程序一并更新。
 
 在触发JSON中设置`"channel_count":288`或`384`；省略时默认384。返回PREPARING表示请求正在处理；查询事件得到PREPARED/STORING后才表明所选模式全部节点已保护。控制器只有确认所有节点STORED后才统一RELEASE，单节点故障不会提前释放其他节点缓存。
 QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。

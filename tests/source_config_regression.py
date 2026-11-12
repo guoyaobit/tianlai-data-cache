@@ -117,6 +117,14 @@ def check_simulation_config():
     assert "set simulationPort for every receive port when using --simulate" in read(
         "Common/src/application.cpp"
     )
+    assert 'maxEventSeconds = number(cfg, "maxEventSeconds", 1, 50)' in read(
+        "Common/src/yaml_config.cpp"
+    )
+    assert "MAX_EVENT_MICROSECONDS = 50ULL * 1000 * 1000" in read(
+        "Storage/storage_receiver.cpp"
+    )
+    assert "MAX_CAPTURE_MICROSECONDS = 50_000_000" in read("tools/controller.py")
+    assert "MAX_CAPTURE_SECONDS = 50" in read("tools/trigger.py")
 
 
 def check_yaml_style():

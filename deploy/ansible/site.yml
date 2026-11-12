@@ -1,6 +1,6 @@
 ---
 - name: Validate complete deployment inventory before modifying hosts
-  hosts: "cache_nodes:storage:controller"
+  hosts: "cache_nodes:storage:controller:display"
   gather_facts: false
   tasks:
     - name: Require all roles and production values
@@ -9,6 +9,7 @@
           - groups.get('cache_nodes', []) | length == 14
           - groups.get('controller', []) | length == 1
           - groups.get('storage', []) | length == 1
+          - groups.get('display', []) | length == 1
           - groups['controller'][0] == groups['storage'][0]
           - ansible_user | default('') == 'ubuntu'
           - tianlai_controller_ip is match('^[0-9.]+$')
@@ -52,7 +53,7 @@
           - (tianlai_cache_send_host_offset | int) + 13 <= 254
           - tianlai_cache_send_prefix_length | int == 24
           - tianlai_storage_prefix_length | int == 24
-        fail_msg: Complete the active inventory with all 14 nodes and actual deployment values.
+        fail_msg: Complete the active inventory with all 14 cache nodes, storage/controller host, display host, and actual deployment values.
       run_once: true
     - name: Require complete cache-node data
       ansible.builtin.assert:
@@ -85,10 +86,10 @@
           - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_server_id') | map('int') | sort == range(0, 14) | list
           - groups['cache_nodes'] | map('extract', hostvars, 'tianlai_control_ip') | unique | list | length == 14
       run_once: true
-    - name: Require controller and storage SSH targets
+    - name: Require controller, storage and display SSH targets
       ansible.builtin.assert:
         that: "'CHANGE_ME' not in (hostvars[item].ansible_host | default('CHANGE_ME'))"
-      loop: "{{ (groups['controller'] + groups['storage']) | unique }}"
+      loop: "{{ (groups['controller'] + groups['storage'] + groups['display']) | unique }}"
       run_once: true
 
 - name: Configure cache data IPs and jumbo MTU with Netplan
@@ -100,12 +101,63 @@
       ansible.builtin.include_tasks: tasks/network_config.yml
 
 - name: Install network diagnostics on all nodes
-  hosts: "cache_nodes:storage:controller"
+  hosts: "cache_nodes:storage:controller:display"
   gather_facts: false
   become: true
   tasks:
     - name: Install network diagnostic packages
       ansible.builtin.include_tasks: tasks/network_tools.yml
+
+- name: Install display-node management clients
+  hosts: display
+  become: true
+  tasks:
+    - name: Require Debian-family Linux
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == 'Debian'
+    - name: Install Python
+      ansible.builtin.apt:
+        name: python3
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Create display client directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0750'
+      loop:
+        - "{{ tianlai_root }}/tools"
+        - "{{ tianlai_root }}/config"
+    - name: Install display management tools
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/{{ item }}"
+        dest: "{{ tianlai_root }}/tools/{{ item }}"
+        mode: '0755'
+      loop: [cache_status.py, trigger.py]
+    - name: Render display node list
+      ansible.builtin.template:
+        src: templates/nodes.json.j2
+        dest: "{{ tianlai_root }}/config/nodes.json"
+        mode: '0640'
+    - name: Remove old status command
+      ansible.builtin.file:
+        path: /usr/local/bin/tianlai-status
+        state: absent
+    - name: Install tlcache on display node
+      ansible.builtin.copy:
+        dest: /usr/local/bin/tlcache
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
+    - name: Install tltrigger on display node
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/trigger.py"
+        dest: /usr/local/bin/tltrigger
+        mode: '0755'
+    - name: Apply safe display client permissions
+      ansible.builtin.include_tasks: tasks/install_permissions.yml
 
 - name: Install storage receiver
   hosts: storage
@@ -428,8 +480,8 @@
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../tools/{{ item }}"
         dest: "{{ tianlai_root }}/tools/{{ item }}"
-        mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
-      loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py]
+        mode: "{{ '0755' if item in ['cache_status.py', 'trigger.py'] else '0644' }}"
+      loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py, trigger.py]
       notify: stop controller after deployment
     - name: Remove old status command
       ansible.builtin.file:
@@ -442,6 +494,11 @@
         content: |
           #!/bin/sh
           exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
+    - name: Install tltrigger on controller
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/trigger.py"
+        dest: /usr/local/bin/tltrigger
+        mode: '0755'
     - name: Render controller node list
       ansible.builtin.template:
         src: templates/nodes.json.j2
@@ -472,7 +529,7 @@
         state: stopped
 
 - name: Generate per-server network reports after code deployment
-  hosts: "cache_nodes:storage:controller"
+  hosts: "cache_nodes:storage:controller:display"
   gather_facts: false
   become: true
   tasks:

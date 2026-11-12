@@ -3,7 +3,7 @@
   ansible.builtin.set_fact:
     network_report_config:
       host: "{{ inventory_hostname }}"
-      roles: "{{ group_names | intersect(['cache_nodes', 'storage', 'controller']) }}"
+      roles: "{{ group_names | intersect(['cache_nodes', 'storage', 'controller', 'display']) }}"
       configured:
         receive_pci_addresses: "{{ tianlai_receive_devices | default([]) }}"
         send_interfaces: >-

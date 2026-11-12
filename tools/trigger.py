@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 
 MAX_JSON_BYTES = 1200
+MAX_CAPTURE_SECONDS = 50
 LENGTH = struct.Struct('!I')
 
 
@@ -50,7 +51,7 @@ def create_parser():
     status.add_argument('--channels', type=int, choices=(288, 384), default=384)
 
     capture = actions.add_parser('capture', help='save the latest settled data')
-    capture.add_argument('seconds', type=int, help='duration in seconds (1-5)')
+    capture.add_argument('seconds', type=int, help='duration in seconds (1-50)')
     capture.add_argument('--channels', type=int, choices=(288, 384), default=384)
     capture.add_argument('--event-id', help='unique event ID; generated when omitted')
     capture.add_argument('--trace', type=int, help='optional explicit start trace')
@@ -94,8 +95,8 @@ def generated_event_id():
 
 
 def capture_request(arguments):
-    if not 1 <= arguments.seconds <= 5:
-        raise ValueError('seconds must be between 1 and 5')
+    if not 1 <= arguments.seconds <= MAX_CAPTURE_SECONDS:
+        raise ValueError(f'seconds must be between 1 and {MAX_CAPTURE_SECONDS}')
     if (arguments.trace is None) != (arguments.integration is None):
         raise ValueError('--trace and --integration must be used together')
     if (arguments.period_us <= 0 or 1000000 % arguments.period_us or

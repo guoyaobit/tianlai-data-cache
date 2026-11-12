@@ -16,6 +16,7 @@ IF_TRACE_BIT = 1 << 39
 ID = re.compile(r'[A-Za-z0-9_-]{1,64}\Z')
 DATA_SYNC_BYTES = 256 * 1024 * 1024
 DATA_SYNC_SECONDS = 1.0
+MAX_EVENT_MICROSECONDS = 50_000_000
 
 
 def sync_data(fd):
@@ -148,7 +149,8 @@ class StoreReceiver:
                     not 0 <= lane < 2 or lane != listen_lane or
                     not 1 <= period_us <= 1000000 or 1000000 % period_us or
                     not 1 <= per_trace <= 0x800000 or not 0 <= start < (1 << 20) * per_trace or
-                    not 1 <= count <= 5000000 // period_us or start + count > (1 << 20) * per_trace):
+                    not 1 <= count <= MAX_EVENT_MICROSECONDS // period_us or
+                    start + count > (1 << 20) * per_trace):
                 raise ValueError('invalid stream metadata')
             remote = server >= 11
             ports, boards, packet_bytes = ((8, 36, 2320) if server < 3 else

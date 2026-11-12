@@ -1,6 +1,6 @@
 # Ansible 部署
 
-`site.yml` 在 Debian/Ubuntu 系的 systemd 主机上部署14台缓存节点，并在同一台存储服务器上部署存储接收器和控制器；不部署消色散后端，也不配置交换机、管理网地址、存储服务器100G地址、磁盘阵列或 ixcap。它会通过 Netplan 配置缓存节点 `ens2f0` 数据地址，并把速率大于 1 Gb/s 的物理 Linux 网口设置为 MTU 9000。此脚本尚需在目标环境进行端到端验证。
+`site.yml` 在 Debian/Ubuntu 系的systemd主机上部署14台缓存节点、同机运行的存储接收器/控制器及显控节点管理客户端；不部署消色散后端，也不配置交换机、管理网地址、存储服务器100G地址、磁盘阵列或ixcap。它会通过Netplan配置缓存节点`ens2f0`数据地址，并把缓存/存储节点上速率大于1 Gb/s的物理Linux网口设置为MTU 9000；不会修改显控节点网络配置。此脚本尚需在目标环境进行端到端验证。
 
 ## 前提和清单
 
@@ -8,13 +8,13 @@
 - 生产版缓存程序需要 `ixcap_lib.h` 和 `libixcap.a` 或 `libixcap.so`。部署优先检查清单中的 `tianlai_ixcap_include`、`tianlai_ixcap_lib`，找不到时自动搜索 `/usr/local`、`/usr`、`/opt` 和部署账户主目录。源码和配置会先复制，再执行SDK检查和编译；SDK确实不存在时源码仍保留在 `/opt/tianlai-store/src`，但生产程序无法编译。
 - ixcap尚未安装时，在Ansible master准备三个已解压的SDK文件和许可证TAR包，然后运行 [`deploy/ansible/deploy_ixcap.sh`](deploy_ixcap.sh) 统一安装SDK、MAC许可证和systemd大页服务；无需解压或指定SDK ZIP。详细说明见 [`deploy/ixcap/README.md`](../ixcap/README.md)。
 - 真实地址、链路、网卡 PCI 地址、光模块、驱动、NUMA、交换机 Jumbo Frame 及存储挂载由现场先完成验证。`tianlai_storage_directory` 必须指向目标机已有且正确挂载的存储路径下的目录；脚本只创建目录，不验证其所在磁盘或容量。
-- 清单可使用 YAML 或 INI：复制 `inventory_example.yml` 为 `inventory.yml`，或复制 `inventory_example.ini` 为 `inventory.ini`。两份示例都包含缓存服务器 1～14（节点 0～13）及同机部署的存储/控制器；选择一种维护即可。须现场核对 SSH 地址。`tianlai_receive_devices: auto`以`ens2f0`所在Intel双口万兆卡的PCI厂商/设备ID为基准，排除该发送卡的整个PCI插槽，再选择其他同型号端口；候选端口允许存在Linux网口，也允许尚未加载驱动。节点1～3必须发现8个，固定顺序为`ens4f0、ens4f1、ens5f0、ens5f1、ens1f0、ens1f1、ens3f0、ens3f1`；节点4～11必须发现4个，固定顺序为`ens4f0、ens4f1、ens5f0、ens5f1`。部署会把名称解析成PCI地址，并校验名称集合与自动发现结果完全一致。节点12～14暂时继续按PCI地址排序。也可把`auto`替换为按端口顺序排列的PCI地址列表。缓存节点发送口统一为`ens2f0`，地址根据server ID自动生成，无需逐台填写。`controller`与`storage`组必须使用同一个存储服务器主机名。
+- 清单可使用 YAML 或 INI：复制 `inventory_example.yml` 为 `inventory.yml`，或复制 `inventory_example.ini` 为 `inventory.ini`。两份示例都包含缓存服务器1～14（节点0～13）、同机部署的存储/控制器，以及`172.0.0.61`显控节点；选择一种维护即可。须现场核对SSH地址。`tianlai_receive_devices: auto`以`ens2f0`所在Intel双口万兆卡的PCI厂商/设备ID为基准，排除该发送卡的整个PCI插槽，再选择其他同型号端口；候选端口允许存在Linux网口，也允许尚未加载驱动。节点1～3必须发现8个，固定顺序为`ens4f0、ens4f1、ens5f0、ens5f1、ens1f0、ens1f1、ens3f0、ens3f1`；节点4～11必须发现4个，固定顺序为`ens4f0、ens4f1、ens5f0、ens5f1`。部署会把名称解析成PCI地址，并校验名称集合与自动发现结果完全一致。节点12～14暂时继续按PCI地址排序。也可把`auto`替换为按端口顺序排列的PCI地址列表。缓存节点发送口统一为`ens2f0`，地址根据server ID自动生成，无需逐台填写。`controller`与`storage`组必须使用同一个存储服务器主机名。
 - 缓存节点单个发送接口/源IP由 server ID 自动生成；清单只需填写存储100G口上的单个无标签IP。存储服务器固定使用 `enp152s0f0np0` 接收14台缓存节点的数据。不配置VLAN，数据接口不设置默认网关；管理网仍使用`tianlai_controller_ip`。
 - 数据网口不要求物理链路处于UP状态。部署会为缓存发送口、存储100G口和已识别的高速数据口设置NetworkManager `ignore-carrier`，因此光纤暂未连接时仍可写入静态IP、MTU和代码。管理网SSH必须可达，否则Ansible无法向该节点传输文件；恢复后可用 `--limit` 单独重跑失败节点。
 - 消色散后端须在`tianlai_backend_ip:tianlai_notify_port`监听TCP/JSON。存储服务从`tianlai_controller_ip`连接并发送`CAPTURE_RESULT`；后端持久化结果后在同一连接回复`ACK_RESULT`。Playbook不部署后端，也不修改相关防火墙。
 - 管理网需放通缓存节点、存储节点和显控节点→控制器TCP 18999、控制器→缓存节点TCP 19000、存储服务器→后端TCP 19001；实际端口以清单为准。
 - 当前规划中状态查询和触发控制统一使用管理网：缓存节点为 `172.0.0.128～141`，控制器/存储服务器为 `172.0.0.142`。触发控制器接受所有能够连接其管理地址的来源，可从任意缓存节点、存储节点或消色散后端发送命令。消色散后端地址为 `192.168.200.10`，存储数据地址为 `192.168.210.250`，默认落盘根目录为 `/data`；部署前确认这些地址和挂载点与现场一致。
-- `tltrigger`不由Ansible管理，不随系统部署或软件更新发生变化。需要时在master节点单独运行`bash tools/deploy_tltrigger.sh`，通过SSH仅部署到控制器/存储节点`172.0.0.142`。
+- 显控节点`172.0.0.61`作为inventory中的`display`角色由Ansible管理。`deploy.sh`和`update_software.sh`会同时更新控制器及显控节点上的`tlcache`、`tltrigger`；显控节点不参与Netplan业务网配置。
 - 如果目标上安装的 ixcap 是共享库，确保运行时动态链接器可找到该库。脚本只检查文件存在，不负责驱动、权限或网卡初始化。
 
 ## SSH登录和sudo密码
@@ -25,7 +25,7 @@
 ssh-copy-id ubuntu@SERVER_IP
 ```
 
-该命令对14台缓存服务器和存储服务器各执行一次，首次执行时使用服务器现有密码。完成后用`ssh ubuntu@SERVER_IP`确认可以免密登录，再继续部署。
+该命令对14台缓存服务器、存储服务器和显控节点各执行一次，首次执行时使用服务器现有密码。完成后用`ssh ubuntu@SERVER_IP`确认可以免密登录，再继续部署。
 
 部署不保存SSH或sudo密码。直接运行一键部署脚本，按提示输入一次所有服务器共用的sudo密码：
 
@@ -51,9 +51,9 @@ tianlai_disabled_cache_nodes: [tianlaistore5, tianlaistore9]
 bash update_software.sh
 ```
 
-该命令更新并编译缓存程序和C++落盘程序，同时更新Python控制器。更新前正在运行的服务会在程序替换后恢复运行；原本停止的服务保持停止。先更新单台缓存服务器可执行 `bash update_software.sh --limit tianlaistore1`；只更新存储/控制器可使用 `--limit storage` 或 `--limit controller`。使用INI清单时执行 `TIANLAI_INVENTORY=inventory.ini bash update_software.sh`。
+该命令更新并编译缓存程序和C++落盘程序，同时更新Python控制器，以及控制器/显控节点上的`tlcache`、`tltrigger`。更新前正在运行的服务会在程序替换后恢复运行；原本停止的服务保持停止。先更新单台缓存服务器可执行 `bash update_software.sh --limit tianlaistore1`；只更新显控节点可使用`--limit display`，只更新存储/控制器可使用 `--limit storage` 或 `--limit controller`。使用INI清单时执行 `TIANLAI_INVENTORY=inventory.ini bash update_software.sh`。
 
-主部署会在所有缓存节点、存储服务器和控制器安装网络诊断工具，包括 `bwm-ng`、`ethtool`、`iperf3`、`tcpdump`、完整的`wireshark`、命令行工具`tshark`、`mtr`、`nmap`、`iftop` 和 `nload`。`tshark`和`dumpcap`默认要求sudo权限。独立Playbook只安装或更新这组工具，不执行系统全量升级，也不修改网络和业务配置：
+主部署会在所有缓存节点、存储服务器、控制器和显控节点安装网络诊断工具，包括 `bwm-ng`、`ethtool`、`iperf3`、`tcpdump`、完整的`wireshark`、命令行工具`tshark`、`mtr`、`nmap`、`iftop` 和 `nload`。`tshark`和`dumpcap`默认要求sudo权限。独立Playbook只安装或更新这组工具，不执行系统全量升级，也不修改网络和业务配置：
 
 ```bash
 ansible-playbook -i inventory.yml --ask-become-pass install_network_tools.yml
@@ -122,7 +122,7 @@ ansible-playbook -i inventory.yml --ask-become-pass site.yml
 
 ```
 
-完整清单通过校验后，部署会自动在每台缓存服务器和兼任控制器的存储服务器生成 `{{ tianlai_root }}/config/network-report.yaml`（默认 `/opt/tianlai-store/config/network-report.yaml`），同时在控制机更新 `reports/network-inventory.md`，并在存储服务器生成 `/opt/tianlai-store/config/storage.yaml`。重复部署时更新。可在对应服务器上查看：
+完整清单通过校验后，部署会自动在每台缓存服务器、兼任控制器的存储服务器及显控节点生成 `{{ tianlai_root }}/config/network-report.yaml`（默认 `/opt/tianlai-store/config/network-report.yaml`），同时在控制机更新 `reports/network-inventory.md`，并在存储服务器生成 `/opt/tianlai-store/config/storage.yaml`。重复部署时更新。可在对应服务器上查看：
 
 ```bash
 sudo cat /opt/tianlai-store/config/network-report.yaml
@@ -142,7 +142,7 @@ systemctl status tianlai-cache.service
 systemctl status tianlai-controller.service
 ```
 
-存储服务器和全部缓存节点都会安装`tlcache`命令，显控节点通过独立脚本安装。它通过172管理网同时显示142存储服务状态，以及全部缓存节点的运行阶段、接收口、事件、累计收包、缺包、迟到包及按端口缺包统计：
+存储服务器、全部缓存节点和显控节点都会安装`tlcache`命令。它通过172管理网同时显示142存储服务状态，以及全部缓存节点的运行阶段、接收口、事件、累计收包、缺包、迟到包及按端口缺包统计：
 
 ```bash
 tlcache

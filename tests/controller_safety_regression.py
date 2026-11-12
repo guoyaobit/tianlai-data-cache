@@ -22,6 +22,12 @@ def main():
     assert generated['command'] == 'CAPTURE' and generated['channel_count'] == 288
     assert generated['start'] == dict(trace_period_id=2, integration_period_id=5000)
     assert generated['duration_ms'] == 3000 and generated['event_id'].startswith('event-')
+    maximum = trigger.create_parser().parse_args(['capture', '50', '--channels', '288'])
+    with patch('trigger.transmit', return_value=dict(
+            status='READY', accept_trigger=True, oldest_period=0,
+            settled_end=300000)):
+        maximum_request = trigger.request_from_arguments(maximum)
+    assert maximum_request['duration_ms'] == 50000
 
     nodes = [dict(server_id=0, host='127.0.0.1', port=19000),
              dict(server_id=1, host='127.0.0.1', port=19001)]
@@ -43,6 +49,8 @@ def main():
         by_duration = c.capture_range(dict(start=start, duration_ms=3000))
         assert by_duration == c.capture_range(dict(start=start, period_count=15000))
         assert by_duration[2] == dict(trace_period_id=121, integration_period_id=10000)
+        maximum_range = c.capture_range(dict(start=start, duration_ms=50000))
+        assert maximum_range[1] == 250000
         with tempfile.TemporaryDirectory() as another:
             alternate = controller.Controller(nodes, 'acq', another, allow_partial=True, period_microseconds=800)
             try:
@@ -69,7 +77,7 @@ def main():
                 raise AssertionError('changed channel count accepted for an existing event')
             except ValueError:
                 pass
-        for invalid in (dict(start=start, duration_ms=0), dict(start=start, duration_ms=5001),
+        for invalid in (dict(start=start, duration_ms=0), dict(start=start, duration_ms=50001),
                         dict(start=start, duration_ms=1, period_count=5), dict(start=start),
                         dict(start=start, duration_ms=True), dict(start=start, period_count=1.0),
                         dict(start=dict(trace_period_id=0, integration_period_id=50000), period_count=1)):

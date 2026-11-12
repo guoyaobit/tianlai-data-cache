@@ -1,7 +1,7 @@
 ---
 # Read-only; usable before deployment.
 - name: Inspect server network interfaces and PCI network devices
-  hosts: "cache_nodes:storage:controller"
+  hosts: "cache_nodes:storage:controller:display"
   gather_facts: false
   tasks:
     - name: Derive cache data-network values
@@ -21,7 +21,7 @@
       ansible.builtin.debug:
         msg:
           host: "{{ inventory_hostname }}"
-          role: "{{ group_names | intersect(['cache_nodes', 'storage', 'controller']) }}"
+          role: "{{ group_names | intersect(['cache_nodes', 'storage', 'controller', 'display']) }}"
           expected_cache_receive_ports: "{{ (8 if tianlai_server_id | int < 3 else 4) if 'cache_nodes' in group_names and tianlai_server_id is defined and (tianlai_server_id | string) is match('^(?:[0-9]|1[0-3])$') else 'not specified' }}"
           expected_cache_send_interfaces: "{{ 1 if 'cache_nodes' in group_names else 'not specified' }}"
           configured_receive_devices: "{{ tianlai_receive_devices | default('auto') }}"

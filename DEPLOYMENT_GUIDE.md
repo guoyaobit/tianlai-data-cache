@@ -124,11 +124,7 @@ tlcache period
 
 `tlcache`可在存储服务器、任意缓存节点或显控节点执行。它始终先通过142控制器显示存储服务状态，随后显示各缓存节点的运行阶段、累计收包、累计缺包、迟到包和按端口缺包统计；`LOSS_PORTS`中的`3:6`表示端口3累计缺6包。`tlcache period`也会显示存储状态，然后列出每个节点的`oldest/settled_end/latest`以及最新周期对应的`trace/integration`，最后给出全部启用节点的共同可触发范围。详细JSON可通过`tlcache --json`查看。计数从缓存进程启动开始，进程重启后清零。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发；也可在对应缓存节点通过`journalctl -u tianlai-cache.service -f`查看标准化的`Runtime state:`日志。
 
-显控节点`172.0.0.61`也可查询全部节点。它不由Ansible管理，在master项目根目录单独执行：
-
-```bash
-bash tools/deploy_tlcache.sh
-```
+显控节点`172.0.0.61`也可查询全部节点。它在inventory中属于`display`组，由`deploy.sh`统一安装`tlcache`、`tltrigger`和节点清单，并由`update_software.sh`一并更新；部署不会修改显控节点网卡配置。
 
 脚本使用`ubuntu`账户并通过SSH交互认证，不保存密码。部署后在显控节点执行`tlcache`、`tlcache --watch 2`或`tlcache period`。
 
@@ -146,7 +142,7 @@ tltrigger status --channels 384
 tltrigger capture 3 --channels 384
 ```
 
-上述命令自动查询共同可用范围，并保存其中最近3秒的数据；时长只能为1～5秒。`--channels`选择288或384，省略时默认384。若必须指定历史起点，可增加`--trace 120 --integration 45000`。首次回复`PREPARING`不表示已经写盘完成；复制返回的事件编号进行查询：
+上述命令自动查询共同可用范围，并保存其中最近3秒的数据；时长可以为1～50秒。`--channels`选择288或384，省略时默认384。若必须指定历史起点，可增加`--trace 120 --integration 45000`。首次回复`PREPARING`不表示已经写盘完成；复制返回的事件编号进行查询：
 
 ```bash
 tltrigger event event-20261112-012345-abc123
@@ -154,13 +150,7 @@ tltrigger event event-20261112-012345-abc123
 
 需要恢复或取消暂停事件时使用`tltrigger resume EVENT_ID`或`tltrigger cancel EVENT_ID`。高级联调仍可使用`tltrigger --file request.json`发送完整协议JSON；完整字段与跨Trace格式见[协议说明](PROTOCOL.md)。
 
-`tltrigger`不由Ansible管理。部署或更新时不需要重新编译或重启服务；在master的项目根目录运行以下独立Shell脚本，它通过现有SSH免密登录，仅将单文件Python客户端安装到控制器/存储节点`172.0.0.142`的`~/.local/bin/tltrigger`：
-
-```bash
-bash tools/deploy_tltrigger.sh
-```
-
-如调试时确实需要安装到其他节点，可显式指定：`bash tools/deploy_tltrigger.sh 172.0.0.128`。该方式不需要root权限；若首次创建`~/.local/bin`后命令尚未进入PATH，重新登录一次即可。
+`tltrigger`由Ansible安装到控制器/存储节点`172.0.0.142`和显控节点`172.0.0.61`的`/usr/local/bin`。运行全量部署或软件更新后即可直接使用，不需要再执行独立分发脚本。
 
 常见状态：`PREPARING`正在保护、`PREPARED`表示全体已保护、`STORING`正在双lane回传、`STORED`表示全体已持久化、`RELEASING`正在统一释放、`COMPLETED`表示全部完成。检查`missing_by_server`以及每台节点的`lane-0.json`和`lane-1.json`。
 

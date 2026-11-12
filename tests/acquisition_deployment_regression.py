@@ -17,7 +17,7 @@ permissions = (ANSIBLE / "tasks" / "install_permissions.yml").read_text(encoding
 
 assert "tianlai_acquisition_id is match" not in site
 assert "tianlai_controller_ip == hostvars[groups['storage'][0]].ansible_host" in site
-assert 'hosts: "cache_nodes:storage:controller"' in site
+assert 'hosts: "cache_nodes:storage:controller:display"' in site
 assert "hosts: localhost" not in site
 assert site.count("run_once: true") >= 4
 assert site.index("Install storage receiver") < site.index(
@@ -45,6 +45,8 @@ assert "tianlai_acquisition_id" not in inventory_yml
 assert "tianlai_acquisition_id" not in inventory_ini
 assert 'tianlai_controller_ip: "172.0.0.142"' in inventory_yml
 assert 'tianlai_backend_ip: "192.168.200.10"' in inventory_yml
+assert 'tianlaiview:' in inventory_yml and 'ansible_host: "172.0.0.61"' in inventory_yml
+assert '[display]' in inventory_ini and 'tianlaiview ansible_host=172.0.0.61' in inventory_ini
 assert 'tianlai_storage_directory: /data' in inventory_yml
 assert 'tianlai_storage_directory: /data' in settings
 assert 'tianlai_storage_directory=/data' in inventory_ini
@@ -53,7 +55,7 @@ assert "tianlai_backend_ip: 192.168.200.10" in settings
 assert "ansible_ssh_private_key_file" not in settings
 assert "ansible_ssh_private_key_file" not in site
 assert "TIANLAI_SSH_PRIVATE_KEY" not in deploy_script
-assert site.count("tasks/install_permissions.yml") == 4
+assert site.count("tasks/install_permissions.yml") == 5
 assert 'owner: root' in permissions
 assert 'group: "{{ ansible_user }}"' in permissions
 assert "mode: 'u=rwX,g=rX,o='" in permissions

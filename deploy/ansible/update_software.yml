@@ -228,12 +228,12 @@
           ansible.builtin.copy:
             src: "{{ playbook_dir }}/../../tools/{{ item }}"
             dest: "{{ controller_update_temp.path }}/{{ item }}"
-            mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
-          loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py]
+            mode: "{{ '0755' if item in ['cache_status.py', 'trigger.py'] else '0644' }}"
+          loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py, trigger.py]
         - name: Check controller Python syntax
           ansible.builtin.command:
             argv: [/usr/bin/python3, -m, py_compile, "{{ controller_update_temp.path }}/{{ item }}"]
-          loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py]
+          loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py, trigger.py]
           changed_when: false
         - name: Read controller service state
           ansible.builtin.service_facts:
@@ -253,8 +253,8 @@
                 remote_src: true
                 src: "{{ controller_update_temp.path }}/{{ item }}"
                 dest: "{{ tianlai_root }}/tools/{{ item }}"
-                mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
-              loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py]
+                mode: "{{ '0755' if item in ['cache_status.py', 'trigger.py'] else '0644' }}"
+              loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py, trigger.py]
           always:
             - name: Restore running controller
               ansible.builtin.systemd:
@@ -279,3 +279,46 @@
         content: |
           #!/bin/sh
           exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
+    - name: Update tltrigger command
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/trigger.py"
+        dest: /usr/local/bin/tltrigger
+        mode: '0755'
+
+- name: Update display-node management clients
+  hosts: display
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Require an existing display deployment
+      ansible.builtin.stat:
+        path: "{{ tianlai_root }}/config/nodes.json"
+      register: display_deployment
+    - name: Stop when display clients have not been deployed
+      ansible.builtin.assert:
+        that: display_deployment.stat.exists
+        fail_msg: Run deploy.sh once before using update_software.sh.
+    - name: Update display management tools
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/{{ item }}"
+        dest: "{{ tianlai_root }}/tools/{{ item }}"
+        mode: '0755'
+      loop: [cache_status.py, trigger.py]
+    - name: Remove old status command from display node
+      ansible.builtin.file:
+        path: /usr/local/bin/tianlai-status
+        state: absent
+    - name: Update tlcache command
+      ansible.builtin.copy:
+        dest: /usr/local/bin/tlcache
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
+    - name: Update tltrigger command
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/trigger.py"
+        dest: /usr/local/bin/tltrigger
+        mode: '0755'
+    - name: Apply safe display client permissions
+      ansible.builtin.include_tasks: tasks/install_permissions.yml

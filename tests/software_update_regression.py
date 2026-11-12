@@ -10,7 +10,7 @@ PLAYBOOK = (ANSIBLE / "update_software.yml").read_text(encoding="utf-8")
 SCRIPT = (ANSIBLE / "update_software.sh").read_text(encoding="utf-8")
 README = (ANSIBLE / "README.md").read_text(encoding="utf-8")
 
-for host_group in ("hosts: storage", "hosts: cache_nodes", "hosts: controller"):
+for host_group in ("hosts: storage", "hosts: cache_nodes", "hosts: controller", "hosts: display"):
     assert host_group in PLAYBOOK
 
 for preserved in (
@@ -34,4 +34,7 @@ assert "install libboost-dev" in PLAYBOOK
 assert "update_software.yml" in SCRIPT
 assert "--syntax-check update_software.yml" in SCRIPT
 assert "bash update_software.sh" in README
+assert PLAYBOOK.count("dest: /usr/local/bin/tltrigger") == 2
+assert "Update display-node management clients" in PLAYBOOK
+assert "--limit display" in README
 print("source-only software update deployment passed")

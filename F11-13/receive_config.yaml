@@ -4,7 +4,7 @@ debug: false  # Enable verbose diagnostic logs.
 integrationPerTrace: 50000  # Periods per trace; must match upstream/controller.
 periodMicroseconds: 200  # Integration period (us); match upstream/controller.
 halfBufferSeconds: 50  # Duration of each A/B buffer (s).
-maxEventSeconds: 5  # Maximum event duration (s); cannot exceed one buffer.
+maxEventSeconds: 50  # Maximum event duration (s); cannot exceed one buffer.
 transitionMiB: 32768  # Transition-buffer capacity during event freeze (MiB).
 reserveMemoryMiB: 49152  # Memory reserved for the OS and drivers at startup (MiB).
 prefaultMemory: 1  # Prefault buffers at startup: 1=yes, 0=no.

@@ -60,7 +60,7 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     integrationPerTrace = number(cfg, "integrationPerTrace", 1, 0x800000);
     periodMicroseconds = number(cfg, "periodMicroseconds", 1, 1000000);
     halfBufferSeconds = number(cfg, "halfBufferSeconds", 1, 50);
-    maxEventSeconds = number(cfg, "maxEventSeconds", 1, 5);
+    maxEventSeconds = number(cfg, "maxEventSeconds", 1, 50);
     if (maxEventSeconds > halfBufferSeconds || 1000000 % periodMicroseconds)
         throw std::runtime_error("event must fit one half; period must divide one second");
     transitionBytes = number(cfg, "transitionMiB", 1, 65536) << 20;

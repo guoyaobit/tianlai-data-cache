@@ -10,7 +10,7 @@ PLAYBOOK = (ANSIBLE / "install_network_tools.yml").read_text(encoding="utf-8")
 TASKS = (ANSIBLE / "tasks/network_tools.yml").read_text(encoding="utf-8")
 SITE = (ANSIBLE / "site.yml").read_text(encoding="utf-8")
 
-assert 'hosts: "cache_nodes:storage:controller"' in PLAYBOOK
+assert 'hosts: "cache_nodes:storage:controller:display"' in PLAYBOOK
 assert "tasks/network_tools.yml" in PLAYBOOK
 assert "Install network diagnostics on all nodes" in SITE
 assert "tasks/network_tools.yml" in SITE

@@ -1,6 +1,6 @@
 ---
 - name: Install network diagnostics on all nodes
-  hosts: "cache_nodes:storage:controller"
+  hosts: "cache_nodes:storage:controller:display"
   gather_facts: false
   become: true
   tasks:
