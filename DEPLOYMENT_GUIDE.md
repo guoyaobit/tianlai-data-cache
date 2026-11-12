@@ -126,6 +126,8 @@ tlcache period
 
 显控节点`172.0.0.61`也可查询全部节点。它在inventory中属于`display`组，由`deploy.sh`统一安装`tlcache`、`tltrigger`和节点清单，并由`update_software.sh`一并更新；部署不会修改显控节点网卡配置。
 
+显控节点使用不同的sudo密码。运行统一部署或更新脚本时，先输入`tianlaiview`的sudo密码，再在Ansible提示中输入其他服务器的sudo密码；两种密码均不写入仓库。
+
 脚本使用`ubuntu`账户并通过SSH交互认证，不保存密码。部署后在显控节点执行`tlcache`、`tlcache --watch 2`或`tlcache period`。
 
 每个接收线程会打印第一条成功解析的UDP数据头，包括`packet_id`、板卡号、trace/integration周期和长度；随后再打印第一条实际写入环形缓冲区的数据。如果ixcap已经收到帧但以太网/IPv4/UDP解析失败，会打印首个失败帧的长度，便于区分“没有流量”和“帧格式不匹配”。

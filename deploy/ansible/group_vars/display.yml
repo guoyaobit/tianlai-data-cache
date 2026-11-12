@@ -1,0 +1,3 @@
+---
+# Supplied transiently by deploy.sh or update_software.sh.
+ansible_become_password: "{{ lookup('ansible.builtin.env', 'TIANLAI_DISPLAY_BECOME_PASSWORD') }}"

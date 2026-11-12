@@ -14,6 +14,7 @@ recv_template = (ANSIBLE / "templates" / "recv.yaml.j2").read_text(encoding="utf
 controller_template = (ANSIBLE / "templates" / "controller.service.j2").read_text(encoding="utf-8")
 deploy_script = (ANSIBLE / "deploy.sh").read_text(encoding="utf-8")
 permissions = (ANSIBLE / "tasks" / "install_permissions.yml").read_text(encoding="utf-8")
+display_vars = (ANSIBLE / "group_vars" / "display.yml").read_text(encoding="utf-8")
 
 assert "tianlai_acquisition_id is match" not in site
 assert "tianlai_controller_ip == hostvars[groups['storage'][0]].ansible_host" in site
@@ -47,6 +48,9 @@ assert 'tianlai_controller_ip: "172.0.0.142"' in inventory_yml
 assert 'tianlai_backend_ip: "192.168.200.10"' in inventory_yml
 assert 'tianlaiview:' in inventory_yml and 'ansible_host: "172.0.0.61"' in inventory_yml
 assert '[display]' in inventory_ini and 'tianlaiview ansible_host=172.0.0.61' in inventory_ini
+assert "TIANLAI_DISPLAY_BECOME_PASSWORD" in display_vars
+assert "ansible_become_password" in display_vars
+assert "BECOME password for tianlaiview" in deploy_script
 assert 'tianlai_storage_directory: /data' in inventory_yml
 assert 'tianlai_storage_directory: /data' in settings
 assert 'tianlai_storage_directory=/data' in inventory_ini

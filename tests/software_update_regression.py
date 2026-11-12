@@ -37,4 +37,5 @@ assert "bash update_software.sh" in README
 assert PLAYBOOK.count("dest: /usr/local/bin/tltrigger") == 2
 assert "Update display-node management clients" in PLAYBOOK
 assert "--limit display" in README
+assert "BECOME password for tianlaiview" in SCRIPT
 print("source-only software update deployment passed")
