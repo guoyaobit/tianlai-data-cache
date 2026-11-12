@@ -122,7 +122,7 @@ tlcache --watch 2
 tlcache period
 ```
 
-`tlcache`可在存储服务器或任意缓存节点执行。它首先显示存储服务状态（仅存储节点），随后显示各缓存节点的运行阶段、累计收包、累计缺包、迟到包和按端口缺包统计；`LOSS_PORTS`中的`3:6`表示端口3累计缺6包。`tlcache period`直接列出每个节点的`oldest/settled_end/latest`以及最新周期对应的`trace/integration`，最后给出全部启用节点的共同可触发范围。详细JSON可通过`tlcache --json`查看。计数从缓存进程启动开始，进程重启后清零。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发；也可在对应缓存节点通过`journalctl -u tianlai-cache.service -f`查看标准化的`Runtime state:`日志。
+`tlcache`可在存储服务器、任意缓存节点或显控节点执行。它始终先通过142控制器显示存储服务状态，随后显示各缓存节点的运行阶段、累计收包、累计缺包、迟到包和按端口缺包统计；`LOSS_PORTS`中的`3:6`表示端口3累计缺6包。`tlcache period`也会显示存储状态，然后列出每个节点的`oldest/settled_end/latest`以及最新周期对应的`trace/integration`，最后给出全部启用节点的共同可触发范围。详细JSON可通过`tlcache --json`查看。计数从缓存进程启动开始，进程重启后清零。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发；也可在对应缓存节点通过`journalctl -u tianlai-cache.service -f`查看标准化的`Runtime state:`日志。
 
 显控节点`172.0.0.61`也可查询全部节点。它不由Ansible管理，在master项目根目录单独执行：
 

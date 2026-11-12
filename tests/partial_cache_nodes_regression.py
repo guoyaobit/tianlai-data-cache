@@ -22,6 +22,9 @@ assert 'tianlai_disabled_cache_nodes: []' in INVENTORY
 assert "difference(tianlai_disabled_cache_nodes)" in NODES
 assert "tianlai_disabled_cache_nodes | length > 0" in SERVICE
 assert '--allow-partial' in SERVICE
+service_lines = SERVICE.splitlines()
+exec_line = next(line for line in service_lines if line.startswith('ExecStart='))
+assert '{%' not in exec_line and service_lines[service_lines.index(exec_line) + 1] == 'Restart=always'
 assert 'expectedServerIds:' in STORAGE
 assert 'host not in tianlai_disabled_cache_nodes' in STORAGE
 assert "difference(groups['cache_nodes'])" in SITE

@@ -2,6 +2,7 @@
 """Validate shared history, input bounds, and safe publication on journal failure."""
 import sys
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -25,7 +26,14 @@ def main():
     nodes = [dict(server_id=0, host='127.0.0.1', port=19000),
              dict(server_id=1, host='127.0.0.1', port=19001)]
     with tempfile.TemporaryDirectory() as directory, patch('durable_json.sync_directory'):
-        c = controller.Controller(nodes, 'acq', directory, allow_partial=True)
+        storage_status = Path(directory) / 'storage-status.json'
+        storage_status.write_text(json.dumps(dict(
+            version=1, service='tianlai-storage', pid=os.getpid(),
+            state='WAITING_FOR_DATA', listeners_ready=28, listener_count=28)))
+        c = controller.Controller(nodes, 'acq', directory, allow_partial=True,
+                                  storage_status=storage_status)
+        storage = c.dispatch(dict(version=1, command='QUERY_STORAGE'))['storage']
+        assert storage['state'] == 'WAITING_FOR_DATA' and storage['listeners_ready'] == 28
         try:
             c.dispatch(dict(version=1, acquisition_id='wrong', command='QUERY_STATUS'))
             raise AssertionError('wrong acquisition identifier accepted')

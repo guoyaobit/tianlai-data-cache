@@ -5,6 +5,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 import socket
 import threading
 import time
@@ -122,7 +123,8 @@ def backend_reply(controller, data, peer, cache):
 
 class Controller:
     def __init__(self, nodes, acquisition, journal, allow_partial=False,
-                 integration_per_trace=50000, period_microseconds=200):
+                 integration_per_trace=50000, period_microseconds=200,
+                 storage_status='/run/tianlai-storage-status.json'):
         def valid_node(node):
             return (isinstance(node, dict) and type(node.get('server_id')) is int and
                     0 <= node['server_id'] <= 13 and isinstance(node.get('host'), str) and
@@ -146,6 +148,7 @@ class Controller:
         self.period_microseconds = period_microseconds
         self.acquisition = acquisition
         self.journal = Path(journal)
+        self.storage_status = Path(storage_status)
         self.journal.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
         self.events = {}
@@ -160,6 +163,25 @@ class Controller:
                 if record['status'] not in ('COMPLETED', 'CANCELLED'):
                     record['status'] = 'PAUSED'
                 self.events[record['event_id']] = record
+
+    def query_storage(self):
+        """Read the colocated storage receiver status without exposing its filesystem."""
+        try:
+            status = json.loads(self.storage_status.read_text(encoding='utf-8'))
+            if not isinstance(status, dict) or status.get('service') != 'tianlai-storage':
+                raise ValueError('invalid storage status')
+            pid = status.get('pid')
+            if type(pid) is not int or pid <= 0:
+                raise ValueError('invalid storage PID')
+            try:
+                os.kill(pid, 0)
+            except PermissionError:
+                pass
+            return status
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            return dict(service='tianlai-storage', state='OFFLINE', error=str(error),
+                        listeners_ready=0, listener_count=0, active_transfers=0,
+                        completed_lane_transfers=0, written_bytes=0)
 
     def update(self, event_id, **fields):
         """Persist the new event state before publishing it to other threads."""
@@ -360,6 +382,8 @@ class Controller:
         if 'acquisition_id' not in message:
             message = dict(message, acquisition_id=self.acquisition)
         command = message['command']
+        if command == 'QUERY_STORAGE':
+            return dict(status='READY', storage=self.query_storage())
         if command == 'CAPTURE':
             return self.submit(message)
         if command == 'RESUME':

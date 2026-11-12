@@ -74,6 +74,7 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
 | CAPTURE | event_id、channel_count、start、period_count | 创建288或384路事件，通知对应节点保护数据 |
 | QUERY_EVENT | event_id | 查询事件准备/传输/完成状态 |
 | QUERY_STATUS | channel_count（可选，默认384） | 查询所选模式节点共同的可用时间范围和 accept_trigger |
+| QUERY_STORAGE | 无 | 查询142节点上存储服务的运行状态，供任意节点的`tlcache`使用 |
 | RESUME | event_id | 对 PAUSED 事件查询节点实际状态后继续 |
 | CANCEL | event_id | 明确放弃已暂停事件；正在发送的节点不能直接取消 |
 

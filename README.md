@@ -53,7 +53,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
   `debug: true` 启用详细诊断日志，省略或设为 `false` 时保持 INFO 级别。日志由 spdlog
   输出，带毫秒时间和线程号；指定文件时同时输出到 stderr，文件按 50 MiB 轮转，保留最多
   5 个备份。WARN 及以上立即刷新，其他日志按约 3 秒周期刷新；日志并非事件持久化凭据。
-- 缓存程序以`Runtime state:`日志和`QUERY_STATUS.runtime_state`公开当前阶段；存储程序通过`/run/tianlai-storage-status.json`公开监听、接收写盘及后端通知状态。Ansible部署后可在任意节点运行`tlcache --watch 2`统一查看，或用`tlcache period`查询积分周期。
+- 缓存程序以`Runtime state:`日志和`QUERY_STATUS.runtime_state`公开当前阶段；存储程序通过142控制器的只读`QUERY_STORAGE`公开监听、接收写盘及后端通知状态。部署后可在任意缓存、存储或显控节点运行`tlcache --watch 2`，同时查看存储节点和14台缓存节点；`tlcache period`查询积分周期。
 - 显控节点为`172.0.0.61`，使用`ubuntu`账户。它不纳入Ansible，在master执行`bash tools/deploy_tlcache.sh`可独立安装单文件`tlcache`；SSH密码仅交互输入，不写入仓库。
 
 节点 YAML 的 `controlBindIp` 使用 `172.0.0.128～141`（server 0～13 对应 tianlaistore1～14），控制器/存储服务器管理地址为 `172.0.0.142`。状态查询和触发控制统一走该172管理网；消色散后端地址为 `192.168.200.10`，存储数据网地址为 `192.168.210.250`。当前配置统一使用 YAML。

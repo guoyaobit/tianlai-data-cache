@@ -53,6 +53,8 @@ def main():
         nodes.write_text(json.dumps([dict(server_id=0, host='127.0.0.1', port=19000)]))
         request = directory / 'request.json'
         request.write_text(json.dumps(dict(version=1, command='QUERY_EVENT', event_id='missing')))
+        storage_request = directory / 'storage-request.json'
+        storage_request.write_text(json.dumps(dict(version=1, command='QUERY_STORAGE')))
         process = subprocess.Popen([
             sys.executable, str(ROOT / 'tools/controller.py'), '--nodes', str(nodes),
             '--journal', str(directory / 'journal'),
@@ -64,6 +66,13 @@ def main():
                 '--port', str(port), '--file', str(request), '--timeout', '.1', '--retries', '8'],
                 capture_output=True, text=True, timeout=10)
             assert client.returncode == 1 and json.loads(client.stdout)['status'] == 'ERROR'
+            storage_client = subprocess.run([
+                sys.executable, str(ROOT / 'tools/trigger.py'), '--host', '127.0.0.1',
+                '--port', str(port), '--file', str(storage_request), '--timeout', '.1', '--retries', '8'],
+                capture_output=True, text=True, timeout=10)
+            storage_reply = json.loads(storage_client.stdout)
+            assert storage_client.returncode == 0 and storage_reply['status'] == 'READY'
+            assert storage_reply['storage']['service'] == 'tianlai-storage'
         finally:
             process.terminate()
             process.wait(timeout=5)

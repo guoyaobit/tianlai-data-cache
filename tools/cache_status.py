@@ -13,6 +13,8 @@ import time
 import uuid
 
 DEFAULT_CONTROL_PORT = 19000
+DEFAULT_STORAGE_HOST = '172.0.0.142'
+DEFAULT_STORAGE_CONTROL_PORT = 18999
 MAX_JSON_BYTES = 1200
 LENGTH = struct.Struct('!I')
 DEFAULT_CACHE_NODES = [
@@ -84,6 +86,27 @@ def snapshot(nodes, acquisition, timeout):
     with ThreadPoolExecutor(max_workers=len(nodes)) as workers:
         results = list(workers.map(lambda node: query(node, acquisition, timeout), nodes))
     return sorted(results, key=lambda item: item['server_id'])
+
+
+def remote_storage_snapshot(host, port, acquisition, timeout):
+    request = dict(version=1, request_id=uuid.uuid4().hex,
+                   acquisition_id=acquisition, command='QUERY_STORAGE')
+    body = json.dumps(request, separators=(',', ':')).encode()
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as connection:
+            connection.settimeout(timeout)
+            send_frame(connection, body)
+            reply = json.loads(receive_frame(connection))
+        if reply.get('request_id') != request['request_id']:
+            raise ValueError('request ID mismatch')
+        status = reply.get('storage')
+        if not isinstance(status, dict) or status.get('service') != 'tianlai-storage':
+            raise ValueError('invalid storage status reply')
+        return status
+    except (ConnectionError, OSError, ValueError, json.JSONDecodeError) as error:
+        return dict(service='tianlai-storage', state='OFFLINE', error=str(error),
+                    listeners_ready=0, listener_count=0, active_transfers=0,
+                    completed_lane_transfers=0, written_bytes=0)
 
 
 def load_nodes(path):
@@ -194,6 +217,8 @@ def main():
     parser.add_argument('command', nargs='?', choices=('status', 'period'), default='status')
     parser.add_argument('--nodes', default='/opt/tianlai-store/config/nodes.json')
     parser.add_argument('--storage-status', default='/run/tianlai-storage-status.json')
+    parser.add_argument('--storage-host', default=DEFAULT_STORAGE_HOST)
+    parser.add_argument('--storage-port', type=int, default=DEFAULT_STORAGE_CONTROL_PORT)
     parser.add_argument('--acquisition', default='tianlai')
     parser.add_argument('--integration-per-trace', type=int, default=50000)
     parser.add_argument('--timeout', type=float, default=1.0)
@@ -206,7 +231,11 @@ def main():
     nodes = load_nodes(arguments.nodes)
     try:
         while True:
-            storage = local_storage_snapshot(arguments.storage_status)
+            storage = remote_storage_snapshot(arguments.storage_host, arguments.storage_port,
+                                              arguments.acquisition, arguments.timeout)
+            local_storage = local_storage_snapshot(arguments.storage_status)
+            if storage.get('state') == 'OFFLINE' and local_storage is not None:
+                storage = local_storage
             results = snapshot(nodes, arguments.acquisition, arguments.timeout)
             if arguments.watch and sys.stdout.isatty():
                 print('\033[2J\033[H', end='')
@@ -215,17 +244,14 @@ def main():
                                  indent=2, ensure_ascii=False))
                 period_ready = True
             elif arguments.command == 'period':
+                print_storage(storage)
                 period_ready = print_periods(results, arguments.integration_per_trace)
             else:
-                if storage is not None:
-                    print_storage(storage)
-                else:
-                    print('CACHE NODES')
+                print_storage(storage)
                 print_table(results)
                 period_ready = True
             if not arguments.watch:
-                unhealthy = (storage is not None and
-                             storage.get('state') in ('OFFLINE', 'ERROR')) or any(
+                unhealthy = storage.get('state') in ('OFFLINE', 'ERROR') or any(
                     item['runtime_state'] in ('OFFLINE', 'ERROR') for item in results)
                 return 1 if unhealthy or not period_ready else 0
             time.sleep(max(arguments.watch, 0.2))

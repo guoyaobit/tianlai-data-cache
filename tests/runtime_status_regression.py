@@ -74,6 +74,9 @@ spec.loader.exec_module(module)
 assert module.STATE_TEXT['PREPARING_MEMORY'] == '准备内存'
 assert module.STATE_TEXT['SENDING_CACHED_DATA'] == '发送缓存数据'
 assert module.STATE_TEXT['RECEIVING_AND_WRITING'] == '接收并写盘'
+assert module.DEFAULT_STORAGE_HOST == '172.0.0.142'
+assert module.DEFAULT_STORAGE_CONTROL_PORT == 18999
+assert 'QUERY_STORAGE' in (ROOT / 'tools/cache_status.py').read_text(encoding='utf-8')
 assert 'LOSS_PORTS' in (ROOT / 'tools/cache_status.py').read_text(encoding='utf-8')
 table = io.StringIO()
 with redirect_stdout(table):
@@ -100,5 +103,12 @@ with tempfile.TemporaryDirectory() as directory:
     assert module.storage_snapshot(status_path)['state'] == 'WAITING_FOR_DATA'
     fallback = module.load_nodes(Path(directory) / 'missing-nodes.json')
     assert len(fallback) == 14 and fallback[0]['host'] == '172.0.0.128'
+
+storage_table = io.StringIO()
+with redirect_stdout(storage_table):
+    module.print_storage(dict(state='WAITING_FOR_DATA', listeners_ready=28,
+                              listener_count=28, active_transfers=0,
+                              completed_lane_transfers=2, written_bytes=4096))
+assert 'STORAGE' in storage_table.getvalue() and '28/28' in storage_table.getvalue()
 
 print('runtime state reporting checks passed')
