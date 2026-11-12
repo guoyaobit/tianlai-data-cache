@@ -424,7 +424,9 @@ def main():
     parser.add_argument('--journal', required=True)
     parser.add_argument('--bind', required=True)
     parser.add_argument('--port', type=int, default=18999)
-    parser.add_argument('--allow-source', required=True)
+    # Kept as an ignored compatibility option so an older systemd unit still
+    # starts while a rolling software update replaces the unit file.
+    parser.add_argument('--allow-source', help=argparse.SUPPRESS)
     parser.add_argument('--allow-partial', action='store_true', help='allow fewer than 14 nodes for testing only')
     parser.add_argument('--integration-per-trace', type=int, default=50000)
     parser.add_argument('--period-us', type=int, default=200)
@@ -433,17 +435,15 @@ def main():
                             allow_partial=args.allow_partial, integration_per_trace=args.integration_per_trace,
                             period_microseconds=args.period_us)
     replay = ReplayCache()
-    allowed = socket.gethostbyname(args.allow_source)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((args.bind, args.port))
         sock.listen(16)
-        print(f'TCP/JSON trigger controller listening on {sock.getsockname()}', flush=True)
+        print(f'TCP/JSON trigger controller listening on {sock.getsockname()}, '
+              'accepting every reachable source', flush=True)
         while True:
             connection, peer = sock.accept()
             with connection:
-                if peer[0] != allowed:
-                    continue
                 connection.settimeout(5)
                 try:
                     send_frame(connection, backend_reply(

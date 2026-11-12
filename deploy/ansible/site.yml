@@ -230,8 +230,31 @@
       loop:
         - "{{ tianlai_root }}/src"
         - "{{ tianlai_root }}/bin"
+        - "{{ tianlai_root }}/tools"
         - "{{ tianlai_root }}/src/{{ tianlai_profile }}"
         - "{{ tianlai_root }}/config"
+    - name: Install cache status tool on cache nodes
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/{{ item }}"
+        dest: "{{ tianlai_root }}/tools/{{ item }}"
+        mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
+      loop: [cache_status.py, tcp_json.py]
+    - name: Render cache status node list
+      ansible.builtin.template:
+        src: templates/nodes.json.j2
+        dest: "{{ tianlai_root }}/config/nodes.json"
+        mode: '0640'
+    - name: Remove old status command
+      ansible.builtin.file:
+        path: /usr/local/bin/tianlai-status
+        state: absent
+    - name: Install short cache command
+      ansible.builtin.copy:
+        dest: /usr/local/bin/tlcache
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
     - name: Copy shared sources
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../Common"
@@ -408,13 +431,17 @@
         mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
       loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py]
       notify: stop controller after deployment
-    - name: Install simple status command
+    - name: Remove old status command
+      ansible.builtin.file:
+        path: /usr/local/bin/tianlai-status
+        state: absent
+    - name: Install short cache command
       ansible.builtin.copy:
-        dest: /usr/local/bin/tianlai-status
+        dest: /usr/local/bin/tlcache
         mode: '0755'
         content: |
           #!/bin/sh
-          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py "$@"
+          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
     - name: Render controller node list
       ansible.builtin.template:
         src: templates/nodes.json.j2

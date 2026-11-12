@@ -67,6 +67,22 @@ bool sendFrame(int fd, const std::string &body) {
     return sendExact(fd, header, sizeof(header)) &&
            sendExact(fd, reinterpret_cast<const unsigned char *>(body.data()), body.size());
 }
+
+bool sameManagementSubnet(const sockaddr_in &peer, const sockaddr_in &local) {
+    constexpr uint32_t prefix24 = 0xffffff00U;
+    return (ntohl(peer.sin_addr.s_addr) & prefix24) ==
+           (ntohl(local.sin_addr.s_addr) & prefix24);
+}
+
+bool isReadOnlyQuery(const std::string &request) {
+    try {
+        auto message = parseControl(request);
+        const auto command = getId(message, "command");
+        return command == "QUERY_STATUS" || command == "QUERY_PORT";
+    } catch (...) {
+        return false;
+    }
+}
 } // namespace
 
 // Serve one length-prefixed TCP/JSON request per authenticated connection.
@@ -92,7 +108,7 @@ void InitControlThread(CacheRuntime *runtime) {
         sockaddr_in peer{};
         socklen_t peerSize = sizeof(peer);
         Socket connection(accept(listener.get(), reinterpret_cast<sockaddr *>(&peer), &peerSize));
-        if (connection.get() < 0 || peer.sin_addr.s_addr != allowed.sin_addr.s_addr)
+        if (connection.get() < 0)
             continue;
         timeval timeout{5, 0};
         setsockopt(connection.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
@@ -105,6 +121,10 @@ void InitControlThread(CacheRuntime *runtime) {
             continue;
         std::string request(size, '\0');
         if (!receiveExact(connection.get(), reinterpret_cast<unsigned char *>(&request[0]), size))
+            continue;
+        const bool controller = peer.sin_addr.s_addr == allowed.sin_addr.s_addr;
+        if (!controller &&
+            !(sameManagementSubnet(peer, address) && isReadOnlyQuery(request)))
             continue;
         sendFrame(connection.get(), ProcessControl(*runtime, request));
     }

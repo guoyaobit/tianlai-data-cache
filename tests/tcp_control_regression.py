@@ -56,7 +56,7 @@ def main():
         process = subprocess.Popen([
             sys.executable, str(ROOT / 'tools/controller.py'), '--nodes', str(nodes),
             '--journal', str(directory / 'journal'),
-            '--bind', '127.0.0.1', '--port', str(port), '--allow-source', '127.0.0.1',
+            '--bind', '127.0.0.1', '--port', str(port),
             '--allow-partial'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         try:
             client = subprocess.run([

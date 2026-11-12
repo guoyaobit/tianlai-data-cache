@@ -93,12 +93,12 @@ cd F0-2
    sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
    ```
 
-3. 在同一台存储服务器上启动一个控制器，`--bind` 使用该服务器的管理网 IP，`--allow-source` 填后端 IP，节点的 `controlPeerIp` 填控制器管理网 IP：
+3. 在同一台存储服务器上启动一个控制器，`--bind` 使用该服务器的管理网 IP。控制器接受所有能够连接该管理地址的触发来源，节点的 `controlPeerIp` 填控制器管理网 IP：
 
    ```bash
    python3 tools/controller.py --nodes tools/nodes_example.json \
      --journal /data/store-control \
-     --bind 172.0.0.142 --allow-source 192.168.200.10
+     --bind 172.0.0.142
    ```
 
    此处地址为示例。控制器内部固定使用`tianlai`，外部请求不填写采集编号。控制器和落盘服务是同机的两个独立进程：控制器走管理网，落盘服务走高速数据网。控制器默认 `--period-us 200 --integration-per-trace 50000`，须与所有节点对应配置一致；程序不会自动验证此一致性。生产默认必须配置 0～13 全部节点；`--allow-partial` 只用于模拟或部分节点联调。不要启动两个控制器同时管理相同节点。
@@ -117,42 +117,42 @@ cd F0-2
 在存储/控制服务器上可直接汇总查看所有已启用缓存节点，`--watch 2`表示每2秒刷新：
 
 ```bash
-tianlai-status
-tianlai-status --watch 2
+tlcache
+tlcache --watch 2
+tlcache period
 ```
 
-工具首先显示存储服务状态：`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`或`STOPPING`，同时显示28个lane监听端点、活动传输、已完成lane及累计写入字节。随后显示各缓存节点的运行阶段、累计收包、累计缺包、迟到包和按端口缺包统计；`LOSS_PORTS`中的`3:6`表示端口3累计缺6包。详细的受影响周期数和最近缺包周期可通过`tianlai-status --json`查看。计数从缓存进程启动开始，进程重启后清零。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发；也可在对应缓存节点通过`journalctl -u tianlai-cache.service -f`查看标准化的`Runtime state:`日志。
+`tlcache`可在存储服务器或任意缓存节点执行。它首先显示存储服务状态（仅存储节点），随后显示各缓存节点的运行阶段、累计收包、累计缺包、迟到包和按端口缺包统计；`LOSS_PORTS`中的`3:6`表示端口3累计缺6包。`tlcache period`直接列出每个节点的`oldest/settled_end/latest`以及最新周期对应的`trace/integration`，最后给出全部启用节点的共同可触发范围。详细JSON可通过`tlcache --json`查看。计数从缓存进程启动开始，进程重启后清零。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发；也可在对应缓存节点通过`journalctl -u tianlai-cache.service -f`查看标准化的`Runtime state:`日志。
 
 每个接收线程会打印第一条成功解析的UDP数据头，包括`packet_id`、板卡号、trace/integration周期和长度；随后再打印第一条实际写入环形缓冲区的数据。如果ixcap已经收到帧但以太网/IPv4/UDP解析失败，会打印首个失败帧的长度，便于区分“没有流量”和“帧格式不匹配”。
 
-通过后端或`tools/trigger.py`发送带4字节长度前缀的TCP JSON。以下示例使用临时请求文件；请替换控制器地址及全局唯一的事件编号。`trigger.py`可自动生成`request_id`。
+可在任意缓存节点或存储节点使用`tltrigger`；它已内置控制器地址，并自动生成请求编号和事件编号。先查询384路是否就绪：
 
 ```bash
-cat > /tmp/tianlai-status.json <<'EOF'
-{"version":1,"command":"QUERY_STATUS","channel_count":288}
-EOF
-python3 tools/trigger.py --host 172.0.0.142 --file /tmp/tianlai-status.json
+tltrigger status --channels 384
 ```
 
 控制器响应中的`node_runtime_states`和`runtime_state_counts`提供各节点运行阶段汇总。确认 `accept_trigger` 为 `true`，并确保所需起止周期位于返回的 `oldest_period` 与 `settled_end` 所示范围内；结束边界为不包含端点。然后提交触发：
 
 ```bash
-cat > /tmp/tianlai-capture.json <<'EOF'
-{"version":1,"command":"CAPTURE","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"period_count":15000}
-EOF
-python3 tools/trigger.py --host 172.0.0.142 --file /tmp/tianlai-capture.json
+tltrigger capture 3 --channels 384
 ```
 
-`channel_count`选择288或384；省略时默认384。默认每个积分周期200微秒，15000个周期为3秒。示例起点及长度仅说明格式，现场须选择当前有效的历史区间。首次回复`PREPARING`不表示已经写盘完成；可按事件编号查询：
-
-触发中也可用 `"duration_ms":3000` 替换 `"period_count":15000`，两者不能同时填写；时长须精确对应整数个积分周期。完整字段、跨 Trace 结束位置与确认格式见 [协议说明](PROTOCOL.md)。
+上述命令自动查询共同可用范围，并保存其中最近3秒的数据；时长只能为1～5秒。`--channels`选择288或384，省略时默认384。若必须指定历史起点，可增加`--trace 120 --integration 45000`。首次回复`PREPARING`不表示已经写盘完成；复制返回的事件编号进行查询：
 
 ```bash
-cat > /tmp/tianlai-event.json <<'EOF'
-{"version":1,"command":"QUERY_EVENT","event_id":"event-000001"}
-EOF
-python3 tools/trigger.py --host 172.0.0.142 --file /tmp/tianlai-event.json
+tltrigger event event-20261112-012345-abc123
 ```
+
+需要恢复或取消暂停事件时使用`tltrigger resume EVENT_ID`或`tltrigger cancel EVENT_ID`。高级联调仍可使用`tltrigger --file request.json`发送完整协议JSON；完整字段与跨Trace格式见[协议说明](PROTOCOL.md)。
+
+`tltrigger`不由Ansible管理。部署或更新时不需要重新编译或重启服务；在master的项目根目录运行以下独立Shell脚本，它通过现有SSH免密登录，仅将单文件Python客户端安装到控制器/存储节点`172.0.0.142`的`~/.local/bin/tltrigger`：
+
+```bash
+bash tools/deploy_tltrigger.sh
+```
+
+如调试时确实需要安装到其他节点，可显式指定：`bash tools/deploy_tltrigger.sh 172.0.0.128`。该方式不需要root权限；若首次创建`~/.local/bin`后命令尚未进入PATH，重新登录一次即可。
 
 常见状态：`PREPARING`正在保护、`PREPARED`表示全体已保护、`STORING`正在双lane回传、`STORED`表示全体已持久化、`RELEASING`正在统一释放、`COMPLETED`表示全部完成。检查`missing_by_server`以及每台节点的`lane-0.stored.json`和`lane-1.stored.json`。
 

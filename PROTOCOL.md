@@ -25,7 +25,7 @@
 
 ## 千兆内网 TCP + JSON 控制
 
-每次TCP连接只处理一个请求和一个回复，随后主动关闭。每条消息为4字节网络序JSON长度，后接UTF-8 JSON对象；JSON最长1200 B。节点只接受配置controlPeerIp的连接，控制器入口只接受--allow-source的地址。
+每次TCP连接只处理一个请求和一个回复，随后主动关闭。每条消息为4字节网络序JSON长度，后接UTF-8 JSON对象；JSON最长1200 B。节点只允许配置的`controlPeerIp`执行状态变更命令；与节点`controlBindIp`同一/24管理网的主机只允许执行`QUERY_STATUS`和`QUERY_PORT`。控制器入口接受所有能够连接其管理网监听地址的来源，再由控制器统一向缓存节点执行状态变更。
 
 所有请求携带：
 

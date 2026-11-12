@@ -69,6 +69,14 @@ def check_receive_performance_guards():
     assert "detectPacketLoss(now, previousLatest)" in receive_pool
 
 
+def check_read_only_management_queries():
+    control = read("Common/src/control_tcp.cpp")
+    assert "sameManagementSubnet" in control
+    assert "isReadOnlyQuery" in control
+    assert 'command == "QUERY_STATUS" || command == "QUERY_PORT"' in control
+    assert "peer.sin_addr.s_addr == allowed.sin_addr.s_addr" in control
+
+
 def check_simulation_config():
     configs = sorted((ROOT / "F0-2").glob("server_*.yaml"))
     configs += sorted((ROOT / "F3-10").glob("server_*.yaml"))
@@ -124,6 +132,7 @@ if __name__ == "__main__":
     check_zmq_logging()
     check_receive_logging_and_marker()
     check_receive_performance_guards()
+    check_read_only_management_queries()
     check_simulation_config()
     check_yaml_style()
     print("source and configuration regression checks passed")

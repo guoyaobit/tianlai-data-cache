@@ -325,7 +325,7 @@ def run(server, directory):
         controller_process = subprocess.Popen([
             'python3', str(ROOT / 'tools/controller.py'), '--nodes', str(directory / 'nodes.json'),
             '--acquisition', 'tianlai', '--journal', str(directory / 'external-journal'),
-            '--bind', '127.0.0.1', '--port', str(external_port), '--allow-source', '127.0.0.1', '--allow-partial',
+            '--bind', '127.0.0.1', '--port', str(external_port), '--allow-partial',
             '--integration-per-trace', '100', '--period-us', '10000'],
             stdout=log, stderr=log)
         result = subprocess.run(['python3', str(ROOT / 'tools/trigger.py'), '--host', '127.0.0.1',

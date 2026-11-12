@@ -9,9 +9,19 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import controller
+import trigger
 
 
 def main():
+    simple = trigger.create_parser().parse_args(['capture', '3', '--channels', '288'])
+    with patch('trigger.transmit', return_value=dict(
+            status='READY', accept_trigger=True, oldest_period=100000,
+            settled_end=120000)):
+        generated = trigger.request_from_arguments(simple)
+    assert generated['command'] == 'CAPTURE' and generated['channel_count'] == 288
+    assert generated['start'] == dict(trace_period_id=2, integration_period_id=5000)
+    assert generated['duration_ms'] == 3000 and generated['event_id'].startswith('event-')
+
     nodes = [dict(server_id=0, host='127.0.0.1', port=19000),
              dict(server_id=1, host='127.0.0.1', port=19001)]
     with tempfile.TemporaryDirectory() as directory, patch('durable_json.sync_directory'):

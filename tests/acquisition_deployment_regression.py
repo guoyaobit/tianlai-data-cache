@@ -59,6 +59,9 @@ assert 'acquisitionId:' not in recv_template
 assert 'acquisitionId = "tianlai"' in (ROOT / "Common/include/yaml_config.h").read_text(encoding="utf-8")
 assert 'acquisitionId is fixed internally' in (ROOT / "Common/src/yaml_config.cpp").read_text(encoding="utf-8")
 assert "--acquisition" not in controller_template
+assert "--allow-source" not in controller_template
+controller_source = (ROOT / "tools" / "controller.py").read_text(encoding="utf-8")
+assert "peer[0] != allowed" not in controller_source
 assert not (ANSIBLE / "configure_acquisition.sh").exists()
 assert not (ANSIBLE / "configure_acquisition.yml").exists()
 

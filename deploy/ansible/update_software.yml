@@ -127,6 +127,28 @@
         dest: "{{ tianlai_root }}/src/{{ tianlai_profile }}/{{ item }}"
         mode: '0644'
       loop: [main.cpp, Makefile]
+    - name: Create cache tool directory
+      ansible.builtin.file:
+        path: "{{ tianlai_root }}/tools"
+        state: directory
+        mode: '0750'
+    - name: Update cache status tool
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/{{ item }}"
+        dest: "{{ tianlai_root }}/tools/{{ item }}"
+        mode: "{{ '0755' if item == 'cache_status.py' else '0644' }}"
+      loop: [cache_status.py, tcp_json.py]
+    - name: Remove old status command from cache nodes
+      ansible.builtin.file:
+        path: /usr/local/bin/tianlai-status
+        state: absent
+    - name: Install short cache command on cache nodes
+      ansible.builtin.copy:
+        dest: /usr/local/bin/tlcache
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
     - name: Build updated cache program
       ansible.builtin.command:
         argv:
@@ -246,10 +268,14 @@
             state: absent
     - name: Apply safe controller permissions
       ansible.builtin.include_tasks: tasks/install_permissions.yml
-    - name: Install simple status command
+    - name: Remove old status command
+      ansible.builtin.file:
+        path: /usr/local/bin/tianlai-status
+        state: absent
+    - name: Install short cache command
       ansible.builtin.copy:
-        dest: /usr/local/bin/tianlai-status
+        dest: /usr/local/bin/tlcache
         mode: '0755'
         content: |
           #!/bin/sh
-          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py "$@"
+          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
