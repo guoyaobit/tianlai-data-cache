@@ -192,15 +192,27 @@ class Controller:
             atomic_json(self.journal / f'{event_id}.json', updated)
             event.update(updated)
 
-    def event_nodes(self, channel_count):
-        """Return the complete node set for a 288- or 384-channel event."""
+    def event_nodes(self, channel_count, server_ids=None):
+        """Return the requested available nodes allowed by the channel mode."""
         if type(channel_count) is not int or channel_count not in (288, 384):
             raise ValueError('channel_count must be 288 or 384')
         expected = set(range(11 if channel_count == 288 else 14))
-        selected = [node for node in self.nodes if node['server_id'] in expected]
-        if not selected or ({node['server_id'] for node in selected} != expected and not self.allow_partial):
+        requested = expected
+        if server_ids is not None:
+            if (not isinstance(server_ids, list) or not server_ids or
+                    any(type(value) is not int for value in server_ids) or
+                    len(set(server_ids)) != len(server_ids) or not set(server_ids) <= expected):
+                raise ValueError('server_ids must be a unique non-empty list allowed by channel_count')
+            requested = set(server_ids)
+        selected = [node for node in self.nodes if node['server_id'] in requested]
+        if not selected or ({node['server_id'] for node in selected} != requested and not self.allow_partial):
             raise ValueError(f'{channel_count}-channel node set is incomplete')
         return selected
+
+    def stored_event_nodes(self, event):
+        """Restore the exact participant set persisted with an event."""
+        return self.event_nodes(event.get('channel_count', 384),
+                                event.get('participating_server_ids'))
 
     def parallel(self, command, nodes=None, **fields):
         """Run one idempotent command on all selected nodes and report every failure."""
@@ -264,13 +276,15 @@ class Controller:
         channel_count = None if resume else message.get('channel_count', 384)
         selected_nodes = None
         if not resume:
-            selected_nodes = self.event_nodes(channel_count)
+            selected_nodes = self.event_nodes(channel_count, message.get('server_ids'))
         normalized = None if resume else self.capture_range(message)
         with self.lock:
             existing = self.events.get(event_id)
             if existing and not resume:
                 if (existing['start'] != normalized[0] or existing['period_count'] != normalized[1] or
-                        existing.get('channel_count', 384) != channel_count):
+                        existing.get('channel_count', 384) != channel_count or
+                        existing.get('participating_server_ids') !=
+                        [node['server_id'] for node in selected_nodes]):
                     raise ValueError('EVENT_ID_CONFLICT')
                 return dict(existing)
             if self.running is not None or any(e['status'] not in ('COMPLETED', 'CANCELLED')
@@ -304,10 +318,12 @@ class Controller:
         """Protect all nodes, store all data, then release only after the global durable barrier."""
         try:
             event = self.events[event_id]
-            nodes = self.event_nodes(event.get('channel_count', 384))
+            nodes = self.stored_event_nodes(event)
+            server_mask = sum(1 << node['server_id'] for node in nodes)
             states = self.parallel('PREPARE', nodes=nodes, event_id=event_id,
                                    start=event['start'], period_count=event['period_count'],
-                                   channel_count=event.get('channel_count', 384))
+                                   channel_count=event.get('channel_count', 384),
+                                   server_mask=server_mask)
             missing_by_server = dict(event.get('missing_by_server', {}))
             for index, (node, state) in enumerate(zip(nodes, states)):
                 if state['status'] == 'PREPARING':
@@ -402,7 +418,7 @@ class Controller:
                     raise ValueError('EVENT_NOT_FOUND')
             # Resolve terminal states first; never cancel a node still sending.
             event = self.events[event_id]
-            for node in self.event_nodes(event.get('channel_count', 384)):
+            for node in self.stored_event_nodes(event):
                 try:
                     state = rpc(node, self.acquisition, 'QUERY_EVENT', event_id=event_id)
                 except RuntimeError as error:
@@ -421,7 +437,7 @@ class Controller:
             with self.lock:
                 busy = any(e['status'] not in ('COMPLETED', 'CANCELLED') for e in self.events.values())
             channel_count = message.get('channel_count', 384)
-            nodes = self.event_nodes(channel_count)
+            nodes = self.event_nodes(channel_count, message.get('server_ids'))
             states = self.parallel('QUERY_STATUS', nodes=nodes)
             oldest = max(s['oldest_period'] for s in states)
             end = min(s['settled_end'] for s in states)

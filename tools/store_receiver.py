@@ -140,12 +140,16 @@ class StoreReceiver:
             if not ID.fullmatch(event) or not ID.fullmatch(acquisition):
                 raise ValueError('invalid event/acquisition identifier')
             server, lane, channels = meta['server_id'], meta['lane'], meta['channel_count']
+            mode_mask = (1 << (11 if channels == 288 else 14)) - 1
+            server_mask = meta.get('server_mask', mode_mask)
             start, count = meta['start_period'], meta['period_count']
             per_trace, period_us = meta['integration_per_trace'], meta['period_microseconds']
-            if (any(type(x) is not int for x in (server, lane, channels, start, count, per_trace, period_us)) or
+            if (any(type(x) is not int for x in (server, lane, channels, server_mask,
+                                                 start, count, per_trace, period_us)) or
                     meta['version'] != 1 or meta['format'] != 'TLSTORE1' or
                     channels not in (288, 384) or
                     not 0 <= server < (11 if channels == 288 else 14) or
+                    not server_mask or server_mask & ~mode_mask or not server_mask & (1 << server) or
                     not 0 <= lane < 2 or lane != listen_lane or
                     not 1 <= period_us <= 1000000 or 1000000 % period_us or
                     not 1 <= per_trace <= 0x800000 or not 0 <= start < (1 << 20) * per_trace or

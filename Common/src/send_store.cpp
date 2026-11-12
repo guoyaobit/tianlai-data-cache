@@ -45,6 +45,7 @@ static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event) 
                  ",\"acquisition_id\":" + quoteJson(c.acquisitionId) + ",\"server_id\":" +
                  std::to_string(c.serverId) + ",\"lane\":" + std::to_string(lane) +
                  ",\"channel_count\":" + std::to_string(event.channelCount) +
+                 ",\"server_mask\":" + std::to_string(event.serverMask) +
                  ",\"port_count\":" + std::to_string(c.receivePorts.size()) + ",\"start_period\":" +
                  std::to_string(event.start) + ",\"period_count\":" + std::to_string(event.count) +
                  ",\"ports\":" + portList +

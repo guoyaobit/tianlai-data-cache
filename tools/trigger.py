@@ -15,6 +15,31 @@ MAX_CAPTURE_SECONDS = 50
 LENGTH = struct.Struct('!I')
 
 
+def parse_servers(value):
+    """Convert labels such as 1,2,5-7 or tianlaistore1 into zero-based IDs."""
+    selected = set()
+    for item in value.split(','):
+        item = item.strip().lower()
+        if item.startswith('tianlaistore'):
+            item = item[len('tianlaistore'):]
+        if '-' in item:
+            first, last = item.split('-', 1)
+            if not first.isdigit() or not last.isdigit() or int(first) > int(last):
+                raise argparse.ArgumentTypeError('servers must use labels such as 1,2,5-7')
+            labels = range(int(first), int(last) + 1)
+        elif item.isdigit():
+            labels = (int(item),)
+        else:
+            raise argparse.ArgumentTypeError('servers must use labels such as 1,2,5-7')
+        for label in labels:
+            if not 1 <= label <= 14:
+                raise argparse.ArgumentTypeError('server labels must be between 1 and 14')
+            selected.add(label - 1)
+    if not selected:
+        raise argparse.ArgumentTypeError('at least one server is required')
+    return sorted(selected)
+
+
 def receive_exact(connection, size):
     data = bytearray()
     while len(data) < size:
@@ -49,6 +74,8 @@ def create_parser():
 
     status = actions.add_parser('status', help='query trigger readiness')
     status.add_argument('--channels', type=int, choices=(288, 384), default=384)
+    status.add_argument('--servers', type=parse_servers,
+                        help='cache servers, for example 1,2,5-7 (default: all)')
 
     capture = actions.add_parser('capture', help='save the latest settled data')
     capture.add_argument('seconds', type=int, help='duration in seconds (1-50)')
@@ -59,6 +86,8 @@ def create_parser():
     capture.add_argument('--period-us', type=int, default=200, help=argparse.SUPPRESS)
     capture.add_argument('--integration-per-trace', type=int, default=50000,
                          help=argparse.SUPPRESS)
+    capture.add_argument('--servers', type=parse_servers,
+                         help='cache servers, for example 1,2,5-7 (default: all)')
 
     for name, help_text in (('event', 'query one event'), ('resume', 'resume a paused event'),
                             ('cancel', 'cancel a paused event')):
@@ -104,7 +133,10 @@ def capture_request(arguments):
         raise ValueError('invalid acquisition timing')
 
     if arguments.trace is None:
-        status = transmit(dict(command='QUERY_STATUS', channel_count=arguments.channels), arguments)
+        status_request = dict(command='QUERY_STATUS', channel_count=arguments.channels)
+        if arguments.servers is not None:
+            status_request['server_ids'] = arguments.servers
+        status = transmit(status_request, arguments)
         if status.get('status') != 'READY' or not status.get('accept_trigger'):
             print(json.dumps(status, indent=2, ensure_ascii=False))
             raise RuntimeError('cache is not ready for a trigger')
@@ -120,11 +152,15 @@ def capture_request(arguments):
         trace, integration = arguments.trace, arguments.integration
 
     event_id = arguments.event_id or generated_event_id()
+    labels = 'all' if arguments.servers is None else ','.join(str(value + 1) for value in arguments.servers)
     print(f'event={event_id} start={trace}:{integration} duration={arguments.seconds}s '
-          f'channels={arguments.channels}', file=sys.stderr)
-    return dict(command='CAPTURE', event_id=event_id, channel_count=arguments.channels,
-                start=dict(trace_period_id=trace, integration_period_id=integration),
-                duration_ms=arguments.seconds * 1000)
+          f'channels={arguments.channels} servers={labels}', file=sys.stderr)
+    request = dict(command='CAPTURE', event_id=event_id, channel_count=arguments.channels,
+                   start=dict(trace_period_id=trace, integration_period_id=integration),
+                   duration_ms=arguments.seconds * 1000)
+    if arguments.servers is not None:
+        request['server_ids'] = arguments.servers
+    return request
 
 
 def request_from_arguments(arguments):
@@ -133,7 +169,10 @@ def request_from_arguments(arguments):
             raise ValueError('--file cannot be combined with a command')
         return json.loads(Path(arguments.file).read_text(encoding='utf-8'))
     if arguments.action == 'status':
-        return dict(command='QUERY_STATUS', channel_count=arguments.channels)
+        request = dict(command='QUERY_STATUS', channel_count=arguments.channels)
+        if arguments.servers is not None:
+            request['server_ids'] = arguments.servers
+        return request
     if arguments.action == 'capture':
         return capture_request(arguments)
     if arguments.action in ('event', 'resume', 'cancel'):

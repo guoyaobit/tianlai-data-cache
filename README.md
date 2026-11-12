@@ -144,13 +144,13 @@ python3 tools/controller.py --nodes tools/nodes_example.json \
 tltrigger capture 3
 ```
 
-使用`tltrigger status --channels 288`查询288路状态，使用`tltrigger event EVENT_ID`查询写盘进度；高级联调仍支持`tltrigger --file tools/trigger_example.json`。
+只触发指定缓存服务器可执行`tltrigger capture 3 --servers 1,2,5-7`；这里使用机柜标签`tianlaistore1～14`中的编号。也可写成`--servers tianlaistore1,tianlaistore2`。不指定时仍选择当前288/384路模式的全部服务器。使用`tltrigger status --channels 288 --servers 1-3`查询所选服务器的共同缓存区间，使用`tltrigger event EVENT_ID`查询写盘进度；高级联调仍支持`tltrigger --file tools/trigger_example.json`。
 
 单次触发支持1～50秒，保存完整50秒可执行`tltrigger capture 50 --channels 384`。50秒384路数据约2.37 TB，传输和落盘期间该事件持续占用冻结缓冲区，完成或取消前不能接受下一事件；部署前须验证100G链路、阵列持续写入速度和剩余容量。
 
 `tltrigger`由Ansible统一安装到控制器和显控节点；`deploy.sh`负责首次安装，`update_software.sh`随其他程序一并更新。
 
-在触发JSON中设置`"channel_count":288`或`384`；省略时默认384。返回PREPARING表示请求正在处理；查询事件得到PREPARED/STORING后才表明所选模式全部节点已保护。控制器只有确认所有节点STORED后才统一RELEASE，单节点故障不会提前释放其他节点缓存。
+在触发JSON中设置`"channel_count":288`或`384`；省略时默认384。可选的`server_ids`使用内部0～13编号，并且必须属于所选通道模式。返回PREPARING表示请求正在处理；查询事件得到PREPARED/STORING后才表明本次所选节点全部已保护。控制器只有确认所选节点STORED后才统一RELEASE，单节点故障不会提前释放其他节点缓存。
 QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
 内部固定标识仍进入缓存事件和TLSTORE1元数据。升级时必须先停止触发并处理完旧事件，在维护窗口统一更新控制器、14台缓存服务和存储服务，不能混跑协议版本不同的进程。
 所选模式的11台或14台节点持久化完成后，C++存储服务通过TCP/JSON直接向消色散后端发送
@@ -183,7 +183,7 @@ make storage
 ./Storage/tianlai-storage --config Storage/storage.yaml
 ```
 
-`sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。每个lane只使用一个`lane-N.json`保存元数据、接收状态和缺包统计；最终确认丢失时，已完成lane在元数据阶段直接返回STORED。生产模式下288路需要22个lane、384路需要28个lane持久化状态一致，才生成事件根目录的`event.json`并通知后端；同一文件的`backend_acknowledged`记录后端是否确认。调试排除离线节点时，控制器与落盘端使用同一启用节点列表，完成通知明确标记`partial_node_set`及实际参与节点。
+`sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。每个lane只使用一个`lane-N.json`保存元数据、接收状态和缺包统计；最终确认丢失时，已完成lane在元数据阶段直接返回STORED。未指定服务器时，288路需要22个lane、384路需要28个lane持久化状态一致；指定服务器时只等待所选节点的两个lane。随后生成事件根目录的`event.json`并通知后端；同一文件的`backend_acknowledged`记录后端是否确认，`partial_node_set`及`participating_server_ids`明确记录实际参与节点。
 
 落盘根目录统一为`/data`，事件数据路径为`/data/tianlai/EVENT_ID/`。目录和数据文件直接描述内容，例如`packets-24-25/packet-24_boards-00-17.bin`或`frequencies-0688-1023/frequency-0688-0773_boards-36-47.bin`；用户无需根据服务器号和端口号反查数据含义。
 

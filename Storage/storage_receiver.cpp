@@ -330,11 +330,15 @@ class EventWriter {
         require(valid_id(event) && valid_id(acquisition), "invalid event/acquisition identifier");
         auto node = integer(metadata, "server_id"), lane_value = integer(metadata, "lane");
         auto channels = integer(metadata, "channel_count");
+        const uint64_t mode_mask = (uint64_t(1) << (channels == 288 ? 11U : CACHE_NODE_COUNT)) - 1;
+        const uint64_t server_mask = metadata.contains("server_mask") ?
+            integer(metadata, "server_mask") : mode_mask;
         start = integer(metadata, "start_period"); count = integer(metadata, "period_count");
         per_trace = integer(metadata, "integration_per_trace"); auto period_us = integer(metadata, "period_microseconds");
         require(integer(metadata, "version") == 1 && metadata.at("format") == "TLSTORE1" &&
                 (channels == 288 || channels == 384) &&
                 node < (channels == 288 ? 11U : CACHE_NODE_COUNT) && lane_value < LANE_COUNT &&
+                server_mask && !(server_mask & ~mode_mask) && (server_mask & (uint64_t(1) << node)) &&
                 period_us >= 1 && period_us <= 1000000 &&
                 1000000 % period_us == 0 && per_trace >= 1 && per_trace <= 0x800000 &&
                 start < (1ULL << 20) * per_trace && count >= 1 &&
@@ -524,7 +528,7 @@ static std::optional<json> read_lane_state(const fs::path &directory, unsigned l
     return std::nullopt;
 }
 
-// Builds one result after both lanes from all nodes selected by channel_count are durable.
+// Builds one result after both lanes from every server selected for this event are durable.
 // The result itself is persisted before it can be sent to the backend.
 static std::vector<unsigned> default_server_ids() {
     std::vector<unsigned> result;
@@ -535,19 +539,35 @@ static std::vector<unsigned> default_server_ids() {
 static std::optional<json> build_completion_notice(
         const fs::path &event_directory, const std::vector<unsigned> &configured_servers) {
     require(!configured_servers.empty(), "expected server list is empty");
-    auto first_server = configured_servers.front();
-    const auto first_state = read_lane_state(
-        event_directory / data_directory_name(first_server), 0);
-    if (!first_state || first_state->value("status", "") != "STORED") return std::nullopt;
+    std::optional<json> first_state;
+    unsigned first_server = 0;
+    for (unsigned server : configured_servers) {
+        auto state = read_lane_state(event_directory / data_directory_name(server), 0);
+        if (state && state->value("status", "") == "STORED") {
+            first_server = server;
+            first_state = std::move(state);
+            break;
+        }
+    }
+    if (!first_state) return std::nullopt;
     const json first = *first_state;
     const auto channel_count = integer(first, "channel_count");
     require(channel_count == 288 || channel_count == 384, "invalid event channel count");
     const unsigned complete_node_count = channel_count == 288 ? 11U : CACHE_NODE_COUNT;
+    const uint64_t mode_mask = (uint64_t(1) << complete_node_count) - 1;
+    uint64_t configured_mask = 0;
+    for (unsigned server : configured_servers)
+        if (server < complete_node_count) configured_mask |= uint64_t(1) << server;
+    const uint64_t server_mask = first.contains("server_mask") ?
+        integer(first, "server_mask") : configured_mask;
+    require(server_mask && !(server_mask & ~mode_mask) &&
+            (server_mask & (uint64_t(1) << first_server)), "invalid event server selection");
     std::vector<unsigned> participating_servers;
     std::copy_if(configured_servers.begin(), configured_servers.end(),
                  std::back_inserter(participating_servers),
-                 [complete_node_count](unsigned server) { return server < complete_node_count; });
+                 [server_mask](unsigned server) { return server_mask & (uint64_t(1) << server); });
     require(!participating_servers.empty(), "no configured server participates in this channel mode");
+    require(!(server_mask & ~configured_mask), "event selects an unconfigured server");
     json missing = json::object();
     for (unsigned server : participating_servers) {
         const auto directory = event_directory / data_directory_name(server);
@@ -559,6 +579,9 @@ static std::optional<json> build_completion_notice(
                     state->at("acquisition_id") == event_directory.parent_path().filename().string() &&
                     state->at("event_id") == event_directory.filename().string(),
                     "node completion marker mismatch");
+            const uint64_t state_mask = state->contains("server_mask") ?
+                integer(*state, "server_mask") : server_mask;
+            require(state_mask == server_mask, "node event server selection mismatch");
             if (server != first_server || lane != 0) {
                 for (const char *field : {"format", "acquisition_id", "event_id", "start_period",
                                           "period_count", "integration_per_trace", "period_microseconds",

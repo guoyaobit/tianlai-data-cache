@@ -9,6 +9,7 @@ static std::string eventJson(const EventInfo &e) {
     return "\"event_id\":" + quoteJson(e.id) + ",\"status\":" +
            quoteJson(eventStateName(e.state)) +
            ",\"channel_count\":" + std::to_string(e.channelCount) +
+           ",\"server_mask\":" + std::to_string(e.serverMask) +
            ",\"start_period\":" + std::to_string(e.start) +
            ",\"period_count\":" + std::to_string(e.count) +
            ",\"missing_packets\":" + std::to_string(e.missing) +
@@ -256,11 +257,17 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             uint64_t integration = getNumber(msg, "start.integration_period_id");
             uint64_t count = getNumber(msg, "period_count");
             uint64_t channels = hasField(msg, "channel_count") ? getNumber(msg, "channel_count") : 384;
+            const unsigned modeNodes = channels == 288 ? 11U : 14U;
+            const uint64_t modeMask = (uint64_t(1) << modeNodes) - 1;
+            uint64_t serverMask = hasField(msg, "server_mask") ? getNumber(msg, "server_mask") : modeMask;
             uint64_t epochEnd = (1ULL << 20) * para.config->integrationPerTrace;
             if (channels != 288 && channels != 384)
                 throw std::runtime_error("INVALID_CHANNEL_COUNT");
             if (channels == 288 && para.config->serverId >= 11)
                 throw std::runtime_error("CHANNEL_MODE_EXCLUDES_NODE");
+            if (!serverMask || (serverMask & ~modeMask) ||
+                !(serverMask & (uint64_t(1) << para.config->serverId)))
+                throw std::runtime_error("INVALID_SERVER_SELECTION");
             if (trace >= (1ULL << 20) || integration >= para.config->integrationPerTrace ||
                 !count || count > para.config->maxEventPeriods())
                 throw std::runtime_error("INVALID_RANGE");
@@ -274,7 +281,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                 existing = &para.history.at(id);
             if (existing) {
                 if (existing->start != start || existing->count != count ||
-                    existing->channelCount != channels)
+                    existing->channelCount != channels || existing->serverMask != serverMask)
                     throw std::runtime_error("EVENT_ID_CONFLICT");
                 return reply(eventJson(*existing));
             }
@@ -298,6 +305,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             para.event = EventInfo{};
             para.event.id = id;
             para.event.channelCount = static_cast<unsigned>(channels);
+            para.event.serverMask = static_cast<unsigned>(serverMask);
             para.event.start = start;
             para.event.count = count;
             para.event.state = EventState::Preparing;

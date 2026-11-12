@@ -57,13 +57,14 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
   "command": "CAPTURE",
   "event_id": "event-000001",
   "channel_count": 288,
+  "server_ids": [0, 1, 2],
   "start": {"trace_period_id": 120, "integration_period_id": 45000},
   "period_count": 15000
 }
 ```
 
-示例以288路模式保存3秒，包含`(120,45000)`到`(121,9999)`，不包含`(121,10000)`。
-`channel_count`只能为288或384：288使用节点0～10，384使用节点0～13。省略该字段时按384处理，以兼容旧触发端。同一`event_id`不能改变通道数。
+示例以288路模式从节点0～2保存3秒，包含`(120,45000)`到`(121,9999)`，不包含`(121,10000)`。
+`channel_count`只能为288或384：288允许节点0～10，384允许节点0～13。可选的`server_ids`为不重复的内部节点编号列表；省略时使用该模式的全部节点。同一`event_id`不能改变通道数或参与节点。命令行工具的`--servers 1,2,3`使用更直观的服务器标签编号，并转换为内部`[0,1,2]`。
 
 也可用 `"duration_ms":3000` 代替 `"period_count":15000`；**必须且只能提供其中一个**。毫秒时长须为正整数，换算后恰好是整数个积分周期；例如默认 200 微秒时，1 毫秒为 5 个周期。最大时长 50 秒；节点若配置更小的 `maxEventSeconds` 则按节点限制拒绝。控制器将请求规范化为 `period_count`，因此相同事件 ID、起点和等价长度可以重传，范围变化则冲突。
 
@@ -71,9 +72,9 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
 
 | command | 额外字段 | 含义 |
 |---|---|---|
-| CAPTURE | event_id、channel_count、start、period_count | 创建288或384路事件，通知对应节点保护数据 |
+| CAPTURE | event_id、channel_count、server_ids（可选）、start、period_count | 创建事件，通知指定节点保护数据 |
 | QUERY_EVENT | event_id | 查询事件准备/传输/完成状态 |
-| QUERY_STATUS | channel_count（可选，默认384） | 查询所选模式节点共同的可用时间范围和 accept_trigger |
+| QUERY_STATUS | channel_count、server_ids（均可选） | 查询指定节点共同的可用时间范围和 accept_trigger |
 | QUERY_STORAGE | 无 | 查询142节点上存储服务的运行状态，供任意节点的`tlcache`使用 |
 | RESUME | event_id | 对 PAUSED 事件查询节点实际状态后继续 |
 | CANCEL | event_id | 明确放弃已暂停事件；正在发送的节点不能直接取消 |
@@ -84,18 +85,18 @@ COMPLETED 只表示事件保存完成，不代表已经恢复完整 100 秒历�
 部分节点失败或超时，不自动假定那些节点没有执行过请求，也不自动删除其他节点的数据。
 控制器 `QUERY_STATUS` 只有在所有节点可触发且共同区间 `oldest_period < settled_end` 时才返回 READY；即使 READY，目标区间仍需落在共同区间内，节点可能因区间过期或未定稿而拒绝。控制器先检查包头计数的位宽，节点再按实际 `integrationPerTrace` 检查积分编号和范围。
 
-调试模式排除已知离线缓存节点时，控制器响应包含`partial_node_set=true`和`participating_server_ids`；事件记录也保存`participating_server_ids`。此类结果只代表列出的参与节点，不得解释为完整288或384路数据。
+显式选择部分服务器或部署时排除离线节点，控制器响应包含`partial_node_set=true`和`participating_server_ids`；事件记录也保存`participating_server_ids`。此类结果只代表列出的参与节点，不得解释为完整288或384路数据。
 事件日志写入失败时不会在内存中发布未成功记录的状态；无法写入暂停状态时仍在内存中暂停，重启后须结合日志和各节点状态人工核对，不能假定失败操作未执行。
 
 ### 写盘完成主动通知
 
-C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～13（384路）各自两个lane全部持久化且元数据一致后，先写入事件级`event.json`，再通过TCP/JSON通知消色散后端。调试部署明确排除离线缓存节点时，只等待`expectedServerIds`与所选通道模式的交集：
+C++存储服务根据事件元数据中的服务器选择掩码，确认本次参与节点各自两个lane全部持久化且元数据一致后，先写入事件级`event.json`，再通过TCP/JSON通知消色散后端。选择结果必须是`expectedServerIds`的子集：
 
 ```json
 {"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"tianlai","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0},"partial_node_set":false,"participating_server_ids":[0,1,2,3,4,5,6,7,8,9,10]}
 ```
 
-生产模式下，`STORED`精确表示所选模式的11台或14台数据均已写盘并形成持久化标记；它不表示控制器已经完成缓存释放。`partial_node_set=true`时仅表示`participating_server_ids`列出的调试节点完成，不能解释为完整288路或384路数据。缺包数量见`missing_by_server`，因此该通知也不是零丢包保证。
+未指定服务器时，`STORED`精确表示所选模式的11台或14台数据均已写盘并形成持久化标记；它不表示控制器已经完成缓存释放。`partial_node_set=true`时仅表示`participating_server_ids`列出的节点完成，不能解释为完整288路或384路数据。缺包数量见`missing_by_server`，因此该通知也不是零丢包保证。
 
 后端应按全局唯一的`event_id`幂等地持久化并处理结果，再在同一TCP连接回复：
 
@@ -107,11 +108,11 @@ C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～1
 
 ### 控制器 → 节点（默认 TCP 19000）
 
-PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式包含的节点发送。
+PREPARE使用标量`server_mask`携带本次参与节点位图，并只向所选节点发送；缓存节点把该位图原样写入TLSTORE1元数据，供存储端建立事件完成屏障。
 
 | command | 额外字段 | 允许行为 |
 |---|---|---|
-| PREPARE | event_id、channel_count、start、period_count | 检查模式和历史区间并异步保护，返回PREPARING/PREPARED |
+| PREPARE | event_id、channel_count、server_mask、start、period_count | 检查节点选择和历史区间并异步保护，返回PREPARING/PREPARED |
 | STORE | event_id | PREPARED或SEND_FAILED时并行启动两个不限速ZeroMQ lane；SENDING/STORED时幂等返回 |
 | QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、过渡区峰值和 error |
 | RELEASE | event_id | 只有该节点全部接收口数据可靠落盘后，即 STORED 状态，才允许释放冻结区 |
@@ -154,6 +155,7 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
   "server_id": 3,
   "lane": 0,
   "channel_count": 288,
+  "server_mask": 15,
   "port_count": 4,
   "ports": [0, 2],
   "start_period": 6045000,
@@ -164,7 +166,7 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
 }
 ```
 
-`channel_count`必须与触发一致。288路只允许server 0～10，384路允许server 0～13。`port_count`仍表示节点接收口总数；`ports`列出本lane实际发送的端口，lane 0必须为偶数口，lane 1必须为奇数口。两个列表互斥且并集覆盖全部接收口。
+`channel_count`必须与触发一致。288路只允许server 0～10，384路允许server 0～13。`server_mask`每一位对应同编号server；示例值15表示server 0～3参与，且当前server对应位必须为1。`port_count`仍表示节点接收口总数；`ports`列出本lane实际发送的端口，lane 0必须为偶数口，lane 1必须为奇数口。两个列表互斥且并集覆盖全部接收口。
 
 随后逐接收口发送数据块，每块默认 64 个积分周期，最后一块可以不足 64 个。
 块头共 40 B，所有整数大端，禁止直接发送带本机填充的 C++ struct：

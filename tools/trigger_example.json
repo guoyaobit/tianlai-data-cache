@@ -3,6 +3,7 @@
   "command": "CAPTURE",
   "event_id": "event-000001",
   "channel_count": 384,
+  "server_ids": [0, 1, 2],
   "start": {
     "trace_period_id": 120,
     "integration_period_id": 45000
