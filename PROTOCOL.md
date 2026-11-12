@@ -226,8 +226,8 @@ port_count=4。三类节点共用本 ZeroMQ 协议；原积分记录文件结构
 ### 落盘确认
 
 C++ 存储接收器检查长度、区间、映射、每个已接收包的周期/板卡/包号及每个缺包位置的零填充；字节 0 高 4 位不参与校验。Python 实现保留为协议参考。
-数据按 `acquisition/event/server-N/port-P.bin` 存储，文件内容是上述积分记录连续排列。
-每个server只保存`lane-0.json`和`lane-1.json`两个状态文件，合并记录会话元数据、`RECEIVING/STORED`状态及各端口缺包数量，不计算或保存文件CRC。不支持旧版`.meta.json`和`.stored.json`双文件格式。
+存储根目录固定为`/data`，事件路径为`/data/acquisition/event/`。本地板卡数据按包号段建目录，例如`packets-24-25/packet-24_boards-00-17.bin`；远端板卡数据按频率段建目录，例如`frequencies-0688-1023/frequency-0688-0773_boards-36-47.bin`。文件内容是上述积分记录连续排列。最后一个远端文件名只标注有效频率`0946-1023`，文件中的补齐频点仍按协议保留。
+每个数据目录只保存`lane-0.json`和`lane-1.json`两个状态文件，合并记录会话元数据、`RECEIVING/STORED`状态及各输入流缺包数量，不计算或保存文件CRC。不支持旧版`.meta.json`和`.stored.json`双文件格式。
 只有 lane 所有文件内容和目录持久化完成后，才通过 ZeroMQ 回复长度前缀 JSON：
 
 ```json

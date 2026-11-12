@@ -183,6 +183,8 @@ make storage
 
 `sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。每个lane只使用一个`lane-N.json`保存元数据、接收状态和缺包统计；最终确认丢失时，已完成lane在元数据阶段直接返回STORED。生产模式下288路需要22个lane、384路需要28个lane持久化状态一致，才生成事件根目录的`event.json`并通知后端；同一文件的`backend_acknowledged`记录后端是否确认。调试排除离线节点时，控制器与落盘端使用同一启用节点列表，完成通知明确标记`partial_node_set`及实际参与节点。
 
+落盘根目录统一为`/data`，事件数据路径为`/data/tianlai/EVENT_ID/`。目录和数据文件直接描述内容，例如`packets-24-25/packet-24_boards-00-17.bin`或`frequencies-0688-1023/frequency-0688-0773_boards-36-47.bin`；用户无需根据服务器号和端口号反查数据含义。
+
 ZeroMQ 数据通道不使用 UDP 分片参数；旧配置中的 udpFragmentBytes 必须删除。TCP/IP MTU 仍须按实际网络配置。ZeroMQ 不会补回 FPGA 到缓存服务器之间丢失的 UDP 包；旧 UDP/TCP 存储发送端与 ZeroMQ 接收器不兼容，需协调同时更新。
 
 程序不主动限速，因此不能把网口线速当作已验证的持续落盘能力。默认线程结构为1个主线程、28个lane线程、2个ZeroMQ I/O线程和1个完成通知线程，应用可见合计约32个，不再动态增加28个写盘线程；libzmq可能另有内部管理线程。100G网卡RSS、中断亲和性、NUMA、交换机拥塞和磁盘持续写入仍须实机验收；若2个I/O线程成为瓶颈，可实测后提高`ioThreads`。

@@ -93,6 +93,29 @@ def validate_frames(body, first, count, stride, boards, packet_bytes,
     return missing
 
 
+def data_directory_name(server):
+    if server < 3:
+        first = server * 8
+        return f'packets-{first:02d}-{first + 7:02d}'
+    if server < 11:
+        first = 24 + (server - 3) * 2
+        return f'packets-{first:02d}-{first + 1:02d}'
+    first = (server - 11) * 4 * 86
+    return f'frequencies-{first:04d}-{min(first + 343, 1023):04d}'
+
+
+def data_file_name(server, port):
+    if server < 3:
+        return f'packet-{server * 8 + port:02d}_boards-00-35.bin'
+    if server < 11:
+        packet = 24 + (server - 3) * 2 + port // 2
+        first_board = port % 2 * 18
+        return f'packet-{packet:02d}_boards-{first_board:02d}-{first_board + 17:02d}.bin'
+    first_frequency = ((server - 11) * 4 + port) * 86
+    last_frequency = min(first_frequency + 85, 1023)
+    return f'frequency-{first_frequency:04d}-{last_frequency:04d}_boards-36-47.bin'
+
+
 class StoreReceiver:
     def __init__(self, directory, allowed_sources=()):
         self.directory = Path(directory)
@@ -148,7 +171,7 @@ class StoreReceiver:
                 self.active.add(key)
             # Persist every newly created directory entry before acknowledging any data.
             path = self.directory
-            for part in (acquisition, event, f'server-{server}'):
+            for part in (acquisition, event, data_directory_name(server)):
                 child = path / part
                 child.mkdir(exist_ok=True)
                 sync_directory(path)
@@ -171,7 +194,7 @@ class StoreReceiver:
             missing = {p: 0 for p in progress}
             stride = FRAME.size + boards * packet_bytes
             for p in progress:
-                filename = path / f'port-{p}.bin'
+                filename = path / data_file_name(server, p)
                 fd = os.open(filename, os.O_CREAT | os.O_RDWR, 0o640)
                 files[p] = fd
                 os.ftruncate(fd, count * stride)

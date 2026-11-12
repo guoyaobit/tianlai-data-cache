@@ -235,6 +235,42 @@ struct Shared {
     std::set<unsigned> active;
 };
 
+static std::string padded(unsigned value, unsigned width) {
+    auto text = std::to_string(value);
+    return std::string(text.size() < width ? width - text.size() : 0, '0') + text;
+}
+
+static std::string data_directory_name(unsigned server) {
+    if (server < 3) {
+        const unsigned first = server * 8;
+        return "packets-" + padded(first, 2) + "-" + padded(first + 7, 2);
+    }
+    if (server < 11) {
+        const unsigned first = 24 + (server - 3) * 2;
+        return "packets-" + padded(first, 2) + "-" + padded(first + 1, 2);
+    }
+    const unsigned first = (server - 11) * 4 * 86;
+    const unsigned last = std::min(first + 4 * 86 - 1, 1023U);
+    return "frequencies-" + padded(first, 4) + "-" + padded(last, 4);
+}
+
+static std::string data_file_name(unsigned server, unsigned port) {
+    if (server < 3) {
+        const unsigned packet = server * 8 + port;
+        return "packet-" + padded(packet, 2) + "_boards-00-35.bin";
+    }
+    if (server < 11) {
+        const unsigned packet = 24 + (server - 3) * 2 + port / 2;
+        const unsigned first_board = (port % 2) * 18;
+        return "packet-" + padded(packet, 2) + "_boards-" + padded(first_board, 2) +
+               "-" + padded(first_board + 17, 2) + ".bin";
+    }
+    const unsigned first_frequency = ((server - 11) * 4 + port) * 86;
+    const unsigned last_frequency = std::min(first_frequency + 85, 1023U);
+    return "frequency-" + padded(first_frequency, 4) + "-" + padded(last_frequency, 4) +
+           "_boards-36-47.bin";
+}
+
 // Owns one server/lane transfer; both lanes may write disjoint port files concurrently.
 class EventWriter {
     fs::path root, directory;
@@ -329,8 +365,8 @@ class EventWriter {
             selected[port] = true;
         }
         ensure_dir(root, acquisition); ensure_dir(root / acquisition, event);
-        ensure_dir(root / acquisition / event, "server-" + std::to_string(server));
-        directory = root / acquisition / event / ("server-" + std::to_string(server));
+        ensure_dir(root / acquisition / event, data_directory_name(server));
+        directory = root / acquisition / event / data_directory_name(server);
         const auto lane_name = "lane-" + std::to_string(lane);
         const auto state_path = directory / (lane_name + ".json");
         json old_metadata, old_state;
@@ -350,7 +386,7 @@ class EventWriter {
                     "invalid existing completion marker");
             for (unsigned p = 0; p < ports; ++p) {
                 if (!selected[p]) continue;
-                const auto path = directory / ("port-" + std::to_string(p) + ".bin");
+                const auto path = directory / data_file_name(server, p);
                 require(fs::is_regular_file(path) && fs::file_size(path) == count * stride,
                         "stored event file is missing or has the wrong size");
             }
@@ -370,7 +406,7 @@ class EventWriter {
         files.assign(ports, -1);
         for (unsigned p = 0; p < ports; ++p) {
             if (!selected[p]) continue;
-            auto path = directory / ("port-" + std::to_string(p) + ".bin");
+            auto path = directory / data_file_name(server, p);
             files[p] = ::open(path.string().c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0640);
             if (files[p] < 0) throw system_error("open event file");
             if (::ftruncate(files[p], static_cast<off_t>(count * stride))) throw system_error("resize event file");
@@ -499,7 +535,7 @@ static std::optional<json> build_completion_notice(
     require(!configured_servers.empty(), "expected server list is empty");
     auto first_server = configured_servers.front();
     const auto first_state = read_lane_state(
-        event_directory / ("server-" + std::to_string(first_server)), 0);
+        event_directory / data_directory_name(first_server), 0);
     if (!first_state || first_state->value("status", "") != "STORED") return std::nullopt;
     const json first = *first_state;
     const auto channel_count = integer(first, "channel_count");
@@ -512,7 +548,7 @@ static std::optional<json> build_completion_notice(
     require(!participating_servers.empty(), "no configured server participates in this channel mode");
     json missing = json::object();
     for (unsigned server : participating_servers) {
-        const auto directory = event_directory / ("server-" + std::to_string(server));
+        const auto directory = event_directory / data_directory_name(server);
         uint64_t absent = 0;
         for (unsigned lane = 0; lane < LANE_COUNT; ++lane) {
             const auto state = read_lane_state(directory, lane);

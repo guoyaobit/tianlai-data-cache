@@ -14,7 +14,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 from controller import Controller, rpc
-from store_receiver import StoreReceiver, FRAME
+from store_receiver import StoreReceiver, FRAME, data_directory_name, data_file_name
 
 
 def read_config(path):
@@ -267,7 +267,7 @@ def run(server, directory):
         assert request('RELEASE', event_id='crossing')['status'] == 'RELEASED'
         assert request('QUERY_STATUS')['runtime_state'] == 'CACHING_DATA'
         for port in range(ports):
-            path = directory / 'disk/tianlai/crossing' / f'server-{server}/port-{port}.bin'
+            path = directory / 'disk/tianlai/crossing' / data_directory_name(server) / data_file_name(server, port)
             content = path.read_bytes()
             stride = 24 + boards * (payload + 16)
             assert len(content) == 10 * stride
@@ -278,14 +278,13 @@ def run(server, directory):
                     at = i * stride + 24 + board * (payload + 16)
                     expected = make_packet(period, port, board) if mask & (1 << board) else bytes(payload + 16)
                     assert content[at:at + payload + 16] == expected
-        event_path = directory / 'disk/tianlai/crossing' / f'server-{server}'
+        event_path = directory / 'disk/tianlai/crossing' / data_directory_name(server)
         stored = [json.loads((event_path / f'lane-{lane}.json').read_text())
                   for lane in range(2)]
         assert set(stored[0]['missing_packets']) == {str(p) for p in range(0, ports, 2)}
         assert set(stored[1]['missing_packets']) == {str(p) for p in range(1, ports, 2)}
         if remote:
-            meta = json.loads((directory / 'disk/tianlai/crossing' /
-                               f'server-{server}/lane-0.json').read_text())
+            meta = json.loads((event_path / 'lane-0.json').read_text())
             assert meta['profile'] == 'remote96' and meta['packets_per_board'] == 2
             assert meta['physical_board_count'] == 12 and meta['frequency_bins_per_port'] == 86
         feed(450, 650)
@@ -388,7 +387,7 @@ def main():
                 capture_output=True, text=True)
             assert result.returncode != 0 and 'sendRateBitsPerSecond' in result.stderr, result
         for server in (0, 3, 11, 13):
-            path = Path(temp) / f'server-{server}'
+            path = Path(temp) / f'profile-{server}'
             path.mkdir()
             run(server, path)
 

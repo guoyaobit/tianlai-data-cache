@@ -45,7 +45,9 @@ assert "tianlai_acquisition_id" not in inventory_yml
 assert "tianlai_acquisition_id" not in inventory_ini
 assert 'tianlai_controller_ip: "172.0.0.142"' in inventory_yml
 assert 'tianlai_backend_ip: "192.168.200.10"' in inventory_yml
-assert 'tianlai_storage_directory: /data/raw-store' in inventory_yml
+assert 'tianlai_storage_directory: /data' in inventory_yml
+assert 'tianlai_storage_directory: /data' in settings
+assert 'tianlai_storage_directory=/data' in inventory_ini
 assert "tianlai_controller_ip: 172.0.0.142" in settings
 assert "tianlai_backend_ip: 192.168.200.10" in settings
 assert "ansible_ssh_private_key_file" not in settings

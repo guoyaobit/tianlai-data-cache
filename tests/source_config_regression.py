@@ -60,6 +60,7 @@ def check_receive_logging_and_marker():
 def check_receive_performance_guards():
     application = read("Common/src/application.cpp")
     receive_pool = read("Common/src/receive_pool.cpp")
+    log_source = read("Common/src/log_output.cpp")
     assert "allocatePortBuffer(index, port, c)" in application
     assert "pthread_setaffinity_np" in application
     assert application.index("pthread_setaffinity_np") < application.index(
@@ -67,6 +68,13 @@ def check_receive_performance_guards():
     )
     assert "if (latest > previousLatest)" in receive_pool
     assert "detectPacketLoss(now, previousLatest)" in receive_pool
+    assert "const bool periodAdvanced = !haveData || p > latest" in receive_pool
+    assert "const bool sampleClock = periodAdvanced || (received & 63U) == 0" in receive_pool
+    assert "frame(p) + size_t(packetSlot) * packetSize" in receive_pool
+    assert "isolateReceiveCpus(config)" in application
+    assert "CPU_CLR(port.cpuId, &background)" in application
+    assert "spdlog::async_logger" in log_source
+    assert "spdlog::async_overflow_policy::overrun_oldest" in log_source
 
 
 def check_read_only_management_queries():
@@ -81,6 +89,12 @@ def check_simplified_storage_state():
     storage = read("Storage/storage_receiver.cpp")
     assert '"lane-" + std::to_string(lane) + ".json"' in storage
     assert 'event_directory / "event.json"' in storage
+    assert 'data_directory_name(server)' in storage
+    assert 'data_file_name(server, p)' in storage
+    assert 'indexed_name("server-", server)' not in storage
+    assert 'indexed_name("port-", p)' not in storage
+    assert 'directory: "/data"' in read("Storage/storage.yaml")
+    assert '/data/raw-store' not in storage
     for old_name in ('.meta.json', '.stored.json', 'storage-complete.json',
                      'backend-acknowledged.json'):
         assert old_name not in storage

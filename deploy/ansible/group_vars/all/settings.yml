@@ -32,7 +32,7 @@ tianlai_backend_ip: 192.168.200.10
 # Data IP on the storage server's 100 GbE interface.
 tianlai_storage_ip: 192.168.210.250
 # Event path under the mounted storage directory.
-tianlai_storage_directory: /data/raw-store
+tianlai_storage_directory: /data
 # Integration period (us); must match acquisition.
 tianlai_period_us: 200
 # Integration periods per trace; must match acquisition.
