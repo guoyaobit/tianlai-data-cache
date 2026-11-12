@@ -88,7 +88,7 @@ COMPLETED 只表示事件保存完成，不代表已经恢复完整 100 秒历�
 
 ### 写盘完成主动通知
 
-C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～13（384路）各自两个lane全部持久化且元数据一致后，先写入事件级`storage-complete.json`，再通过TCP/JSON通知消色散后端。调试部署明确排除离线缓存节点时，只等待`expectedServerIds`与所选通道模式的交集：
+C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～13（384路）各自两个lane全部持久化且元数据一致后，先写入事件级`event.json`，再通过TCP/JSON通知消色散后端。调试部署明确排除离线缓存节点时，只等待`expectedServerIds`与所选通道模式的交集：
 
 ```json
 {"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"tianlai","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0},"partial_node_set":false,"participating_server_ids":[0,1,2,3,4,5,6,7,8,9,10]}
@@ -102,7 +102,7 @@ C++存储服务根据事件`channel_count`确认节点0～10（288路）或0～1
 {"version":1,"command":"ACK_RESULT","status":"ACKNOWLEDGED","event_id":"event-000001"}
 ```
 
-存储服务连接后端默认TCP 19001，在同一连接发送长度前缀JSON并等待ACK_RESULT。确认报文的命令、状态和事件编号匹配后才写入`backend-acknowledged.json`；为兼容旧后端，ACK若携带`acquisition_id`则必须为`tianlai`。超时、断线或重启后，存储服务会从`storage-complete.json`继续建立新连接重试，因此后端必须按事件编号处理重复通知。`tools/result_listener.py`是演示接收器，打印后立即确认，不提供业务侧持久化。控制器不再转发完成通知，也不处理`ACK_RESULT`。若事件暂停，仍通过控制器的`QUERY_EVENT`查询并按`RESUME`或`CANCEL`处理。
+存储服务连接后端默认TCP 19001，在同一连接发送长度前缀JSON并等待ACK_RESULT。确认报文的命令、状态和事件编号匹配后，将同一个`event.json`中的`backend_acknowledged`原子更新为`true`；为兼容旧后端，ACK若携带`acquisition_id`则必须为`tianlai`。超时、断线或重启后，存储服务会从`event.json`继续建立新连接重试，因此后端必须按事件编号处理重复通知。`tools/result_listener.py`是演示接收器，打印后立即确认，不提供业务侧持久化。控制器不再转发完成通知，也不处理`ACK_RESULT`。若事件暂停，仍通过控制器的`QUERY_EVENT`查询并按`RESUME`或`CANCEL`处理。
 
 ### 控制器 → 节点（默认 TCP 19000）
 
@@ -124,7 +124,7 @@ PREPARE字段与CAPTURE相同，仅command不同；控制器只向所选模式�
 
 `runtime_state`描述进程当前工作阶段，与事件状态分开：`PREPARING_MEMORY`、`WAITING_FOR_DATA`、`CACHING_DATA`、`PREPARING_EVENT`、`EVENT_READY`、`SENDING_CACHED_DATA`、`STORAGE_CONFIRMED`、`SEND_FAILED`、`ERROR`和`STOPPING`。节点响应同时包含`runtime_state_age_ms`、`initialized_ports/receive_ports`、`received_packets`以及进程启动以来的`lost_packets`、`loss_periods`、`last_loss_period`、`late_packets`和`lost_by_port`。`loss_periods`按端口-周期累计；进程重启后这些运行计数清零。控制器`QUERY_STATUS`用`node_runtime_states`和`runtime_state_counts`汇总所选节点。
 
-存储服务将本机实时状态写入`statusFile`（部署默认`/run/tianlai-storage-status.json`）。状态包括`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`和`STOPPING`；文件还包含监听端点、活动传输、完成/中止lane、累计写入字节及最近错误。状态文件是监控信息，不代替lane持久化标记或`storage-complete.json`。
+存储服务将本机实时状态写入`statusFile`（部署默认`/run/tianlai-storage-status.json`）。状态包括`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`和`STOPPING`；文件还包含监听端点、活动传输、完成/中止lane、累计写入字节及最近错误。状态文件是监控信息，不代替lane持久化状态或事件级`event.json`。
 
 控制器只有在所选模式全部节点PREPARED后才并行发出STORE；全部节点STORED后才并行发出RELEASE。288路使用11个节点，384路使用14个节点；每节点使用两个ZeroMQ连接，任一lane失败都会使节点进入SEND_FAILED，其他已落盘节点也暂不释放缓存。
 节点RPC断线或超时时使用同一request_id重新建立TCP连接，最多进行6次指数退避重试；准备和写盘长任务通过QUERY_EVENT等待。
@@ -226,7 +226,7 @@ port_count=4。三类节点共用本 ZeroMQ 协议；原积分记录文件结构
 
 C++ 存储接收器检查长度、区间、映射、每个已接收包的周期/板卡/包号及每个缺包位置的零填充；字节 0 高 4 位不参与校验。Python 实现保留为协议参考。
 数据按 `acquisition/event/server-N/port-P.bin` 存储，文件内容是上述积分记录连续排列。
-旁边保存lane元数据和`.stored.json`，记录各端口缺包数量，不计算或保存文件CRC。
+每个server只保存`lane-0.json`和`lane-1.json`两个状态文件，合并记录会话元数据、`RECEIVING/STORED`状态及各端口缺包数量，不计算或保存文件CRC。不支持旧版`.meta.json`和`.stored.json`双文件格式。
 只有 lane 所有文件内容和目录持久化完成后，才通过 ZeroMQ 回复长度前缀 JSON：
 
 ```json

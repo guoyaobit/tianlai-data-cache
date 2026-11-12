@@ -79,8 +79,8 @@ int main(int argc, char **argv) {
         assert(json::parse(result.begin() + 4, result.end()).at("status") == "STORED");
     }
     auto directory = root / "acq/event/server-3";
-    json marker; std::ifstream(directory / "lane-0.stored.json") >> marker;
-    assert(fs::exists(directory / "lane-1.stored.json"));
+    json marker; std::ifstream(directory / "lane-0.json") >> marker;
+    assert(fs::exists(directory / "lane-1.json"));
     assert(marker.at("missing_packets").at("0") == 17);
     std::ifstream in(directory / "port-0.bin", std::ios::binary);
     Bytes saved((std::istreambuf_iterator<char>(in)), {});
@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
     {
         EventWriter conflict(root, shared);
         rejects([&] { conflict.begin(metadata("event", 0, 2)); }, "metadata conflicts");
-        assert(fs::exists(directory / "lane-0.stored.json"));
+        assert(fs::exists(directory / "lane-0.json"));
     }
     {
         EventWriter retry(root, shared);
@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
         assert(read32(retry_result.data()) == retry_result.size() - 4);
         assert(json::parse(retry_result.begin() + 4, retry_result.end()).at("status") == "STORED");
     }
-    assert(fs::exists(directory / "lane-0.stored.json"));
+    assert(fs::exists(directory / "lane-0.json"));
     // A 384-channel event requires both durable lanes from all 14 servers.
     const auto complete = root / "acq/complete";
     for (unsigned server = 0; server < CACHE_NODE_COUNT; ++server) {
@@ -110,18 +110,17 @@ int main(int argc, char **argv) {
                          {"channel_count", 384},
                          {"start_period", 100}, {"period_count", 1},
                          {"integration_per_trace", 100}, {"period_microseconds", 10000}};
-            json stored = {{"version", 1}, {"status", "STORED"}, {"acquisition_id", "acq"},
-                           {"event_id", "complete"}, {"server_id", server}, {"lane", lane},
-                           {"missing_packets", {{std::to_string(lane), lane + 1}}}};
-            atomic_json(node / (prefix + ".meta.json"), meta);
-            atomic_json(node / (prefix + ".stored.json"), stored);
+            meta["status"] = "STORED";
+            meta["missing_packets"] = json::object();
+            meta["missing_packets"][std::to_string(lane)] = lane + 1;
+            atomic_json(node / (prefix + ".json"), meta);
         }
     }
     const auto notice = build_completion_notice(complete, default_server_ids());
     assert(notice && notice->at("status") == "STORED");
     assert(notice->at("channel_count") == 384);
     assert(notice->at("missing_by_server").at("0") == 3);
-    assert(fs::exists(complete / "storage-complete.json"));
+    assert(fs::exists(complete / "event.json"));
     // A 288-channel event is complete after both lanes from servers 0-10.
     const auto complete288 = root / "acq/complete-288";
     for (unsigned server = 0; server < 11; ++server) {
@@ -133,18 +132,17 @@ int main(int argc, char **argv) {
                          {"event_id", "complete-288"}, {"server_id", server}, {"lane", lane},
                          {"channel_count", 288}, {"start_period", 100}, {"period_count", 1},
                          {"integration_per_trace", 100}, {"period_microseconds", 10000}};
-            json stored = {{"version", 1}, {"status", "STORED"}, {"acquisition_id", "acq"},
-                           {"event_id", "complete-288"}, {"server_id", server}, {"lane", lane},
-                           {"missing_packets", {{std::to_string(lane), 0}}}};
-            atomic_json(node / (prefix + ".meta.json"), meta);
-            atomic_json(node / (prefix + ".stored.json"), stored);
+            meta["status"] = "STORED";
+            meta["missing_packets"] = json::object();
+            meta["missing_packets"][std::to_string(lane)] = 0;
+            atomic_json(node / (prefix + ".json"), meta);
         }
     }
     const auto notice288 = build_completion_notice(complete288, default_server_ids());
     assert(notice288 && notice288->at("channel_count") == 288);
     assert(notice288->at("missing_by_server").size() == 11);
     // Debug deployments complete using only explicitly enabled cache servers.
-    fs::remove(complete / "storage-complete.json");
+    fs::remove(complete / "event.json");
     const std::vector<unsigned> partial_servers{1, 3, 5, 8, 13};
     const auto partial = build_completion_notice(complete, partial_servers);
     assert(partial && partial->at("partial_node_set") == true);

@@ -279,13 +279,13 @@ def run(server, directory):
                     expected = make_packet(period, port, board) if mask & (1 << board) else bytes(payload + 16)
                     assert content[at:at + payload + 16] == expected
         event_path = directory / 'disk/tianlai/crossing' / f'server-{server}'
-        stored = [json.loads((event_path / f'lane-{lane}.stored.json').read_text())
+        stored = [json.loads((event_path / f'lane-{lane}.json').read_text())
                   for lane in range(2)]
         assert set(stored[0]['missing_packets']) == {str(p) for p in range(0, ports, 2)}
         assert set(stored[1]['missing_packets']) == {str(p) for p in range(1, ports, 2)}
         if remote:
             meta = json.loads((directory / 'disk/tianlai/crossing' /
-                               f'server-{server}/lane-0.meta.json').read_text())
+                               f'server-{server}/lane-0.json').read_text())
             assert meta['profile'] == 'remote96' and meta['packets_per_board'] == 2
             assert meta['physical_board_count'] == 12 and meta['frequency_bins_per_port'] == 86
         feed(450, 650)

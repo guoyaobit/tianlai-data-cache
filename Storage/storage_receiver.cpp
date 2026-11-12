@@ -332,18 +332,22 @@ class EventWriter {
         ensure_dir(root / acquisition / event, "server-" + std::to_string(server));
         directory = root / acquisition / event / ("server-" + std::to_string(server));
         const auto lane_name = "lane-" + std::to_string(lane);
-        auto meta_path = directory / (lane_name + ".meta.json");
-        if (fs::exists(meta_path)) {
-            std::ifstream input(meta_path); json old; input >> old;
-            require(old == metadata, "event metadata conflicts with an existing transfer");
+        const auto state_path = directory / (lane_name + ".json");
+        json old_metadata, old_state;
+        if (fs::exists(state_path)) {
+            std::ifstream input(state_path); input >> old_state;
+            require(old_state.is_object(), "invalid existing lane state");
+            old_metadata = old_state;
+            old_metadata.erase("status"); old_metadata.erase("missing_packets");
+            require(old_metadata == metadata, "event metadata conflicts with an existing transfer");
+            require(old_state.value("status", "") == "RECEIVING" ||
+                    old_state.value("status", "") == "STORED", "invalid existing lane state");
         }
         stride = FRAME_HEADER + uint64_t(boards) * packet_bytes;
-        auto marker = directory / (lane_name + ".stored.json");
-        if (fs::exists(marker)) {
-            std::ifstream input(marker); json stored; input >> stored;
-            require(stored.at("status") == "STORED" && stored.at("event_id") == event &&
-                    stored.at("acquisition_id") == acquisition && integer(stored, "server_id") == server &&
-                    integer(stored, "lane") == lane, "invalid existing completion marker");
+        if (!old_state.empty() && old_state.value("status", "") == "STORED") {
+            require(old_state.at("event_id") == event && old_state.at("acquisition_id") == acquisition &&
+                    integer(old_state, "server_id") == server && integer(old_state, "lane") == lane,
+                    "invalid existing completion marker");
             for (unsigned p = 0; p < ports; ++p) {
                 if (!selected[p]) continue;
                 const auto path = directory / ("port-" + std::to_string(p) + ".bin");
@@ -360,7 +364,8 @@ class EventWriter {
                     "server lane already receiving");
             claimed = true;
         }
-        atomic_json(meta_path, metadata);
+        json receiving = metadata; receiving["status"] = "RECEIVING";
+        atomic_json(state_path, receiving);
         progress.assign(ports, start); missing.assign(ports, 0);
         files.assign(ports, -1);
         for (unsigned p = 0; p < ports; ++p) {
@@ -429,12 +434,13 @@ class EventWriter {
         sync_data(true);
         json ack = {{"version", 1}, {"status", "STORED"}, {"event_id", event},
                     {"acquisition_id", acquisition}, {"server_id", server}, {"lane", lane}};
-        json marker = ack; marker["missing_packets"] = json::object();
+        json state = metadata; state["status"] = "STORED";
+        state["missing_packets"] = json::object();
         for (unsigned p = 0; p < ports; ++p) {
             if (!selected[p]) continue;
-            marker["missing_packets"][std::to_string(p)] = missing[p];
+            state["missing_packets"][std::to_string(p)] = missing[p];
         }
-        atomic_json(directory / ("lane-" + std::to_string(lane) + ".stored.json"), marker);
+        atomic_json(directory / ("lane-" + std::to_string(lane) + ".json"), state);
         if (runtime_active && runtime) {
             runtime->transferFinished(true);
             runtime_active = false;
@@ -474,6 +480,12 @@ static json read_json_file(const fs::path &path) {
     return value;
 }
 
+static std::optional<json> read_lane_state(const fs::path &directory, unsigned lane) {
+    const auto state_path = directory / ("lane-" + std::to_string(lane) + ".json");
+    if (fs::is_regular_file(state_path)) return read_json_file(state_path);
+    return std::nullopt;
+}
+
 // Builds one result after both lanes from all nodes selected by channel_count are durable.
 // The result itself is persisted before it can be sent to the backend.
 static std::vector<unsigned> default_server_ids() {
@@ -486,10 +498,10 @@ static std::optional<json> build_completion_notice(
         const fs::path &event_directory, const std::vector<unsigned> &configured_servers) {
     require(!configured_servers.empty(), "expected server list is empty");
     auto first_server = configured_servers.front();
-    const auto first_path = event_directory / ("server-" + std::to_string(first_server)) /
-                            "lane-0.meta.json";
-    if (!fs::is_regular_file(first_path)) return std::nullopt;
-    const json first = read_json_file(first_path);
+    const auto first_state = read_lane_state(
+        event_directory / ("server-" + std::to_string(first_server)), 0);
+    if (!first_state || first_state->value("status", "") != "STORED") return std::nullopt;
+    const json first = *first_state;
     const auto channel_count = integer(first, "channel_count");
     require(channel_count == 288 || channel_count == 384, "invalid event channel count");
     const unsigned complete_node_count = channel_count == 288 ? 11U : CACHE_NODE_COUNT;
@@ -503,27 +515,19 @@ static std::optional<json> build_completion_notice(
         const auto directory = event_directory / ("server-" + std::to_string(server));
         uint64_t absent = 0;
         for (unsigned lane = 0; lane < LANE_COUNT; ++lane) {
-            const auto prefix = "lane-" + std::to_string(lane);
-            const auto meta_path = directory / (prefix + ".meta.json");
-            const auto marker_path = directory / (prefix + ".stored.json");
-            if (!fs::is_regular_file(meta_path) || !fs::is_regular_file(marker_path))
-                return std::nullopt;
-            const auto meta = read_json_file(meta_path);
-            const auto marker = read_json_file(marker_path);
-            require(integer(meta, "server_id") == server && integer(meta, "lane") == lane &&
-                    meta.at("acquisition_id") == event_directory.parent_path().filename().string() &&
-                    meta.at("event_id") == event_directory.filename().string() &&
-                    marker.at("status") == "STORED" && integer(marker, "server_id") == server &&
-                    integer(marker, "lane") == lane && marker.at("event_id") == meta.at("event_id") &&
-                    marker.at("acquisition_id") == meta.at("acquisition_id"),
+            const auto state = read_lane_state(directory, lane);
+            if (!state || state->value("status", "") != "STORED") return std::nullopt;
+            require(integer(*state, "server_id") == server && integer(*state, "lane") == lane &&
+                    state->at("acquisition_id") == event_directory.parent_path().filename().string() &&
+                    state->at("event_id") == event_directory.filename().string(),
                     "node completion marker mismatch");
             if (server != first_server || lane != 0) {
                 for (const char *field : {"format", "acquisition_id", "event_id", "start_period",
                                           "period_count", "integration_per_trace", "period_microseconds",
                                           "channel_count"})
-                    require(meta.at(field) == first.at(field), "node event metadata mismatch");
+                    require(state->at(field) == first.at(field), "node event metadata mismatch");
             }
-            const auto &by_port = marker.at("missing_packets");
+            const auto &by_port = state->at("missing_packets");
             require(by_port.is_object(), "missing packet object required");
             for (auto item = by_port.begin(); item != by_port.end(); ++item) {
                 require(item.value().is_number_unsigned() || item.value().is_number_integer(),
@@ -551,9 +555,15 @@ static std::optional<json> build_completion_notice(
                    {"integration_per_trace", per_trace}, {"missing_by_server", missing},
                    {"partial_node_set", participating_servers.size() != complete_node_count},
                    {"participating_server_ids", participating_servers}};
-    const auto path = event_directory / "storage-complete.json";
-    if (fs::exists(path)) require(read_json_file(path) == notice, "stored event result conflicts");
-    else atomic_json(path, notice);
+    const auto path = event_directory / "event.json";
+    if (fs::exists(path)) {
+        auto state = read_json_file(path);
+        state.erase("backend_acknowledged");
+        require(state == notice, "stored event result conflicts");
+    } else {
+        auto state = notice; state["backend_acknowledged"] = false;
+        atomic_json(path, state);
+    }
     return notice;
 }
 
@@ -686,7 +696,12 @@ class CompletionNotifier {
                     (!ack.contains("acquisition_id") ||
                      ack.at("acquisition_id") == notice.at("acquisition_id")) &&
                     ack.at("event_id") == notice.at("event_id"), "invalid backend completion acknowledgment");
-            atomic_json(event_directory / "backend-acknowledged.json", ack);
+            const auto state_path = event_directory / "event.json";
+            auto state = read_json_file(state_path);
+            auto saved_notice = state; saved_notice.erase("backend_acknowledged");
+            require(saved_notice == notice, "stored event result conflicts");
+            state["backend_acknowledged"] = true;
+            atomic_json(state_path, state);
             close_tcp(socket);
             return true;
         } catch (...) {
@@ -703,18 +718,15 @@ class CompletionNotifier {
             for (const auto &event : fs::directory_iterator(acquisition.path())) {
                 if (!event.is_directory() || !valid_id(event.path().filename().string())) continue;
                 try {
-                    const auto ack_path = event.path() / "backend-acknowledged.json";
-                    if (fs::exists(ack_path)) {
+                    const auto state_path = event.path() / "event.json";
+                    if (fs::exists(state_path)) {
                         try {
-                            const auto ack = read_json_file(ack_path);
-                            if (integer(ack, "version") == 1 && ack.at("command") == "ACK_RESULT" &&
-                                ack.at("status") == "ACKNOWLEDGED" &&
-                                ack.at("acquisition_id") == acquisition.path().filename().string() &&
-                                ack.at("event_id") == event.path().filename().string())
+                            const auto state = read_json_file(state_path);
+                            if (state.at("backend_acknowledged").is_boolean() &&
+                                state.at("backend_acknowledged").get<bool>())
                                 continue;
                         } catch (const std::exception &) {
-                            // A malformed marker cannot suppress a durable notification;
-                            // a valid reply atomically replaces it below.
+                            // A malformed state cannot suppress a durable notification.
                         }
                     }
                     auto notice = build_completion_notice(event.path(), expected_servers);

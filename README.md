@@ -180,7 +180,7 @@ make storage
 ./Storage/tianlai-storage --config Storage/storage.yaml
 ```
 
-`sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。最终确认丢失时，已完成lane在元数据阶段直接返回STORED；生产模式下288路需要22个lane、384路需要28个lane持久化标记一致，才生成`storage-complete.json`并通知后端。调试排除离线节点时，控制器与落盘端使用同一启用节点列表，完成通知明确标记`partial_node_set`及实际参与节点。
+`sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。每个lane只使用一个`lane-N.json`保存元数据、接收状态和缺包统计；最终确认丢失时，已完成lane在元数据阶段直接返回STORED。生产模式下288路需要22个lane、384路需要28个lane持久化状态一致，才生成事件根目录的`event.json`并通知后端；同一文件的`backend_acknowledged`记录后端是否确认。调试排除离线节点时，控制器与落盘端使用同一启用节点列表，完成通知明确标记`partial_node_set`及实际参与节点。
 
 ZeroMQ 数据通道不使用 UDP 分片参数；旧配置中的 udpFragmentBytes 必须删除。TCP/IP MTU 仍须按实际网络配置。ZeroMQ 不会补回 FPGA 到缓存服务器之间丢失的 UDP 包；旧 UDP/TCP 存储发送端与 ZeroMQ 接收器不兼容，需协调同时更新。
 

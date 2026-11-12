@@ -87,7 +87,7 @@ def send_event(context, port, root, server, lane):
     finally:
         sock.close()
     directory = root / 'acq' / 'event' / f'server-{server}'
-    marker = json.loads((directory / f'lane-{lane}.stored.json').read_text())
+    marker = json.loads((directory / f'lane-{lane}.json').read_text())
     for p, body in zip(range(lane, ports, 2), expected):
         assert (directory / f'port-{p}.bin').read_bytes() == body
         assert marker['missing_packets'][str(p)] == boards - 1
@@ -181,7 +181,9 @@ def main():
                     version=1, command='ACK_RESULT', status='ACKNOWLEDGED',
                     event_id='event')).encode())
             deadline = time.monotonic() + 10
-            while not (root / 'acq/event/backend-acknowledged.json').exists():
+            event_state = root / 'acq/event/event.json'
+            while not (event_state.exists() and
+                       json.loads(event_state.read_text()).get('backend_acknowledged')):
                 if time.monotonic() >= deadline:
                     raise TimeoutError('storage did not persist the backend acknowledgment')
                 time.sleep(.05)

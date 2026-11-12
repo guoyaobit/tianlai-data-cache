@@ -154,7 +154,7 @@ bash tools/deploy_tltrigger.sh
 
 如调试时确实需要安装到其他节点，可显式指定：`bash tools/deploy_tltrigger.sh 172.0.0.128`。该方式不需要root权限；若首次创建`~/.local/bin`后命令尚未进入PATH，重新登录一次即可。
 
-常见状态：`PREPARING`正在保护、`PREPARED`表示全体已保护、`STORING`正在双lane回传、`STORED`表示全体已持久化、`RELEASING`正在统一释放、`COMPLETED`表示全部完成。检查`missing_by_server`以及每台节点的`lane-0.stored.json`和`lane-1.stored.json`。
+常见状态：`PREPARING`正在保护、`PREPARED`表示全体已保护、`STORING`正在双lane回传、`STORED`表示全体已持久化、`RELEASING`正在统一释放、`COMPLETED`表示全部完成。检查`missing_by_server`以及每台节点的`lane-0.json`和`lane-1.json`。
 
 ## 6. 故障与恢复
 
@@ -164,7 +164,7 @@ bash tools/deploy_tltrigger.sh
 | `EXPIRED` | 所请求的起点已经超出保留历史；检查触发延迟和周期范围。 |
 | `NOT_READY` | 结束周期尚未定稿或尚未收到；当前实现不会等待未来数据。 |
 | `PAUSED` / `SEND_FAILED` | 查看事件错误、各节点状态、网络和存储；按协议使用 `RESUME` 协调重试。若日志磁盘写入失败，先修复日志存储，重启后核对日志和各节点实际状态。节点已 `REJECTED` 的事件不能简单靠 `RESUME` 重新准备，须先明确处理/取消旧事件，再以新事件编号提交。 |
-| 后端未收到完成通知 | 288路检查节点0～10共22个lane，384路检查0～13共28个lane，以及`storage-complete.json`、存储服务日志和后端TCP 19001。 |
+| 后端未收到完成通知 | 288路检查节点0～10共22个lane，384路检查0～13共28个lane，以及`event.json`中的`backend_acknowledged`、存储服务日志和后端TCP 19001。 |
 | 有`.bin`但事件未完成 | 部分文件不能作为完成凭据；检查每节点两个lane标记和控制器状态。 |
 
 控制器日志可用于重启后恢复状态，但缓存数据仍在节点内存，缓存进程退出或掉电后无法从内存恢复。取消事件会放弃相应受保护数据，应由现场操作人员根据事件状态决定。

@@ -153,16 +153,20 @@ class StoreReceiver:
                 child.mkdir(exist_ok=True)
                 sync_directory(path)
                 path = child
-            meta_path = path / f'lane-{lane}.meta.json'
-            if meta_path.exists() and json.loads(meta_path.read_text()) != meta:
-                raise ValueError('event metadata conflicts with an existing transfer')
-            atomic_json(meta_path, meta)
-            stored_path = path / f'lane-{lane}.stored.json'
-            # A retry rewrites files. Remove the previous completion marker first so a crash
-            # during that rewrite cannot leave partially updated files marked as complete.
-            if stored_path.exists():
-                stored_path.unlink()
-                sync_directory(path)
+            state_path = path / f'lane-{lane}.json'
+            old_state = None
+            if state_path.exists():
+                old_state = json.loads(state_path.read_text())
+                old_meta = {key: value for key, value in old_state.items()
+                            if key not in ('status', 'missing_packets')}
+                if old_meta != meta:
+                    raise ValueError('event metadata conflicts with an existing transfer')
+            ack = {'version': 1, 'status': 'STORED', 'event_id': event,
+                   'acquisition_id': acquisition, 'server_id': server, 'lane': lane}
+            if old_state and old_state.get('status') == 'STORED':
+                send_json(sock, ack)
+                return
+            atomic_json(state_path, dict(meta, status='RECEIVING'))
             progress = {p: start for p in selected_ports}
             missing = {p: 0 for p in progress}
             stride = FRAME.size + boards * packet_bytes
@@ -216,9 +220,7 @@ class StoreReceiver:
                 raise ValueError('incomplete lane transfer')
             for fd in files.values():
                 sync_data(fd)
-            ack = {'version': 1, 'status': 'STORED', 'event_id': event,
-                   'acquisition_id': acquisition, 'server_id': server, 'lane': lane}
-            atomic_json(stored_path, dict(ack, missing_packets=missing))
+            atomic_json(state_path, dict(meta, status='STORED', missing_packets=missing))
             send_json(sock, ack)
         except Exception as error:
             print(f'receiver {address}: {error}', flush=True)

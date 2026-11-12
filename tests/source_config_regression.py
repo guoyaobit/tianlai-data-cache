@@ -77,6 +77,15 @@ def check_read_only_management_queries():
     assert "peer.sin_addr.s_addr == allowed.sin_addr.s_addr" in control
 
 
+def check_simplified_storage_state():
+    storage = read("Storage/storage_receiver.cpp")
+    assert '"lane-" + std::to_string(lane) + ".json"' in storage
+    assert 'event_directory / "event.json"' in storage
+    for old_name in ('.meta.json', '.stored.json', 'storage-complete.json',
+                     'backend-acknowledged.json'):
+        assert old_name not in storage
+
+
 def check_simulation_config():
     configs = sorted((ROOT / "F0-2").glob("server_*.yaml"))
     configs += sorted((ROOT / "F3-10").glob("server_*.yaml"))
@@ -133,6 +142,7 @@ if __name__ == "__main__":
     check_receive_logging_and_marker()
     check_receive_performance_guards()
     check_read_only_management_queries()
+    check_simplified_storage_state()
     check_simulation_config()
     check_yaml_style()
     print("source and configuration regression checks passed")
