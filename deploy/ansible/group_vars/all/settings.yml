@@ -39,6 +39,8 @@ tianlai_period_us: 200
 tianlai_integration_per_trace: 50000
 # Cache-node TCP/JSON control port.
 tianlai_control_port: 19000
+# Root cache service manager port; accepts only the controller IP.
+tianlai_cache_manager_port: 19002
 # Controller TCP/JSON port for backend requests.
 tianlai_controller_port: 18999
 # Backend TCP/JSON result port.

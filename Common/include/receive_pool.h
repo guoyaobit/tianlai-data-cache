@@ -28,7 +28,9 @@ struct PoolStatus {
     uint64_t transitionPeak = 0;
     uint64_t lastFreezeMilliseconds = 0;
     uint64_t freezeCount = 0;
+    uint64_t lastPacketAgeMilliseconds = 0;
     bool transitionWarning = false;
+    bool hasData = false;
     bool ready = false;
 };
 // One instance per receive port; its mutex protects the active receive state.

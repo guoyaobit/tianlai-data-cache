@@ -1,6 +1,5 @@
 [
-{% set active_cache_nodes = groups['cache_nodes'] | difference(tianlai_disabled_cache_nodes) | sort %}
-{% for host in active_cache_nodes %}
-  {"server_id": {{ hostvars[host].tianlai_server_id | int }}, "host": {{ hostvars[host].tianlai_control_ip | to_json }}, "port": {{ tianlai_control_port | int }}}{% if not loop.last %},{% endif %}
+{% for host in groups['cache_nodes'] | sort %}
+  {"server_id": {{ hostvars[host].tianlai_server_id | int }}, "host": {{ hostvars[host].tianlai_control_ip | to_json }}, "port": {{ tianlai_control_port | int }}, "manager_port": {{ tianlai_cache_manager_port | int }}, "enabled": {{ (host not in tianlai_disabled_cache_nodes) | to_json }}}{% if not loop.last %},{% endif %}
 {% endfor %}
 ]

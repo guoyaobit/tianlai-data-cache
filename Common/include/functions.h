@@ -3,6 +3,7 @@
 #include "receive_pool.h"
 #include "yaml_config.h"
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <map>
 #include <memory>
@@ -82,6 +83,8 @@ struct EventInfo {
     bool cancelRequested = false;
 };
 struct CacheRuntime {
+    const std::chrono::steady_clock::time_point processStarted =
+        std::chrono::steady_clock::now();
     YamlConfig *config = nullptr;
     ThreadFlags *flags = nullptr;
     bool simulation = false;
@@ -103,6 +106,7 @@ void setRuntimeState(CacheRuntime &runtime, RuntimeState state);
 void setPassiveRuntimeState(CacheRuntime &runtime);
 void noteAcceptedPacket(CacheRuntime &runtime);
 uint64_t runtimeStateAgeMilliseconds(const CacheRuntime &runtime);
+uint64_t processUptimeMilliseconds(const CacheRuntime &runtime);
 void InitRecvAntennaThread(CacheRuntime *para, unsigned port);
 void InitControlThread(CacheRuntime *para);
 void InitSendStoreThread(CacheRuntime *para);

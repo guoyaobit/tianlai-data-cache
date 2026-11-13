@@ -5,6 +5,10 @@
 #include <sstream>
 #include <stdexcept>
 
+namespace {
+constexpr uint64_t DATA_FLOW_TIMEOUT_MILLISECONDS = 2000;
+}
+
 static std::string eventJson(const EventInfo &e) {
     return "\"event_id\":" + quoteJson(e.id) + ",\"status\":" +
            quoteJson(eventStateName(e.state)) +
@@ -146,7 +150,10 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             uint64_t lossPeriods = 0;
             uint64_t lastLossPeriod = 0;
             uint64_t latePackets = 0;
+            uint64_t lastPacketAgeMilliseconds = 0;
+            unsigned receivingPorts = 0;
             std::string lostByPort = "{";
+            std::string inactivePorts = "[";
             bool transitionWarning = false;
             bool ready = para.runtimeState.load() == RuntimeState::CachingData &&
                          !isActiveEventState(para.event.state) && !para.failed;
@@ -164,6 +171,17 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                 lossPeriods += s.lossPeriods;
                 lastLossPeriod = std::max(lastLossPeriod, s.lastLossPeriod);
                 latePackets += s.late;
+                if (s.hasData)
+                    lastPacketAgeMilliseconds =
+                        std::max(lastPacketAgeMilliseconds, s.lastPacketAgeMilliseconds);
+                if (s.hasData &&
+                    s.lastPacketAgeMilliseconds <= DATA_FLOW_TIMEOUT_MILLISECONDS) {
+                    ++receivingPorts;
+                } else {
+                    if (inactivePorts.size() > 1)
+                        inactivePorts += ',';
+                    inactivePorts += std::to_string(index);
+                }
                 if (s.lost) {
                     if (lostByPort.size() > 1)
                         lostByPort += ',';
@@ -173,6 +191,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                 ready = ready && s.ready;
             }
             lostByPort += '}';
+            inactivePorts += ']';
             if (para.receiveBuffers.empty())
                 end = 0;
             ready = ready && para.initializedPorts == para.receiveBuffers.size();
@@ -183,11 +202,17 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                 status = "READY";
             else if (isActiveEventState(para.event.state))
                 status = "BUSY";
+            const char *dataFlow =
+                (!para.receiveBuffers.empty() &&
+                 receivingPorts == para.receiveBuffers.size()) ? "RECEIVING" :
+                (receivingPorts ? "PARTIAL" : "NO_DATA");
             return reply("\"status\":" + quoteJson(status) +
                          ",\"runtime_state\":" +
                          quoteJson(runtimeStateName(para.runtimeState.load())) +
                          ",\"runtime_state_age_ms\":" +
                          std::to_string(runtimeStateAgeMilliseconds(para)) +
+                         ",\"uptime_ms\":" +
+                         std::to_string(processUptimeMilliseconds(para)) +
                          ",\"accept_trigger\":" + (ready ? "true" : "false") +
                          ",\"oldest_period\":" + std::to_string(oldest) + ",\"settled_end\":" +
                          std::to_string(end) + ",\"event_id\":" + quoteJson(para.event.id) +
@@ -195,6 +220,11 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                          ",\"initialized_ports\":" + std::to_string(para.initializedPorts.load()) +
                          ",\"receive_ports\":" +
                          std::to_string(para.receiveBuffers.size()) +
+                         ",\"data_flow\":" + quoteJson(dataFlow) +
+                         ",\"receiving_ports\":" + std::to_string(receivingPorts) +
+                         ",\"last_packet_age_ms\":" +
+                         std::to_string(lastPacketAgeMilliseconds) +
+                         ",\"inactive_ports\":" + inactivePorts +
                          ",\"received_packets\":" + std::to_string(receivedPackets) +
                          ",\"lost_packets\":" + std::to_string(lostPackets) +
                          ",\"loss_periods\":" + std::to_string(lossPeriods) +

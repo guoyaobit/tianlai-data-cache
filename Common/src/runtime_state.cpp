@@ -63,3 +63,10 @@ uint64_t runtimeStateAgeMilliseconds(const CacheRuntime &runtime) {
     const auto now = monotonicMilliseconds();
     return changed && now >= changed ? now - changed : 0;
 }
+
+uint64_t processUptimeMilliseconds(const CacheRuntime &runtime) {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() -
+                                     runtime.processStarted)
+                                     .count());
+}

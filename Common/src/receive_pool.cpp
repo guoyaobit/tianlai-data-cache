@@ -114,6 +114,7 @@ uint64_t ReceiveRingBuffer::settledEndUnlocked(std::chrono::steady_clock::time_p
 }
 PoolStatus ReceiveRingBuffer::statusUnlocked() const {
     PoolStatus s;
+    const auto now = std::chrono::steady_clock::now();
     s.oldest = oldest;
     s.latest = latest;
     s.settledEnd = settledEndUnlocked();
@@ -131,6 +132,10 @@ PoolStatus ReceiveRingBuffer::statusUnlocked() const {
     s.transitionPeak = transitionPeak;
     s.lastFreezeMilliseconds = lastFreezeMilliseconds;
     s.freezeCount = freezeCount;
+    s.hasData = haveData;
+    if (haveData)
+        s.lastPacketAgeMilliseconds = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastReceive).count());
     s.transitionWarning = mode == TRANSITION &&
         s.transitionUsed * 100 >= transitionCapacity * transitionWarnPercent;
     return s;

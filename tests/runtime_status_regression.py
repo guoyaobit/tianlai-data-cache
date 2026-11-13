@@ -21,6 +21,7 @@ SENDER = (ROOT / 'Common/src/send_store.cpp').read_text(encoding='utf-8')
 STORAGE = (ROOT / 'Storage/storage_receiver.cpp').read_text(encoding='utf-8')
 SITE = (ROOT / 'deploy/ansible/site.yml').read_text(encoding='utf-8')
 UPDATE = (ROOT / 'deploy/ansible/update_software.yml').read_text(encoding='utf-8')
+TLCACHE_TASK = (ROOT / 'deploy/ansible/tasks/install_tlcache.yml').read_text(encoding='utf-8')
 
 states = (
     'PREPARING_MEMORY', 'WAITING_FOR_DATA', 'CACHING_DATA', 'PREPARING_EVENT',
@@ -37,7 +38,10 @@ assert 'para.receiveBuffers = std::move(buffers)' in APPLICATION
 assert 'noteAcceptedPacket(*para)' in RECEIVER
 assert '\\"runtime_state\\"' in EVENT
 assert '\\"runtime_state_age_ms\\"' in EVENT
+assert '\\"uptime_ms\\"' in EVENT
 assert '\\"received_packets\\"' in EVENT
+for field in ('data_flow', 'receiving_ports', 'last_packet_age_ms', 'inactive_ports'):
+    assert f'\\"{field}\\"' in EVENT
 for field in ('lost_packets', 'loss_periods', 'last_loss_period', 'late_packets',
               'lost_by_port'):
     assert f'\\"{field}\\"' in EVENT
@@ -49,16 +53,15 @@ for field in ('listeners_ready', 'active_transfers', 'completed_lane_transfers',
               'written_bytes'):
     assert field in STORAGE
 assert 'cache_status.py' in SITE and 'cache_status.py' in UPDATE
-assert SITE.count('/usr/local/bin/tlcache') == 3
-assert UPDATE.count('/usr/local/bin/tlcache') == 3
+assert SITE.count('tasks/install_tlcache.yml') == 3
+assert UPDATE.count('tasks/install_tlcache.yml') == 3
+assert '/usr/local/bin/tlcache' in TLCACHE_TASK
 assert SITE.count('/usr/local/bin/tltrigger') == 2
 assert UPDATE.count('/usr/local/bin/tltrigger') == 2
 assert 'trigger.py' in SITE
 assert 'trigger.py' in UPDATE
-assert SITE.count('path: /usr/local/bin/tianlai-status') == 3
-assert UPDATE.count('path: /usr/local/bin/tianlai-status') == 3
-assert 'cache_status.py --integration-per-trace' in SITE
-assert 'cache_status.py --integration-per-trace' in UPDATE
+assert 'path: /usr/local/bin/tianlai-status' in TLCACHE_TASK
+assert 'cache_status.py --integration-per-trace' in TLCACHE_TASK
 assert 'Install cache status tool on cache nodes' in SITE
 assert 'Update cache status tool' in UPDATE
 cache_tool = (ROOT / 'tools/cache_status.py').read_text(encoding='utf-8')
@@ -67,6 +70,9 @@ assert 'from tcp_json' not in cache_tool
 assert 'display:' in inventory and 'ansible_host: "172.0.0.61"' in inventory
 assert 'Install display-node management clients' in SITE
 assert 'Update display-node management clients' in UPDATE
+assert 'tianlai-cache-manager.service' in SITE
+assert 'tianlai-cache-manager.service' in UPDATE
+assert 'CACHE_SERVICE' in cache_tool
 
 sys.path.insert(0, str(ROOT / 'tools'))
 spec = importlib.util.spec_from_file_location('cache_status', ROOT / 'tools/cache_status.py')
@@ -83,9 +89,14 @@ table = io.StringIO()
 with redirect_stdout(table):
     module.print_table([dict(server_id=1, host='172.0.0.129',
                              runtime_state='CACHING_DATA', initialized_ports=8,
-                             receive_ports=8, event_state='IDLE', received_packets=1000,
+                             receive_ports=8, data_flow='PARTIAL', receiving_ports=7,
+                             uptime_ms=93784000,
+                             last_packet_age_ms=2200, inactive_ports=[3],
+                             event_state='IDLE', received_packets=1000,
                              lost_packets=6, late_packets=2, lost_by_port={'3': 6})])
-assert 'LOST' in table.getvalue() and '3:6' in table.getvalue()
+assert all(value in table.getvalue()
+           for value in ('UPTIME', '1d02h', 'DATA', 'PARTIAL', '7/8', '2200', '3:6'))
+assert 'RECEIVED' not in table.getvalue() and 'LATE' not in table.getvalue()
 periods = io.StringIO()
 period_results = [
     dict(server_id=0, host='172.0.0.128', runtime_state='CACHING_DATA',

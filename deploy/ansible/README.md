@@ -12,7 +12,7 @@
 - 缓存节点单个发送接口/源IP由 server ID 自动生成；清单只需填写存储100G口上的单个无标签IP。存储服务器固定使用 `enp152s0f0np0` 接收14台缓存节点的数据。不配置VLAN，数据接口不设置默认网关；管理网仍使用`tianlai_controller_ip`。
 - 数据网口不要求物理链路处于UP状态。部署会为缓存发送口、存储100G口和已识别的高速数据口设置NetworkManager `ignore-carrier`，因此光纤暂未连接时仍可写入静态IP、MTU和代码。管理网SSH必须可达，否则Ansible无法向该节点传输文件；恢复后可用 `--limit` 单独重跑失败节点。
 - 消色散后端须在`tianlai_backend_ip:tianlai_notify_port`监听TCP/JSON。存储服务从`tianlai_controller_ip`连接并发送`CAPTURE_RESULT`；后端持久化结果后在同一连接回复`ACK_RESULT`。Playbook不部署后端，也不修改相关防火墙。
-- 管理网需放通缓存节点、存储节点和显控节点→控制器TCP 18999、控制器→缓存节点TCP 19000、存储服务器→后端TCP 19001；实际端口以清单为准。
+- 管理网需放通缓存节点、存储节点和显控节点→控制器TCP 18999、控制器→缓存节点TCP 19000和管理端口19002、存储服务器→后端TCP 19001；实际端口以清单为准。19002只接受控制器IP。
 - 当前规划中状态查询和触发控制统一使用管理网：缓存节点为 `172.0.0.128～141`，控制器/存储服务器为 `172.0.0.142`。触发控制器接受所有能够连接其管理地址的来源，可从任意缓存节点、存储节点或消色散后端发送命令。消色散后端地址为 `192.168.200.10`，存储数据地址为 `192.168.210.250`，默认落盘根目录为 `/data`；部署前确认这些地址和挂载点与现场一致。
 - 显控节点`172.0.0.61`作为inventory中的`display`角色由Ansible管理。`deploy.sh`和`update_software.sh`会同时更新控制器及显控节点上的`tlcache`、`tltrigger`；显控节点不参与Netplan业务网配置。
 - 显控节点的sudo密码与服务器不同时，`deploy.sh`和`update_software.sh`会先单独提示输入显控节点密码，再由Ansible提示输入其他服务器的密码。密码只保存在当前脚本进程的环境变量中，不写入inventory或命令行。无人值守执行前可自行设置`TIANLAI_DISPLAY_BECOME_PASSWORD`。
@@ -46,7 +46,7 @@ tianlai_disabled_cache_nodes: [tianlaistore5, tianlaistore9]
 
 部署会读取每个接收PCI设备的NUMA节点，并为接收线程选择同NUMA的不同物理CPU核；默认每个NUMA节点预留第一个物理核。最终`cpuIdN`写入`server.yaml`，NUMA未知或可用物理核不足时部署停止。预留数量由`tianlai_receive_reserved_cores_per_numa`配置。
 
-首次完整部署完成后，可只更新项目源代码和程序，不修改Netplan、YAML业务配置、采集任务ID、systemd单元或系统软件包：
+首次完整部署完成后，可只更新项目源代码和程序，不修改Netplan、YAML业务配置、采集任务ID或系统软件包；为保证任意节点启停功能可直接升级，该流程会安装或更新独立的`tianlai-cache-manager.service`单元：
 
 ```bash
 bash update_software.sh
@@ -143,7 +143,7 @@ systemctl status tianlai-cache.service
 systemctl status tianlai-controller.service
 ```
 
-存储服务器、全部缓存节点和显控节点都会安装`tlcache`命令。它通过172管理网同时显示142存储服务状态，以及全部缓存节点的运行阶段、接收口、事件、累计收包、缺包、迟到包及按端口缺包统计：
+存储服务器、全部缓存节点和显控节点都会安装`tlcache`命令。它通过172管理网同时显示142存储服务状态，以及全部缓存节点的当前收数状态、活跃接收口数、最后收包年龄、无数据端口和累计缺包。`RECEIVING`表示所有口在2秒内有数据，`PARTIAL`表示部分口断流，`NO_DATA`表示全部端口断流：
 
 ```bash
 tlcache
@@ -151,13 +151,14 @@ tlcache --watch 2
 tlcache period
 ```
 
+在存储服务器、任意缓存节点或显控节点均可直接执行`tlcache start all`、`tlcache stop 1-3`和`tlcache restart 2,5-7`。命令由142控制器并行转发到各缓存节点的`tianlai-cache-manager.service`，不再运行Ansible、SSH或sudo；停止和重启前检查活动事件并要求确认。Ansible只负责安装、更新并启动这个轻量管理服务。
+
 节点管理查询端口先于大内存分配启动，所以汇总工具能显示`PREPARING_MEMORY`；也可在相应节点执行`journalctl -u tianlai-cache.service -f`查看完整状态切换日志。
 
-从Ansible master启动全部缓存节点：
+从Ansible主节点启动全部缓存节点：
 
 ```bash
-ansible cache_nodes -i inventory.yml --become --ask-become-pass \
-  -m systemd -a "name=tianlai-cache.service state=started"
+tlcache start all
 ```
 
 分别在对应机器执行上述命令，并按[部署与联调手册](../../DEPLOYMENT_GUIDE.md)检查 14 台收包、计数同步、触发、落盘、缺包、通知和真实吞吐。服务启动不等于缓存已 READY，也不表示真实设备验收通过。

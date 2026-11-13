@@ -19,7 +19,7 @@ SITE = (ROOT / 'deploy/ansible/site.yml').read_text(encoding='utf-8')
 
 assert 'tianlai_disabled_cache_nodes: []' in SETTINGS
 assert 'tianlai_disabled_cache_nodes: []' in INVENTORY
-assert "difference(tianlai_disabled_cache_nodes)" in NODES
+assert '"enabled": {{ (host not in tianlai_disabled_cache_nodes)' in NODES
 assert "tianlai_disabled_cache_nodes | length > 0" in SERVICE
 assert '--allow-partial' in SERVICE
 service_lines = SERVICE.splitlines()

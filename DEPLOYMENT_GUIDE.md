@@ -120,15 +120,27 @@ cd F0-2
 tlcache
 tlcache --watch 2
 tlcache period
+tlcache start all
+tlcache stop 1-3
+tlcache restart 2,5-7
 ```
 
-`tlcache`可在存储服务器、任意缓存节点或显控节点执行。它始终先通过142控制器显示存储服务状态，随后显示各缓存节点的运行阶段、累计收包、累计缺包、迟到包和按端口缺包统计；`LOSS_PORTS`中的`3:6`表示端口3累计缺6包。`tlcache period`也会显示存储状态，然后列出每个节点的`oldest/settled_end/latest`以及最新周期对应的`trace/integration`，最后给出全部启用节点的共同可触发范围。详细JSON可通过`tlcache --json`查看。计数从缓存进程启动开始，进程重启后清零。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发；也可在对应缓存节点通过`journalctl -u tianlai-cache.service -f`查看标准化的`Runtime state:`日志。
+`tlcache`可在存储服务器、任意缓存节点或显控节点执行状态查询。它先显示存储服务状态，再显示缓存节点当前是否在收数据。`UPTIME`以秒、分、小时或天显示缓存进程本次启动后的运行时间。`DATA`为`RECEIVING`表示所有接收口在2秒内有数据，`PARTIAL`表示只有部分口有数据，`NO_DATA`表示所有口均已超过2秒未见数据。`RX_PORTS`显示活跃口数/总口数，`AGE_MS`是最久未收到数据的已启动端口时长，`NO_DATA_PORTS`直接列出无数据端口。主表不再显示累计收包和迟到包，保留累计缺包；`LOSS_PORTS`中的`3:6`表示端口3累计缺6包。`tlcache period`列出每个节点的周期范围及全部启用节点的共同可触发范围。累计计数仍保留在`tlcache --json`中供排障。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发。
+
+多节点服务启停可在存储服务器、任意缓存节点或显控节点执行。目标支持`all`、逗号和范围；命令经142控制器并行调用各缓存节点上独立运行的root管理服务，不在运行时调用Ansible、SSH或sudo。管理服务只接受142控制器地址，控制器只接受存储节点、缓存节点和显控节点发起的启停命令。停止或重启会先拒绝涉及未完成事件的操作并要求一次确认；自动化可加`--yes`，只有人工确认可以丢弃活动事件时才加`--force`：
+
+```bash
+tlcache start all
+tlcache stop 1-3
+tlcache restart 2,5-7
+tlcache stop all --yes
+```
 
 显控节点`172.0.0.61`也可查询全部节点。它在inventory中属于`display`组，由`deploy.sh`统一安装`tlcache`、`tltrigger`和节点清单，并由`update_software.sh`一并更新；部署不会修改显控节点网卡配置。
 
 显控节点使用不同的sudo密码。运行统一部署或更新脚本时，先输入`tianlaiview`的sudo密码，再在Ansible提示中输入其他服务器的sudo密码；两种密码均不写入仓库。
 
-脚本使用`ubuntu`账户并通过SSH交互认证，不保存密码。部署后在显控节点执行`tlcache`、`tlcache --watch 2`或`tlcache period`。
+脚本使用`ubuntu`账户并通过SSH交互认证，不保存密码。部署后在显控节点可执行`tlcache`、`tlcache --watch 2`、`tlcache period`以及缓存服务启停命令。
 
 每个接收线程会打印第一条成功解析的UDP数据头，包括`packet_id`、板卡号、trace/integration周期和长度；随后再打印第一条实际写入环形缓冲区的数据。如果ixcap已经收到帧但以太网/IPv4/UDP解析失败，会打印首个失败帧的长度，便于区分“没有流量”和“帧格式不匹配”。
 

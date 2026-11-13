@@ -137,23 +137,25 @@
         src: "{{ playbook_dir }}/../../tools/{{ item }}"
         dest: "{{ tianlai_root }}/tools/{{ item }}"
         mode: '0755'
-      loop: [cache_status.py]
+      loop: [cache_status.py, cache_manager.py, durable_json.py, tcp_json.py]
+    - name: Install cache service manager unit during software update
+      ansible.builtin.template:
+        src: templates/cache-manager.service.j2
+        dest: /etc/systemd/system/tianlai-cache-manager.service
+        mode: '0644'
+    - name: Restart cache service manager with updated code
+      ansible.builtin.systemd:
+        name: tianlai-cache-manager.service
+        daemon_reload: true
+        enabled: true
+        state: restarted
     - name: Update receive-NIC ixgbe restore helper
       ansible.builtin.copy:
         src: files/rebind_ixgbe.sh
         dest: /usr/local/sbin/tianlai-rebind-ixgbe
         mode: '0755'
-    - name: Remove old status command from cache nodes
-      ansible.builtin.file:
-        path: /usr/local/bin/tianlai-status
-        state: absent
-    - name: Install short cache command on cache nodes
-      ansible.builtin.copy:
-        dest: /usr/local/bin/tlcache
-        mode: '0755'
-        content: |
-          #!/bin/sh
-          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
+    - name: Update tlcache on cache nodes
+      ansible.builtin.include_tasks: tasks/install_tlcache.yml
     - name: Build updated cache program
       ansible.builtin.command:
         argv:
@@ -273,17 +275,8 @@
             state: absent
     - name: Apply safe controller permissions
       ansible.builtin.include_tasks: tasks/install_permissions.yml
-    - name: Remove old status command
-      ansible.builtin.file:
-        path: /usr/local/bin/tianlai-status
-        state: absent
-    - name: Install short cache command
-      ansible.builtin.copy:
-        dest: /usr/local/bin/tlcache
-        mode: '0755'
-        content: |
-          #!/bin/sh
-          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
+    - name: Update tlcache on controller
+      ansible.builtin.include_tasks: tasks/install_tlcache.yml
     - name: Update tltrigger command
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../tools/trigger.py"
@@ -309,17 +302,8 @@
         dest: "{{ tianlai_root }}/tools/{{ item }}"
         mode: '0755'
       loop: [cache_status.py, trigger.py]
-    - name: Remove old status command from display node
-      ansible.builtin.file:
-        path: /usr/local/bin/tianlai-status
-        state: absent
-    - name: Update tlcache command
-      ansible.builtin.copy:
-        dest: /usr/local/bin/tlcache
-        mode: '0755'
-        content: |
-          #!/bin/sh
-          exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
+    - name: Update tlcache on display node
+      ansible.builtin.include_tasks: tasks/install_tlcache.yml
     - name: Update tltrigger command
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../tools/trigger.py"

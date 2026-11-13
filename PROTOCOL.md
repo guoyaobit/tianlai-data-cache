@@ -76,8 +76,11 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
 | QUERY_EVENT | event_id | 查询事件准备/传输/完成状态 |
 | QUERY_STATUS | channel_count、server_ids（均可选） | 查询指定节点共同的可用时间范围和 accept_trigger |
 | QUERY_STORAGE | 无 | 查询142节点上存储服务的运行状态，供任意节点的`tlcache`使用 |
+| CACHE_SERVICE | action、server_ids、force | 从受管管理节点并行启动、停止或重启指定缓存服务 |
 | RESUME | event_id | 对 PAUSED 事件查询节点实际状态后继续 |
 | CANCEL | event_id | 明确放弃已暂停事件；正在发送的节点不能直接取消 |
+
+缓存服务启停命令只允许存储节点、缓存节点和显控节点的管理IP发起。控制器再连接目标节点TCP 19002上的root管理服务；该端口只接受控制器IP，并且只支持固定的START、STOP、RESTART和STATUS动作，不执行任意命令。
 
 流程：PREPARING → PREPARED → STORING → STORED → RELEASING → COMPLETED；任何不确定的失败转 PAUSED。
 进入STORING前，所选节点必须全部PREPARED；进入RELEASING前，所选节点必须全部STORED。
@@ -117,14 +120,14 @@ PREPARE使用标量`server_mask`携带本次参与节点位图，并只向所选
 | QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、过渡区峰值和 error |
 | RELEASE | event_id | 只有该节点全部接收口数据可靠落盘后，即 STORED 状态，才允许释放冻结区 |
 | CANCEL | event_id | 未发送或发送失败时放弃事件；PREPARING 时延后安全释放 |
-| QUERY_STATUS | 无 | READY/BUSY/WARMING、runtime_state、状态持续时间、接收口数量、累计收包、共同周期范围及过渡区指标等 |
+| QUERY_STATUS | 无 | READY/BUSY/WARMING、runtime_state、当前数据流、活跃/无数据端口、共同周期范围及过渡区指标等 |
 | QUERY_PORT | port | 单口周期范围、收包计数、过渡区占用/容量/峰值/警告、最近冻结耗时和冻结次数 |
 
 节点主要状态：PREPARING → PREPARED → SENDING → STORED → RELEASED。
 发送失败为 SEND_FAILED，仍保护数据；准备失败为 REJECTED；明确取消为 CANCELLED。
 释放后历史不足时节点 QUERY_STATUS 返回 WARMING，而不是 READY。
 
-`runtime_state`描述进程当前工作阶段，与事件状态分开：`PREPARING_MEMORY`、`WAITING_FOR_DATA`、`CACHING_DATA`、`PREPARING_EVENT`、`EVENT_READY`、`SENDING_CACHED_DATA`、`STORAGE_CONFIRMED`、`SEND_FAILED`、`ERROR`和`STOPPING`。节点响应同时包含`runtime_state_age_ms`、`initialized_ports/receive_ports`、`received_packets`以及进程启动以来的`lost_packets`、`loss_periods`、`last_loss_period`、`late_packets`和`lost_by_port`。`loss_periods`按端口-周期累计；进程重启后这些运行计数清零。控制器`QUERY_STATUS`用`node_runtime_states`和`runtime_state_counts`汇总所选节点。
+`runtime_state`描述进程当前工作阶段，与事件状态分开：`PREPARING_MEMORY`、`WAITING_FOR_DATA`、`CACHING_DATA`、`PREPARING_EVENT`、`EVENT_READY`、`SENDING_CACHED_DATA`、`STORAGE_CONFIRMED`、`SEND_FAILED`、`ERROR`和`STOPPING`。节点响应同时包含进程运行时间`uptime_ms`、`runtime_state_age_ms`、`initialized_ports/receive_ports`、`data_flow`、`receiving_ports`、`last_packet_age_ms`和`inactive_ports`。`data_flow`按2秒无数据阈值返回`RECEIVING`、`PARTIAL`或`NO_DATA`；`last_packet_age_ms`是已收到过数据的端口中最大的最后收包年龄。详细响应仍保留`received_packets`以及进程启动以来的`lost_packets`、`loss_periods`、`last_loss_period`、`late_packets`和`lost_by_port`。`loss_periods`按端口-周期累计；进程重启后这些运行计数清零。控制器`QUERY_STATUS`用`node_runtime_states`和`runtime_state_counts`汇总所选节点。
 
 存储服务将本机实时状态写入`statusFile`（部署默认`/run/tianlai-storage-status.json`）。状态包括`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`和`STOPPING`；文件还包含监听端点、活动传输、完成/中止lane、累计写入字节及最近错误。状态文件是监控信息，不代替lane持久化状态或事件级`event.json`。
 

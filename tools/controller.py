@@ -65,6 +65,26 @@ def rpc(node, acquisition, command, *, timeout=.25, retries=RPC_ATTEMPTS, **fiel
     raise TimeoutError(f"server {node['server_id']}: TCP request timeout")
 
 
+def manager_rpc(node, action):
+    """Ask one root cache-manager service to perform a fixed systemd action."""
+    request = dict(version=1, request_id=uuid.uuid4().hex, action=action)
+    body = json.dumps(request, separators=(',', ':')).encode()
+    peer = (socket.gethostbyname(node['host']), node.get('manager_port', 19002))
+    try:
+        with socket.create_connection(peer, timeout=3) as connection:
+            connection.settimeout(90)
+            send_frame(connection, body)
+            reply = parse_request(receive_frame(connection))
+        if reply.get('request_id') != request['request_id']:
+            raise ValueError('cache manager request ID mismatch')
+        return dict(server_id=node['server_id'], status=reply.get('status', 'ERROR'),
+                    service_state=reply.get('service_state', 'unknown'),
+                    error=str(reply.get('error', ''))[:80])
+    except Exception as error:
+        return dict(server_id=node['server_id'], status='ERROR',
+                    service_state='unknown', error=str(error)[:80])
+
+
 class ReplayCache:
     """Return the same reply for a retried backend request with the same request ID."""
     def __init__(self, capacity=REPLAY_MAX_ENTRIES, ttl=REPLAY_TTL_SECONDS):
@@ -107,7 +127,7 @@ def backend_reply(controller, data, peer, cache):
         cached = cache.get(peer, request_id, digest)
         if cached is not None:
             return cached
-        reply = controller.dispatch(message)
+        reply = controller.dispatch(message, peer)
     except Exception as error:
         if str(error) == 'REQUEST_ID_CONFLICT':
             cacheable = False
@@ -125,21 +145,37 @@ def backend_reply(controller, data, peer, cache):
 class Controller:
     def __init__(self, nodes, acquisition, journal, allow_partial=False,
                  integration_per_trace=50000, period_microseconds=200,
-                 storage_status='/run/tianlai-storage-status.json'):
+                 storage_status='/run/tianlai-storage-status.json', admin_sources=()):
         def valid_node(node):
             return (isinstance(node, dict) and type(node.get('server_id')) is int and
                     0 <= node['server_id'] <= 13 and isinstance(node.get('host'), str) and
                     0 < len(node['host']) <= 255 and
                     type(node.get('port', 19000)) is int and
-                    1024 <= node.get('port', 19000) <= 65535)
+                    1024 <= node.get('port', 19000) <= 65535 and
+                    type(node.get('manager_port', 19002)) is int and
+                    1024 <= node.get('manager_port', 19002) <= 65535 and
+                    type(node.get('enabled', True)) is bool)
         if (not isinstance(nodes, list) or not nodes or not all(map(valid_node, nodes)) or
                 len({n['server_id'] for n in nodes}) != len(nodes) or
                 len({(n['host'], n.get('port', 19000)) for n in nodes}) != len(nodes) or
+                len({(n['host'], n.get('manager_port', 19002)) for n in nodes}) != len(nodes) or
                 not ID.fullmatch(acquisition)):
             raise ValueError('invalid node list/acquisition ID')
-        self.nodes = sorted(nodes, key=lambda n: n['server_id'])
+        configured_nodes = sorted(nodes, key=lambda n: n['server_id'])
+        self.nodes = [node for node in configured_nodes if node.get('enabled', True)]
+        self.all_nodes = list(configured_nodes)
+        if allow_partial:
+            configured_ids = {node['server_id'] for node in configured_nodes}
+            self.all_nodes.extend(
+                dict(server_id=server_id, host=f'172.0.0.{128 + server_id}',
+                     port=19000, manager_port=19002, enabled=False)
+                for server_id in range(14) if server_id not in configured_ids)
+            self.all_nodes.sort(key=lambda node: node['server_id'])
+        self.admin_sources = (set(admin_sources) |
+                              {node['host'] for node in self.all_nodes} |
+                              {'172.0.0.61', '172.0.0.142'})
         self.allow_partial = allow_partial
-        if not allow_partial and {n['server_id'] for n in nodes} != set(range(14)):
+        if not allow_partial and {n['server_id'] for n in self.nodes} != set(range(14)):
             raise ValueError('production requires all 14 nodes; use allow_partial only for testing')
         if (type(integration_per_trace) is not int or not 1 <= integration_per_trace <= (1 << 23) or
                 type(period_microseconds) is not int or not 1 <= period_microseconds <= 1000000 or
@@ -213,6 +249,46 @@ class Controller:
         """Restore the exact participant set persisted with an event."""
         return self.event_nodes(event.get('channel_count', 384),
                                 event.get('participating_server_ids'))
+
+    def manage_cache_services(self, message, peer):
+        """Fan out a fixed service action to selected cache-manager agents."""
+        if peer is None or peer[0] not in self.admin_sources:
+            raise PermissionError('cache service control is not allowed from this source')
+        action = message.get('action')
+        server_ids = message.get('server_ids')
+        force = message.get('force', False)
+        if (action not in ('START', 'STOP', 'RESTART') or
+                not isinstance(server_ids, list) or not server_ids or
+                any(type(value) is not int for value in server_ids) or
+                len(set(server_ids)) != len(server_ids) or type(force) is not bool):
+            raise ValueError('invalid cache service request')
+        by_id = {node['server_id']: node for node in self.all_nodes}
+        if not set(server_ids) <= set(by_id):
+            raise ValueError('unknown cache server ID')
+        if action in ('STOP', 'RESTART') and not force:
+            selected = set(server_ids)
+            with self.lock:
+                active = []
+                for event in self.events.values():
+                    participants = event.get('participating_server_ids')
+                    if participants is None:
+                        participants = range(11 if event.get('channel_count', 384) == 288 else 14)
+                    if (event.get('status') not in ('COMPLETED', 'CANCELLED') and
+                            selected.intersection(participants)):
+                        active.append(event)
+            if active:
+                names = ','.join(event['event_id'] for event in active)
+                raise RuntimeError(f'active events prevent cache service operation: {names}')
+        nodes = [by_id[server_id] for server_id in sorted(server_ids)]
+        with ThreadPoolExecutor(max_workers=len(nodes)) as workers:
+            results = list(workers.map(lambda node: manager_rpc(node, action), nodes))
+        node_states = {}
+        for result in results:
+            state = dict(status=result['status'], state=result['service_state'])
+            if result.get('error'):
+                state['error'] = result['error'][:60]
+            node_states[str(result['server_id'])] = state
+        return dict(status='OK', action=action, nodes=node_states)
 
     def parallel(self, command, nodes=None, **fields):
         """Run one idempotent command on all selected nodes and report every failure."""
@@ -391,7 +467,7 @@ class Controller:
             with self.lock:
                 self.running = None
 
-    def dispatch(self, message):
+    def dispatch(self, message, peer=None):
         """Handle backend trigger, query, recovery, and cancellation requests."""
         if type(message.get('version')) is not int or message['version'] != 1:
             raise ValueError('version/acquisition mismatch')
@@ -400,6 +476,8 @@ class Controller:
         if 'acquisition_id' not in message:
             message = dict(message, acquisition_id=self.acquisition)
         command = message['command']
+        if command == 'CACHE_SERVICE':
+            return self.manage_cache_services(message, peer)
         if command == 'QUERY_STORAGE':
             return dict(status='READY', storage=self.query_storage())
         if command == 'CAPTURE':
@@ -472,10 +550,12 @@ def main():
     parser.add_argument('--allow-partial', action='store_true', help='allow fewer than 14 nodes for testing only')
     parser.add_argument('--integration-per-trace', type=int, default=50000)
     parser.add_argument('--period-us', type=int, default=200)
+    parser.add_argument('--admin-source', action='append', default=[],
+                        help='management IPv4 allowed to start or stop cache services')
     args = parser.parse_args()
     controller = Controller(json.loads(Path(args.nodes).read_text()), args.acquisition, args.journal,
                             allow_partial=args.allow_partial, integration_per_trace=args.integration_per_trace,
-                            period_microseconds=args.period_us)
+                            period_microseconds=args.period_us, admin_sources=args.admin_source)
     replay = ReplayCache()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

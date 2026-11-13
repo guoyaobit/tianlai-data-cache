@@ -1,0 +1,14 @@
+[Unit]
+Description=Tianlai cache service manager {{ tianlai_server_id }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{ tianlai_root }}/tools
+ExecStart=/usr/bin/python3 {{ tianlai_root }}/tools/cache_manager.py --bind {{ tianlai_control_ip }} --port {{ tianlai_cache_manager_port }} --controller {{ tianlai_controller_ip }}
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

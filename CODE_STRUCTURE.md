@@ -14,6 +14,8 @@
 | `F11-13/` | 远端服务器 11～13 的程序入口、构建文件和配置，每台 4 个接收口。 |
 | `tools/controller.py` | 触发控制器，协调缓存节点保护、发送和释放事件。 |
 | `tools/trigger.py` | 发送触发和查询等控制请求的工具。 |
+| `tools/cache_status.py` | `tlcache`状态查询及多节点缓存服务启停客户端。 |
+| `tools/cache_manager.py` | 缓存节点root管理服务，只接受142控制器发来的固定systemd动作。 |
 | `Storage/` | C++ 存储端 ZeroMQ 接收、数据校验和持久化服务。 |
 | `Storage/storage.yaml` | C++存储服务示例配置，定义单100G口单IP、28个lane端点及后端通知。 |
 | `tools/store_receiver.py`、`tools/zmq_transport.py` | 仅供发送端故障恢复回归测试使用，不随 Ansible 部署。 |
