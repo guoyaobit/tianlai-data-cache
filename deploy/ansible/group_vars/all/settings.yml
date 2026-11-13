@@ -4,6 +4,8 @@
 ansible_user: ubuntu
 # Install root on target servers.
 tianlai_root: /opt/tianlai-store
+# Compiler jobs used independently on each target host.
+tianlai_build_jobs: 4
 # MTU applied to physical interfaces faster than 1 Gb/s.
 tianlai_jumbo_mtu: 9000
 # 1001 includes 2.5/10/25/40/100 GbE and excludes 1 GbE.

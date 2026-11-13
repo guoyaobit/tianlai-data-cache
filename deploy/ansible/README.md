@@ -46,11 +46,13 @@ tianlai_disabled_cache_nodes: [tianlaistore5, tianlaistore9]
 
 部署会读取每个接收PCI设备的NUMA节点，并为接收线程选择同NUMA的不同物理CPU核；默认每个NUMA节点预留第一个物理核。最终`cpuIdN`写入`server.yaml`，NUMA未知或可用物理核不足时部署停止。预留数量由`tianlai_receive_reserved_cores_per_numa`配置。
 
-首次完整部署完成后，可只更新项目源代码和程序，不修改Netplan、YAML业务配置、采集任务ID或系统软件包；为保证任意节点启停功能可直接升级，该流程会安装或更新独立的`tianlai-cache-manager.service`单元：
+首次完整部署完成后，可只更新项目源代码和程序，不修改Netplan、缓存节点YAML、采集任务ID或系统软件包；存储端`storage.yaml`会随落盘程序同步，确保通知地址、监听端口和节点列表保持一致。为保证任意节点启停功能可直接升级，该流程会安装或更新独立的`tianlai-cache-manager.service`单元：
 
 ```bash
 bash update_software.sh
 ```
+
+部署默认最多并行处理20台主机；缓存节点各自推进，不等待较慢节点完成同一步骤。每台目标主机默认使用4个编译线程，可在`group_vars/all/settings.yml`中将`tianlai_build_jobs`调整为1～16。现场直接运行`bash deploy.sh`或`bash update_software.sh`即可，不需要设置并发环境变量。
 
 该命令更新并编译缓存程序和C++落盘程序，同时更新Python控制器，以及控制器/显控节点上的`tlcache`、`tltrigger`。更新前正在运行的服务会在程序替换后恢复运行；原本停止的服务保持停止。先更新单台缓存服务器可执行 `bash update_software.sh --limit tianlaistore1`；只更新显控节点可使用`--limit display`，只更新存储/控制器可使用 `--limit storage` 或 `--limit controller`。使用INI清单时执行 `TIANLAI_INVENTORY=inventory.ini bash update_software.sh`。
 

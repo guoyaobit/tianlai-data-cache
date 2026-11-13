@@ -20,6 +20,8 @@
           - tianlai_storage_directory is match('^/[^ ]+$')
           - "'CHANGE_ME' not in tianlai_storage_directory"
           - tianlai_root is match('^/[^ ]+$')
+          - tianlai_build_jobs | int >= 1
+          - tianlai_build_jobs | int <= 16
           - tianlai_period_us | int > 0
           - 1000000 % (tianlai_period_us | int) == 0
           - tianlai_integration_per_trace | int > 0
@@ -105,6 +107,7 @@
   hosts: "cache_nodes:storage:controller:display"
   gather_facts: false
   become: true
+  strategy: free
   tasks:
     - name: Install network diagnostic packages
       ansible.builtin.include_tasks: tasks/network_tools.yml
@@ -189,7 +192,7 @@
       notify: restart storage
     - name: Build storage receiver
       ansible.builtin.command:
-        argv: [make, -j2]
+        argv: [make, "-j{{ tianlai_build_jobs }}"]
         chdir: "{{ tianlai_root }}/src/Storage"
       environment:
         LC_ALL: C
@@ -243,6 +246,7 @@
 - name: Build and install cache nodes
   hosts: cache_nodes
   become: true
+  strategy: free
   tasks:
     - name: Set node build profile
       ansible.builtin.set_fact:
@@ -402,7 +406,7 @@
           library: "{{ tianlai_ixcap_library_path }}"
     - name: Build node for this profile
       ansible.builtin.command:
-        argv: [make, -j2, production, "PROFILE={{ tianlai_profile }}", "IXCAP_INCLUDE={{ tianlai_ixcap_include_effective }}", "IXCAP_LIB={{ tianlai_ixcap_lib_effective }}"]
+        argv: [make, "-j{{ tianlai_build_jobs }}", production, "PROFILE={{ tianlai_profile }}", "IXCAP_INCLUDE={{ tianlai_ixcap_include_effective }}", "IXCAP_LIB={{ tianlai_ixcap_lib_effective }}"]
         chdir: "{{ tianlai_root }}/src"
       environment:
         LC_ALL: C

@@ -23,7 +23,7 @@
       loop: [Makefile, storage_receiver.cpp]
     - name: Build updated storage receiver
       ansible.builtin.command:
-        argv: [make, -j2]
+        argv: [make, "-j{{ tianlai_build_jobs }}"]
         chdir: "{{ tianlai_root }}/src/Storage"
       environment:
         LC_ALL: C
@@ -31,6 +31,11 @@
       changed_when: >-
         'Nothing to be done' not in storage_update_build.stdout and
         'is up to date' not in storage_update_build.stdout
+    - name: Update storage receiver configuration
+      ansible.builtin.template:
+        src: templates/storage.yaml.j2
+        dest: "{{ tianlai_root }}/config/storage.yaml"
+        mode: '0640'
     - name: Validate updated storage receiver
       ansible.builtin.command:
         argv:
@@ -71,6 +76,7 @@
   hosts: cache_nodes
   gather_facts: false
   become: true
+  strategy: free
   tasks:
     - name: Select cache-node build profile
       ansible.builtin.set_fact:
@@ -160,7 +166,7 @@
       ansible.builtin.command:
         argv:
           - make
-          - -j2
+          - "-j{{ tianlai_build_jobs }}"
           - production
           - "PROFILE={{ tianlai_profile }}"
           - "IXCAP_INCLUDE={{ tianlai_ixcap_include }}"

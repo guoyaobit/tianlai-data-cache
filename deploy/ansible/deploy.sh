@@ -16,6 +16,7 @@ if [[ ! -f "$inventory" ]]; then
 fi
 ansible-inventory -i "$inventory" --list >/dev/null
 ansible-playbook -i "$inventory" --syntax-check site.yml
+echo "Parallel deployment enabled; build jobs are configured by tianlai_build_jobs."
 
 # The display host uses a different sudo password. Keep it out of files and argv.
 if [[ -z "${TIANLAI_DISPLAY_BECOME_PASSWORD:-}" ]]; then

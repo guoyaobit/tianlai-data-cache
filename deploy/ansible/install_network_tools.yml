@@ -3,6 +3,7 @@
   hosts: "cache_nodes:storage:controller:display"
   gather_facts: false
   become: true
+  strategy: free
   tasks:
     - name: Install network diagnostic packages
       ansible.builtin.include_tasks: tasks/network_tools.yml
