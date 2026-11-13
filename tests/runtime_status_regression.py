@@ -78,9 +78,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 spec = importlib.util.spec_from_file_location('cache_status', ROOT / 'tools/cache_status.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-assert module.STATE_TEXT['PREPARING_MEMORY'] == '准备内存'
-assert module.STATE_TEXT['SENDING_CACHED_DATA'] == '发送缓存数据'
-assert module.STATE_TEXT['RECEIVING_AND_WRITING'] == '接收并写盘'
+assert 'STATE_TEXT' not in vars(module)
 assert module.DEFAULT_STORAGE_HOST == '172.0.0.142'
 assert module.DEFAULT_STORAGE_CONTROL_PORT == 18999
 assert 'QUERY_STORAGE' in (ROOT / 'tools/cache_status.py').read_text(encoding='utf-8')

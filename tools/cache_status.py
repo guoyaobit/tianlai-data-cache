@@ -82,24 +82,6 @@ def send_frame(connection, body):
         raise ValueError('invalid TCP JSON frame length')
     connection.sendall(LENGTH.pack(len(body)) + body)
 
-STATE_TEXT = {
-    'STARTING': '启动中',
-    'PREPARING_MEMORY': '准备内存',
-    'WAITING_FOR_DATA': '等待接收数据',
-    'CACHING_DATA': '缓存数据中',
-    'PREPARING_EVENT': '准备触发数据',
-    'EVENT_READY': '触发数据已准备',
-    'SENDING_CACHED_DATA': '发送缓存数据',
-    'STORAGE_CONFIRMED': '存储已确认',
-    'SEND_FAILED': '发送失败',
-    'ERROR': '程序错误',
-    'STOPPING': '停止中',
-    'OFFLINE': '无法连接',
-    'RECEIVING_AND_WRITING': '接收并写盘',
-    'NOTIFYING_BACKEND': '通知消色散后端',
-}
-
-
 def query(node, acquisition, timeout):
     request = dict(version=1, request_id=uuid.uuid4().hex,
                    acquisition_id=acquisition, command='QUERY_STATUS')
@@ -253,7 +235,7 @@ def print_storage(status):
     state = status.get('state', 'OFFLINE')
     listeners = f"{status.get('listeners_ready', 0)}/{status.get('listener_count', 0)}"
     print('STORAGE')
-    print(f"  state={state} ({STATE_TEXT.get(state, '未知状态')}) "
+    print(f"  state={state} "
           f"listeners={listeners} active_transfers={status.get('active_transfers', 0)} "
           f"completed_lanes={status.get('completed_lane_transfers', 0)} "
           f"written_bytes={status.get('written_bytes', 0)}")
