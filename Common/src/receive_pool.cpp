@@ -268,7 +268,15 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
         else
             dst = bank[0].get();
     } else if (p < anchor) {
-        dst = bank[1 - firstBank].get();
+        // A period received while the event was protected may live in either
+        // bank. Keep late packets in that same slot after RELEASE instead of
+        // splitting one period across A/B and reporting false packet loss.
+        if (bank[0]->header(p).absolutePeriod == p)
+            dst = bank[0].get();
+        else if (bank[1]->header(p).absolutePeriod == p)
+            dst = bank[1].get();
+        else
+            dst = bank[1 - firstBank].get();
     } else {
         dst = bank[(firstBank + (p - anchor) / half) % 2].get();
     }
