@@ -1,6 +1,7 @@
 #include "receive_pool.h"
 #include "log_output.h"
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <stdexcept>
 #include <thread>
@@ -42,12 +43,15 @@ struct ReceiveRingBuffer::Buffer {
     unsigned packetsPerBoard;
     unsigned char *data;
     std::vector<RcvFrameHeader> headers;
+    std::unique_ptr<std::atomic<uint64_t>[]> periodTags;
     std::vector<BoardBuffer> boardViews;
     Buffer(unsigned char *address, size_t count, size_t frameBytes,
            unsigned packetSlots, unsigned packetsPerPhysicalBoard, size_t packetBytes)
         : capacity(count), stride(frameBytes), packetSize(packetBytes),
           packetsPerBoard(packetsPerPhysicalBoard),
-          data(address), headers(count) {
+          data(address), headers(count), periodTags(new std::atomic<uint64_t>[count]) {
+        for (size_t i = 0; i < count; ++i)
+            periodTags[i].store(INVALID_PERIOD, std::memory_order_relaxed);
         const unsigned physicalBoards = packetSlots / packetsPerBoard;
         boardViews.reserve(physicalBoards);
         for (unsigned board = 0; board < physicalBoards; ++board)
@@ -59,6 +63,9 @@ struct ReceiveRingBuffer::Buffer {
     }
     const RcvFrameHeader &header(uint64_t p) const {
         return headers[p % capacity];
+    }
+    uint64_t periodTag(uint64_t p) const {
+        return periodTags[p % capacity].load(std::memory_order_relaxed);
     }
     unsigned char *frame(uint64_t p) {
         return data + (p % capacity) * stride;
@@ -77,6 +84,8 @@ struct ReceiveRingBuffer::Buffer {
     }
     void reset() {
         std::fill(headers.begin(), headers.end(), RcvFrameHeader{});
+        for (size_t i = 0; i < capacity; ++i)
+            periodTags[i].store(INVALID_PERIOD, std::memory_order_relaxed);
     }
 };
 ReceiveRingBuffer::ReceiveRingBuffer(unsigned index, size_t h, size_t t, size_t maxEvent,
@@ -281,8 +290,10 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
         dst = bank[(firstBank + (p - anchor) / half) % 2].get();
     }
     auto &h = dst->header(p);
-    if (h.absolutePeriod != p)
+    if (h.absolutePeriod != p) {
         h = {p, 0, ifTrace};
+        dst->periodTags[p % dst->capacity].store(p, std::memory_order_relaxed);
+    }
     if (h.ifTrace != ifTrace) {
         ++conflicting;
         return false;
@@ -327,22 +338,16 @@ void ReceiveRingBuffer::beginFreeze(uint64_t start, uint64_t count) {
         consolidated = false;
         mode = SINGLE;
     }
-    // Record ownership in small lock slices. Event slots are already protected,
-    // while receive threads can run between slices without one long pause.
-    constexpr uint64_t slicePeriods = 256;
-    for (uint64_t offset = 0; offset < count; offset += slicePeriods) {
-        const uint64_t end = std::min<uint64_t>(count, offset + slicePeriods);
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            for (uint64_t i = offset; i < end; ++i) {
-                const uint64_t p = start + i;
-                if (bank[0]->header(p).absolutePeriod == p)
-                    eventBanks[i] = 0;
-                else if (bank[1]->header(p).absolutePeriod == p)
-                    eventBanks[i] = 1;
-            }
-        }
-        std::this_thread::yield();
+    // Period tags are atomic snapshots. Event slots are already protected, so
+    // ownership can be recorded without taking the receive mutex again.
+    for (uint64_t i = 0; i < count; ++i) {
+        const uint64_t p = start + i;
+        if (bank[0]->periodTag(p) == p)
+            eventBanks[i] = 0;
+        else if (bank[1]->periodTag(p) == p)
+            eventBanks[i] = 1;
+        if ((i & 4095U) == 4095U)
+            std::this_thread::yield();
     }
 }
 // Publish the already protected event. No payload data is copied here.
