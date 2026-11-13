@@ -103,10 +103,10 @@ cd F0-2
 
    此处地址为示例。控制器内部固定使用`tianlai`，外部请求不填写采集编号。控制器和落盘服务是同机的两个独立进程：控制器走管理网，落盘服务走高速数据网。控制器默认 `--period-us 200 --integration-per-trace 50000`，须与所有节点对应配置一致；程序不会自动验证此一致性。生产默认必须配置 0～13 全部节点；`--allow-partial` 只用于模拟或部分节点联调。不要启动两个控制器同时管理相同节点。
 
-4. 消色散后端通过TCP/JSON监听19001，接收C++存储程序发来的写盘完成通知，并在同一连接回复确认。先在存储服务器执行`ip route get 192.168.200.10`确认实际`src`地址，再在后端启动可持久化通知的接收器：
+4. 需要主动通知时，消色散后端通过TCP/JSON监听自选端口，并在`CAPTURE`中用`result_port`声明。控制器使用触发连接的真实来源IP，不配置固定后端IP。后端可启动持久化通知接收器：
 
    ```bash
-   python3 tools/result_listener.py --bind 192.168.200.10 --port 19001 \
+   python3 tools/result_listener.py --bind 0.0.0.0 --port 19001 \
      --allow-source STORAGE_SOURCE_IP --journal /data/tianlai-completions
    ```
 

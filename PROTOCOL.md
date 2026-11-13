@@ -59,11 +59,12 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
   "channel_count": 288,
   "server_ids": [0, 1, 2],
   "start": {"trace_period_id": 120, "integration_period_id": 45000},
-  "period_count": 15000
+  "period_count": 15000,
+  "result_port": 19001
 }
 ```
 
-示例以288路模式从节点0～2保存3秒，包含`(120,45000)`到`(121,9999)`，不包含`(121,10000)`。
+示例以288路模式从节点0～2保存3秒，包含`(120,45000)`到`(121,9999)`，不包含`(121,10000)`。`result_port`可选；提供时，控制器使用当前TCP连接的真实来源IP作为完成通知地址，不接受报文指定回调IP。省略时不主动回调，通过`QUERY_EVENT`查询完成状态。
 `channel_count`只能为288或384：288允许节点0～10，384允许节点0～13。可选的`server_ids`为不重复的内部节点编号列表；省略时使用该模式的全部节点。同一`event_id`不能改变通道数或参与节点。命令行工具的`--servers 1,2,3`使用更直观的服务器标签编号，并转换为内部`[0,1,2]`。
 
 也可用 `"duration_ms":3000` 代替 `"period_count":15000`；**必须且只能提供其中一个**。毫秒时长须为正整数，换算后恰好是整数个积分周期；例如默认 200 微秒时，1 毫秒为 5 个周期。最大时长 50 秒；节点若配置更小的 `maxEventSeconds` 则按节点限制拒绝。控制器将请求规范化为 `period_count`，因此相同事件 ID、起点和等价长度可以重传，范围变化则冲突。
@@ -72,7 +73,7 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
 
 | command | 额外字段 | 含义 |
 |---|---|---|
-| CAPTURE | event_id、channel_count、server_ids（可选）、start、period_count | 创建事件，通知指定节点保护数据 |
+| CAPTURE | event_id、channel_count、server_ids（可选）、start、period_count、result_port（可选） | 创建事件；可将完成结果返回触发来源IP |
 | QUERY_EVENT | event_id | 查询事件准备/传输/完成状态 |
 | QUERY_STATUS | channel_count、server_ids（均可选） | 查询指定节点共同的可用时间范围和 accept_trigger |
 | QUERY_STORAGE | 无 | 查询142节点上存储服务的运行状态，供任意节点的`tlcache`使用 |
@@ -107,7 +108,7 @@ C++存储服务根据事件元数据中的服务器选择掩码，确认本次�
 {"version":1,"command":"ACK_RESULT","status":"ACKNOWLEDGED","event_id":"event-000001"}
 ```
 
-存储服务连接后端默认TCP 19001，在同一连接发送长度前缀JSON并等待ACK_RESULT。`backendBindAddress=0.0.0.0`时由系统路由选择源地址，也可显式填写存储服务器上能到达后端的本地IPv4。确认报文的命令、状态和事件编号匹配后，将同一个`event.json`中的`backend_acknowledged`原子更新为`true`；为兼容旧后端，ACK若携带`acquisition_id`则必须为`tianlai`。超时、断线或重启后，存储服务会从`event.json`继续建立新连接重试，因此后端必须按事件编号处理重复通知。`tools/result_listener.py`是可直接部署的单文件接收器，它按`event_id`持久化并同步结果后才确认。控制器不再转发完成通知，也不处理`ACK_RESULT`。若事件暂停，仍通过控制器的`QUERY_EVENT`查询并按`RESUME`或`CANCEL`处理。
+提供`result_port`时，存储服务连接触发请求的真实来源IP和该端口，在同一连接发送长度前缀JSON并等待ACK_RESULT；后端IP无需预先配置。`resultBindAddress=0.0.0.0`时由系统路由选择源地址。确认报文匹配后，将同一个`event.json`中的`backend_acknowledged`原子更新为`true`。超时、断线或重启后继续重试，因此后端必须按事件编号处理重复通知。省略`result_port`时不建立回调连接，`backend_acknowledged`直接记为`true`，调用方通过`QUERY_EVENT`查询状态。
 
 ### 控制器 → 节点（默认 TCP 19000）
 

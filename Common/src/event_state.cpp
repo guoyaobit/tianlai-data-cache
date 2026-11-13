@@ -1,6 +1,7 @@
 #include "functions.h"
 #include "log_output.h"
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <sstream>
 #include <stdexcept>
@@ -14,6 +15,8 @@ static std::string eventJson(const EventInfo &e) {
            quoteJson(eventStateName(e.state)) +
            ",\"channel_count\":" + std::to_string(e.channelCount) +
            ",\"server_mask\":" + std::to_string(e.serverMask) +
+           ",\"result_address\":" + quoteJson(e.resultAddress) +
+           ",\"result_port\":" + std::to_string(e.resultPort) +
            ",\"start_period\":" + std::to_string(e.start) +
            ",\"period_count\":" + std::to_string(e.count) +
            ",\"missing_packets\":" + std::to_string(e.missing) +
@@ -290,12 +293,22 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             const unsigned modeNodes = channels == 288 ? 11U : 14U;
             const uint64_t modeMask = (uint64_t(1) << modeNodes) - 1;
             uint64_t serverMask = hasField(msg, "server_mask") ? getNumber(msg, "server_mask") : modeMask;
+            const std::string resultAddress = hasField(msg, "result_address") ?
+                msg.get<std::string>("result_address") : "";
+            const uint64_t resultPort = hasField(msg, "result_port") ?
+                getNumber(msg, "result_port") : 0;
             uint64_t epochEnd = (1ULL << 20) * para.config->integrationPerTrace;
             if (channels != 288 && channels != 384)
                 throw std::runtime_error("INVALID_CHANNEL_COUNT");
             if (channels == 288 && para.config->serverId >= 11)
                 throw std::runtime_error("CHANNEL_MODE_EXCLUDES_NODE");
+            const bool validResultAddress = resultAddress.size() <= 15 &&
+                std::all_of(resultAddress.begin(), resultAddress.end(),
+                            [](unsigned char c) { return std::isdigit(c) || c == '.'; });
             if (!serverMask || (serverMask & ~modeMask) ||
+                (resultPort != 0 && (resultPort < 1024 || resultPort > 65535)) ||
+                !validResultAddress ||
+                (resultAddress.empty() != (resultPort == 0)) ||
                 !(serverMask & (uint64_t(1) << para.config->serverId)))
                 throw std::runtime_error("INVALID_SERVER_SELECTION");
             if (trace >= (1ULL << 20) || integration >= para.config->integrationPerTrace ||
@@ -311,7 +324,8 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                 existing = &para.history.at(id);
             if (existing) {
                 if (existing->start != start || existing->count != count ||
-                    existing->channelCount != channels || existing->serverMask != serverMask)
+                    existing->channelCount != channels || existing->serverMask != serverMask ||
+                    existing->resultAddress != resultAddress || existing->resultPort != resultPort)
                     throw std::runtime_error("EVENT_ID_CONFLICT");
                 return reply(eventJson(*existing));
             }
@@ -336,6 +350,8 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             para.event.id = id;
             para.event.channelCount = static_cast<unsigned>(channels);
             para.event.serverMask = static_cast<unsigned>(serverMask);
+            para.event.resultAddress = resultAddress;
+            para.event.resultPort = static_cast<unsigned>(resultPort);
             para.event.start = start;
             para.event.count = count;
             para.event.state = EventState::Preparing;

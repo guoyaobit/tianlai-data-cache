@@ -21,6 +21,4 @@ receivers:  # Both logical lanes terminate on the same physical interface and IP
     allowedSource: {{ hostvars[host].tianlai_send_ip | to_json }}
 {% endfor %}
 {% endfor %}
-backendAddress: {{ tianlai_backend_ip | to_json }}  # Dedispersion backend IP for completion notices.
-backendPort: {{ tianlai_notify_port | int }}  # Backend TCP/JSON port for CAPTURE_RESULT.
-backendBindAddress: {{ tianlai_backend_bind_ip | to_json }}  # Local source; 0.0.0.0 follows routing.
+resultBindAddress: {{ tianlai_result_bind_ip | to_json }}  # Local source; 0.0.0.0 follows routing.

@@ -56,7 +56,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 - 缓存程序以`Runtime state:`日志和`QUERY_STATUS.runtime_state`公开当前阶段；存储程序通过142控制器的只读`QUERY_STORAGE`公开监听、接收写盘及后端通知状态。部署后可在任意缓存、存储或显控节点运行`tlcache --watch 2`；主表优先显示`RECEIVING/PARTIAL/NO_DATA`、当前活跃接收口和无数据端口，不再显示累计收包数。`tlcache period`查询积分周期。任意上述节点均可用`tlcache start all`、`tlcache stop 1-3`或`tlcache restart 2,5-7`并行管理缓存服务，不再依赖运行时Ansible或sudo密码。
 - 显控节点为`172.0.0.61`，使用`ubuntu`账户，并作为inventory中的`display`角色由Ansible统一管理。全量部署和软件更新会同时更新其`tlcache`、`tltrigger`及节点清单，不修改显控节点网络配置。
 
-节点 YAML 的 `controlBindIp` 使用 `172.0.0.128～141`（server 0～13 对应 tianlaistore1～14），控制器/存储服务器管理地址为 `172.0.0.142`。状态查询和触发控制统一走该172管理网；消色散后端地址为 `192.168.200.10`，存储数据网地址为 `192.168.210.250`。当前配置统一使用 YAML。
+节点 YAML 的 `controlBindIp` 使用 `172.0.0.128～141`（server 0～13 对应 tianlaistore1～14），控制器/存储服务器管理地址为 `172.0.0.142`。状态查询和触发控制统一走该172管理网；消色散后端IP不固定，完成回调使用触发连接的来源IP；存储数据网地址为 `192.168.210.250`。当前配置统一使用 YAML。
 程序在正式启动时拒绝未填写的 PCI 地址或发送接口。
 
 ```bash

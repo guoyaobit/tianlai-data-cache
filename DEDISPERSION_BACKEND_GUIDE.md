@@ -95,25 +95,31 @@ tltrigger
 
 ## 接收存储完成通知
 
-缓存事件完成后，存储服务器会连接配置的消色散后端TCP 19001端口，发送`CAPTURE_RESULT`。消息格式为4字节网络序JSON长度，后接UTF-8 JSON对象，例如：
+需要主动完成通知时，触发请求增加`"result_port":19001`。控制器自动使用触发TCP连接的真实来源IP，存储服务器完成写盘后连接该IP和端口发送`CAPTURE_RESULT`，无需配置固定后端IP。省略该字段时使用`tltrigger EVENT_ID`或`QUERY_EVENT`查询结果。
+
+命令行触发并要求主动通知：
+
+```bash
+tltrigger capture 3 --result-port 19001
+```
 
 仓库中的`tools/result_listener.py`是单文件接收器，只依赖Python 3。先在存储服务器确认连接后端时使用的源地址：
 
 可从项目根目录将该单文件复制到后端：
 
 ```bash
-scp tools/result_listener.py ubuntu@192.168.200.10:~/result_listener.py
+scp tools/result_listener.py ubuntu@BACKEND_HOST:~/result_listener.py
 ```
 
 ```bash
-ip route get 192.168.200.10
+ip route get BACKEND_IP
 ```
 
 记下输出中的`src`IPv4，然后在消色散后端启动：
 
 ```bash
 python3 result_listener.py \
-  --bind 192.168.200.10 \
+  --bind 0.0.0.0 \
   --port 19001 \
   --allow-source STORAGE_SOURCE_IP \
   --journal /data/tianlai-completions
@@ -157,5 +163,5 @@ ss -lntp | grep ':19001'
 - `BUSY_OR_WARMING`：至少一个参与节点尚未缓存足够数据、没有收数，或存在未完成事件。
 - `cache is not ready for a trigger`：先运行`tltrigger`，根据节点状态排查。
 - `PAUSED`：不要创建新事件；先查询该事件并由运维人员执行恢复或取消。
-- `completion TCP connect failed`：数据可能已经落盘，但存储服务器无法连接后端TCP 19001端口。确认后端拥有配置IP、`ss`显示正在监听、防火墙放行存储源地址，并从存储服务器执行`nc -vz 192.168.200.10 19001`。
+- `completion TCP connect failed`：数据可能已经落盘，但存储服务器无法连接本次触发来源IP的`result_port`。确认接收器正在监听，并从存储服务器执行`nc -vz BACKEND_IP 19001`。
 - 命令断开或超时：事件可能仍在后台执行，使用打印出的`event_id`查询，不要直接使用新编号重复触发。

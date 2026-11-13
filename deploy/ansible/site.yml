@@ -14,8 +14,7 @@
           - ansible_user | default('') == 'ubuntu'
           - tianlai_controller_ip is match('^[0-9.]+$')
           - tianlai_controller_ip == hostvars[groups['storage'][0]].ansible_host
-          - tianlai_backend_ip is match('^[0-9.]+$')
-          - tianlai_backend_bind_ip is match('^[0-9.]+$')
+          - tianlai_result_bind_ip is match('^[0-9.]+$')
           - tianlai_storage_ip is match('^[0-9.]+$')
           - tianlai_storage_directory is match('^/[^ ]+$')
           - "'CHANGE_ME' not in tianlai_storage_directory"
@@ -25,8 +24,6 @@
           - tianlai_period_us | int > 0
           - 1000000 % (tianlai_period_us | int) == 0
           - tianlai_integration_per_trace | int > 0
-          - tianlai_notify_port | int >= 1
-          - tianlai_notify_port | int <= 65535
           - tianlai_storage_port | int >= 1
           - tianlai_storage_port | int <= 65535
           - (tianlai_storage_port | int) + 13 <= 65535

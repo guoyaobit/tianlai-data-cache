@@ -72,10 +72,11 @@ inline bool isActiveEventState(EventState state) {
 }
 
 struct EventInfo {
-    std::string id, error;
+    std::string id, error, resultAddress;
     EventState state = EventState::Idle;
     unsigned channelCount = 384;
     unsigned serverMask = (1U << 14) - 1;
+    unsigned resultPort = 0;
     uint64_t start = 0, count = 0, missing = 0, sentBytes = 0;
     uint64_t freezeMilliseconds = 0, sendMilliseconds = 0;
     uint64_t transitionPeakPeriods = 0, transitionCapacityPeriods = 0;

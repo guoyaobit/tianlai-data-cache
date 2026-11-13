@@ -105,6 +105,8 @@ def create_parser():
                          help=argparse.SUPPRESS)
     capture.add_argument('--servers', type=parse_servers,
                          help='cache servers, for example 1,2,5-7 (default: all)')
+    capture.add_argument('--result-port', type=int, default=0,
+                         help='receive CAPTURE_RESULT on this local TCP port')
     capture.add_argument('--wait', action='store_true',
                          help='wait until the event completes or needs attention')
     capture.add_argument('--interval', type=float, default=2,
@@ -187,6 +189,10 @@ def capture_request(arguments):
                    duration_ms=arguments.seconds * 1000)
     if arguments.servers is not None:
         request['server_ids'] = arguments.servers
+    if arguments.result_port:
+        if not 1024 <= arguments.result_port <= 65535:
+            raise ValueError('result port must be between 1024 and 65535')
+        request['result_port'] = arguments.result_port
     return request
 
 

@@ -344,7 +344,7 @@ class Controller:
                 dict(trace_period_id=end // self.integration_per_trace,
                      integration_period_id=end % self.integration_per_trace))
 
-    def submit(self, message, resume=False):
+    def submit(self, message, resume=False, peer=None):
         """Deduplicate by event ID, persist the job, and start background scheduling."""
         event_id = message['event_id']
         if not ID.fullmatch(event_id):
@@ -354,11 +354,20 @@ class Controller:
         if not resume:
             selected_nodes = self.event_nodes(channel_count, message.get('server_ids'))
         normalized = None if resume else self.capture_range(message)
+        result_port = 0 if resume else message.get('result_port', 0)
+        if not resume and (type(result_port) is not int or
+                           result_port != 0 and not 1024 <= result_port <= 65535):
+            raise ValueError('result_port must be 0 or between 1024 and 65535')
+        if result_port and peer is None:
+            raise ValueError('result callback requires a TCP peer')
+        result_address = '' if not result_port else peer[0]
         with self.lock:
             existing = self.events.get(event_id)
             if existing and not resume:
                 if (existing['start'] != normalized[0] or existing['period_count'] != normalized[1] or
                         existing.get('channel_count', 384) != channel_count or
+                        existing.get('result_address', '') != result_address or
+                        existing.get('result_port', 0) != result_port or
                         existing.get('participating_server_ids') !=
                         [node['server_id'] for node in selected_nodes]):
                     raise ValueError('EVENT_ID_CONFLICT')
@@ -378,6 +387,7 @@ class Controller:
                     channel_count=channel_count,
                     period_microseconds=self.period_microseconds, integration_per_trace=self.integration_per_trace,
                     status='PREPARING', active_server_ids=[],
+                    result_address=result_address, result_port=result_port,
                     partial_node_set=len(participant_ids) != expected_count,
                     participating_server_ids=participant_ids)
             self.running = event_id
@@ -399,7 +409,9 @@ class Controller:
             states = self.parallel('PREPARE', nodes=nodes, event_id=event_id,
                                    start=event['start'], period_count=event['period_count'],
                                    channel_count=event.get('channel_count', 384),
-                                   server_mask=server_mask)
+                                    server_mask=server_mask,
+                                    result_address=event.get('result_address', ''),
+                                    result_port=event.get('result_port', 0))
             missing_by_server = dict(event.get('missing_by_server', {}))
             for index, (node, state) in enumerate(zip(nodes, states)):
                 if state['status'] == 'PREPARING':
@@ -481,9 +493,9 @@ class Controller:
         if command == 'QUERY_STORAGE':
             return dict(status='READY', storage=self.query_storage())
         if command == 'CAPTURE':
-            return self.submit(message)
+            return self.submit(message, peer=peer)
         if command == 'RESUME':
-            return self.submit(message, resume=True)
+            return self.submit(message, resume=True, peer=peer)
         if command == 'QUERY_EVENT':
             with self.lock:
                 return dict(self.events[message['event_id']])

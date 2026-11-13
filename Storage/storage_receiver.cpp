@@ -335,6 +335,9 @@ class EventWriter {
             integer(metadata, "server_mask") : mode_mask;
         start = integer(metadata, "start_period"); count = integer(metadata, "period_count");
         per_trace = integer(metadata, "integration_per_trace"); auto period_us = integer(metadata, "period_microseconds");
+        const auto result_address = metadata.at("result_address").get<std::string>();
+        const auto result_port = integer(metadata, "result_port");
+        in_addr result_ipv4{};
         require(integer(metadata, "version") == 1 && metadata.at("format") == "TLSTORE1" &&
                 (channels == 288 || channels == 384) &&
                 node < (channels == 288 ? 11U : CACHE_NODE_COUNT) && lane_value < LANE_COUNT &&
@@ -343,7 +346,11 @@ class EventWriter {
                 1000000 % period_us == 0 && per_trace >= 1 && per_trace <= 0x800000 &&
                 start < (1ULL << 20) * per_trace && count >= 1 &&
                 count <= MAX_EVENT_MICROSECONDS / period_us &&
-                start + count <= (1ULL << 20) * per_trace, "invalid stream metadata");
+                start + count <= (1ULL << 20) * per_trace &&
+                ((result_port == 0 && result_address.empty()) ||
+                 (result_port >= 1024 && result_port <= 65535 &&
+                  ::inet_pton(AF_INET, result_address.c_str(), &result_ipv4) == 1)),
+                "invalid stream metadata");
         server = static_cast<unsigned>(node);
         lane = static_cast<unsigned>(lane_value);
         require((expected_server == UINT_MAX || server == expected_server) &&
@@ -585,7 +592,7 @@ static std::optional<json> build_completion_notice(
             if (server != first_server || lane != 0) {
                 for (const char *field : {"format", "acquisition_id", "event_id", "start_period",
                                           "period_count", "integration_per_trace", "period_microseconds",
-                                          "channel_count"})
+                                          "channel_count", "result_address", "result_port"})
                     require(state->at(field) == first.at(field), "node event metadata mismatch");
             }
             const auto &by_port = state->at("missing_packets");
@@ -614,6 +621,8 @@ static std::optional<json> build_completion_notice(
                                       {"integration_period_id", end % per_trace}}},
                    {"period_count", count}, {"period_microseconds", integer(first, "period_microseconds")},
                    {"integration_per_trace", per_trace}, {"missing_by_server", missing},
+                   {"result_address", first.at("result_address")},
+                   {"result_port", first.at("result_port")},
                    {"partial_node_set", participating_servers.size() != complete_node_count},
                    {"participating_server_ids", participating_servers}};
     const auto path = event_directory / "event.json";
@@ -622,7 +631,8 @@ static std::optional<json> build_completion_notice(
         state.erase("backend_acknowledged");
         require(state == notice, "stored event result conflicts");
     } else {
-        auto state = notice; state["backend_acknowledged"] = false;
+        auto state = notice;
+        state["backend_acknowledged"] = integer(notice, "result_port") == 0;
         atomic_json(path, state);
     }
     return notice;
@@ -642,6 +652,9 @@ static bool connect_pending() {
     const int error = WSAGetLastError();
     return error == WSAEWOULDBLOCK || error == WSAEINPROGRESS;
 }
+static std::runtime_error tcp_connect_error(const std::string &operation) {
+    return std::runtime_error(operation + ": error=" + std::to_string(WSAGetLastError()));
+}
 #else
 using TcpSocket = int;
 static constexpr TcpSocket INVALID_TCP_SOCKET = -1;
@@ -651,6 +664,9 @@ static bool set_nonblocking(TcpSocket socket) {
     return flags >= 0 && fcntl(socket, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 static bool connect_pending() { return errno == EINPROGRESS; }
+static std::runtime_error tcp_connect_error(const std::string &operation) {
+    return system_error(operation);
+}
 #endif
 
 static bool wait_tcp(TcpSocket socket, bool writable) {
@@ -698,8 +714,7 @@ static void tcp_receive_all(TcpSocket socket, unsigned char *data, size_t size) 
 
 class CompletionNotifier {
     fs::path root;
-    std::string target_address, source_address;
-    unsigned target_port;
+    std::string source_address;
     std::vector<unsigned> expected_servers;
     StorageRuntimeStatus &runtime;
     std::mutex mutex;
@@ -709,6 +724,10 @@ class CompletionNotifier {
     std::thread worker;
 
     bool send(const fs::path &event_directory, const json &notice) {
+        const auto target_address = notice.at("result_address").get<std::string>();
+        const auto target_port = integer(notice, "result_port");
+        require(!target_address.empty() && target_port >= 1024 && target_port <= 65535,
+                "invalid event result endpoint");
         TcpSocket socket = ::socket(AF_INET, SOCK_STREAM, 0);
         if (socket == INVALID_TCP_SOCKET) throw std::runtime_error("completion TCP socket creation failed");
         try {
@@ -726,7 +745,9 @@ class CompletionNotifier {
             require(set_nonblocking(socket), "completion TCP nonblocking setup failed");
             const int connected = ::connect(socket, reinterpret_cast<const sockaddr *>(&target),
                                             sizeof(target));
-            require(connected == 0 || connect_pending(), "completion TCP connect failed");
+            if (connected != 0 && !connect_pending())
+                throw tcp_connect_error("completion TCP connect to " + target_address + ':' +
+                                        std::to_string(target_port));
             if (connected != 0) {
                 require(wait_tcp(socket, true), "completion TCP connect timeout");
                 int error = 0;
@@ -795,7 +816,7 @@ class CompletionNotifier {
                         }
                     }
                     auto notice = build_completion_notice(event.path(), expected_servers);
-                    if (notice) {
+                    if (notice && integer(*notice, "result_port") != 0) {
                         runtime.notificationStarted();
                         try {
                             send(event.path(), *notice);
@@ -836,10 +857,10 @@ class CompletionNotifier {
     }
 
   public:
-    CompletionNotifier(fs::path base, std::string target, unsigned port, std::string source,
+    CompletionNotifier(fs::path base, std::string source,
                        std::vector<unsigned> servers, StorageRuntimeStatus &status)
-        : root(std::move(base)), target_address(std::move(target)), source_address(std::move(source)),
-          target_port(port), expected_servers(std::move(servers)), runtime(status),
+        : root(std::move(base)), source_address(std::move(source)),
+          expected_servers(std::move(servers)), runtime(status),
           worker(&CompletionNotifier::run, this) {}
     ~CompletionNotifier() {
         { std::lock_guard<std::mutex> lock(mutex); stopped = true; }
@@ -979,7 +1000,6 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
 static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &endpoints,
                   unsigned io_threads, const std::vector<unsigned> &expected_servers,
                   const fs::path &status_file,
-                  const std::string &notify_address, unsigned notify_port,
                   const std::string &notify_bind) {
     void *context = zmq_ctx_new();
     if (!context) throw std::runtime_error("ZeroMQ context creation failed");
@@ -989,7 +1009,7 @@ static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &end
     }
     Shared shared;
     StorageRuntimeStatus runtime(status_file, static_cast<unsigned>(endpoints.size()));
-    CompletionNotifier notifier(root, notify_address, notify_port, notify_bind, expected_servers,
+    CompletionNotifier notifier(root, notify_bind, expected_servers,
                                 runtime);
     std::atomic<bool> shutdown{false};
     std::mutex error_mutex;
@@ -1036,8 +1056,8 @@ static void serve(const fs::path &root, const std::vector<ReceiverEndpoint> &end
 #ifndef STORAGE_RECEIVER_NO_MAIN
 struct StorageConfig {
     fs::path directory, status_file;
-    std::string backend_address, backend_bind_address;
-    unsigned backend_port = 0, io_threads = 2;
+    std::string result_bind_address;
+    unsigned io_threads = 2;
     std::vector<ReceiverEndpoint> receivers;
     std::vector<unsigned> expected_servers;
 };
@@ -1067,16 +1087,14 @@ static void require_yaml_keys(const YAML::Node &node, std::initializer_list<cons
 static StorageConfig load_storage_config(const fs::path &path) {
     const auto root = YAML::LoadFile(path.string());
     require_yaml_keys(root, {"directory", "ioThreads", "expectedServerIds", "receivers",
-                             "backendAddress", "backendPort", "backendBindAddress"},
+                             "resultBindAddress"},
                       "root", {"statusFile"});
     StorageConfig config;
     config.directory = root["directory"].as<std::string>();
     config.status_file = root["statusFile"] ? root["statusFile"].as<std::string>()
                                               : "/run/tianlai-storage-status.json";
     config.io_threads = root["ioThreads"].as<unsigned>();
-    config.backend_address = root["backendAddress"].as<std::string>();
-    config.backend_port = root["backendPort"].as<unsigned>();
-    config.backend_bind_address = root["backendBindAddress"].as<std::string>();
+    config.result_bind_address = root["resultBindAddress"].as<std::string>();
     const auto expected_servers = root["expectedServerIds"];
     require(expected_servers.IsSequence() && expected_servers.size() >= 1 &&
             expected_servers.size() <= CACHE_NODE_COUNT, "invalid expectedServerIds");
@@ -1119,10 +1137,8 @@ static StorageConfig load_storage_config(const fs::path &path) {
     in_addr parsed{};
     require(config.directory.is_absolute() && config.status_file.is_absolute() &&
                 config.io_threads >= 1 && config.io_threads <= 32 &&
-                ::inet_pton(AF_INET, config.backend_address.c_str(), &parsed) == 1 &&
-                ::inet_pton(AF_INET, config.backend_bind_address.c_str(), &parsed) == 1 &&
-                config.backend_port >= 1 && config.backend_port <= 65535,
-            "invalid storage path, bind address or backend endpoint");
+                ::inet_pton(AF_INET, config.result_bind_address.c_str(), &parsed) == 1,
+            "invalid storage path or result callback source address");
     for (const auto &receiver : config.receivers)
         require(::inet_pton(AF_INET, receiver.address.c_str(), &parsed) == 1 &&
                     ::inet_pton(AF_INET, receiver.allowed_source.c_str(), &parsed) == 1,
@@ -1146,16 +1162,13 @@ int main(int argc, char **argv) {
                 std::cout << "server " << receiver.server << " lane " << receiver.lane << ": "
                           << receiver.address << ':' << receiver.port << " <- "
                           << receiver.allowed_source << '\n';
-            std::cout << "backend TCP: " << config.backend_bind_address << " -> "
-                      << config.backend_address << ':' << config.backend_port << '\n';
+            std::cout << "result callback source: " << config.result_bind_address << '\n';
             return 0;
         }
         fs::create_directories(config.directory);
         std::signal(SIGINT, stop_handler); std::signal(SIGTERM, stop_handler);
         serve(config.directory, config.receivers, config.io_threads, config.expected_servers,
-              config.status_file,
-              config.backend_address, config.backend_port,
-              config.backend_bind_address);
+              config.status_file, config.result_bind_address);
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "[FATAL] " << error.what() << '\n';

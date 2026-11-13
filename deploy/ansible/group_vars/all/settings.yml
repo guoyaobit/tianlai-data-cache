@@ -29,10 +29,8 @@ tianlai_cache_send_prefix_length: 24
 tianlai_storage_prefix_length: 24
 # Controller management IP on the storage server.
 tianlai_controller_ip: 172.0.0.142
-# Backend IP for triggers and completion notices.
-tianlai_backend_ip: 192.168.200.10
-# Local source for backend notices; 0.0.0.0 follows routing.
-tianlai_backend_bind_ip: 0.0.0.0
+# Local source for result callbacks; 0.0.0.0 follows routing.
+tianlai_result_bind_ip: 0.0.0.0
 # Data IP on the storage server's 100 GbE interface.
 tianlai_storage_ip: 192.168.210.250
 # Event path under the mounted storage directory.
@@ -47,8 +45,6 @@ tianlai_control_port: 19000
 tianlai_cache_manager_port: 19002
 # Controller TCP/JSON port for backend requests.
 tianlai_controller_port: 18999
-# Backend TCP/JSON result port.
-tianlai_notify_port: 19001
 # First ZeroMQ/TCP storage data port.
 tianlai_storage_port: 20000
 # First lane-1 ZeroMQ/TCP storage port.

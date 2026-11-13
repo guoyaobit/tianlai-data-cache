@@ -153,7 +153,7 @@ def check_yaml_style():
         assert "backend:" not in text, path
         keys = (
             "directory:", "statusFile:", "ioThreads:", "expectedServerIds:", "receivers:",
-            "backendAddress:", "backendPort:", "backendBindAddress:",
+            "resultBindAddress:",
         )
         for key in keys:
             assert re.search(rf"^{key}", text, re.MULTILINE), (path, key)

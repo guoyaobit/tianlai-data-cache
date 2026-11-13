@@ -61,7 +61,7 @@ def find_port_range(count):
     raise RuntimeError('no contiguous TCP port range available')
 
 
-def send_event(context, port, root, server, lane):
+def send_event(context, port, root, server, lane, result_port):
     remote = server >= 11
     ports, boards, packet_bytes = ((8, 36, 2320) if server < 3 else
                                   (4, 24, 8272) if remote else (4, 18, 8848))
@@ -70,7 +70,7 @@ def send_event(context, port, root, server, lane):
                 server_id=server, lane=lane, channel_count=384, port_count=ports,
                 ports=list(range(lane, ports, 2)), start_period=100,
                 period_count=1, integration_per_trace=100, period_microseconds=10000,
-                packet_bytes=packet_bytes)
+                packet_bytes=packet_bytes, result_address='127.0.0.1', result_port=result_port)
     if remote:
         meta.update(profile='remote96', packets_per_board=2, physical_board_count=12,
                     frequency_bins_per_port=86, total_valid_frequencies=1024, fft_per_packet=12)
@@ -144,7 +144,6 @@ def main():
         if args.test_cli:
             command = [str(binary), '--directory', str(root), '--bind', '127.0.0.1',
                        '--port', str(port), '--receiver-count', str(port_count),
-                       '--notify-address', '127.0.0.1', '--notify-port', str(notify_port),
                        '--notify-bind', '127.0.0.1']
         else:
             config = root / 'storage.yaml'
@@ -159,8 +158,7 @@ def main():
                 f'statusFile: "{(root / "storage-status.json").as_posix()}"\nioThreads: 2\n'
                 f'expectedServerIds: {list(range(14))}\n'
                 f'receivers:\n{receivers}\n'
-                f'backendAddress: "127.0.0.1"\nbackendPort: {notify_port}\n'
-                'backendBindAddress: "127.0.0.1"\n', encoding='utf-8')
+                'resultBindAddress: "127.0.0.1"\n', encoding='utf-8')
             command = [str(binary), '--config', str(config)]
         process = subprocess.Popen(command,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -185,7 +183,7 @@ def main():
             assert status['listeners_ready'] == status['listener_count'] == 28
             with ThreadPoolExecutor(max_workers=28) as pool:
                 futures = [pool.submit(send_event, context, port + lane * 14 + server,
-                                       root, server, lane)
+                                       root, server, lane, notify_port)
                            for server in range(14) for lane in range(2)]
                 for future in futures:
                     future.result(timeout=60)
@@ -225,7 +223,7 @@ def main():
             assert status['written_bytes'] > 0 and status['active_transfers'] == 0
             # A lost node-side final reply now returns the durable result at metadata,
             # without clearing the completion marker or rewriting the files.
-            send_event(context, port + 3, root, 3, 0)
+            send_event(context, port + 3, root, 3, 0, notify_port)
         finally:
             process.terminate()
             try:
