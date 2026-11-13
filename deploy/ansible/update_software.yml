@@ -273,6 +273,16 @@
           ansible.builtin.file:
             path: "{{ controller_update_temp.path }}"
             state: absent
+    - name: Create controller documentation directory
+      ansible.builtin.file:
+        path: "{{ tianlai_root }}/docs"
+        state: directory
+        mode: '0750'
+    - name: Update controller copy of the backend guide
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../DEDISPERSION_BACKEND_GUIDE.md"
+        dest: "{{ tianlai_root }}/docs/DEDISPERSION_BACKEND_GUIDE.md"
+        mode: '0640'
     - name: Apply safe controller permissions
       ansible.builtin.include_tasks: tasks/install_permissions.yml
     - name: Update tlcache on controller
@@ -302,6 +312,16 @@
         dest: "{{ tianlai_root }}/tools/{{ item }}"
         mode: '0755'
       loop: [cache_status.py, trigger.py]
+    - name: Create display documentation directory
+      ansible.builtin.file:
+        path: "{{ tianlai_root }}/docs"
+        state: directory
+        mode: '0750'
+    - name: Update display copy of the backend guide
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../DEDISPERSION_BACKEND_GUIDE.md"
+        dest: "{{ tianlai_root }}/docs/DEDISPERSION_BACKEND_GUIDE.md"
+        mode: '0640'
     - name: Update tlcache on display node
       ansible.builtin.include_tasks: tasks/install_tlcache.yml
     - name: Update tltrigger command

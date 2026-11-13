@@ -14,6 +14,10 @@ import trigger
 
 
 def main():
+    assert trigger.normalize_arguments([]) == ['status']
+    assert trigger.normalize_arguments(['3']) == ['capture', '3', '--wait']
+    assert trigger.normalize_arguments(['3', '--wait']) == ['capture', '3', '--wait']
+    assert trigger.normalize_arguments(['event-example']) == ['event', 'event-example']
     simple = trigger.create_parser().parse_args(['capture', '3', '--channels', '288'])
     with patch('trigger.transmit', return_value=dict(
             status='READY', accept_trigger=True, oldest_period=100000,

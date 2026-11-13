@@ -38,8 +38,8 @@ struct PoolStatus {
 // board owns two adjacent slots, one for each FFT half.
 //
 // Normal: A and B hold two consecutive halfPeriods of rolling data.
-// beginFreeze: redirect incoming packets to the bounded transition buffer.
-// finishFreeze: consolidate the event into one bank; use the other for live input.
+// beginFreeze: protect event slots in place; live input uses the other bank slot.
+// finishFreeze: publish the protected event without copying its payload.
 // release: after durable storage or cancellation, resume A/B rolling reception.
 // Event intervals are [start, start + count); settledEnd is also exclusive.
 class ReceiveRingBuffer {
@@ -69,8 +69,7 @@ class ReceiveRingBuffer {
     struct Buffer;
     enum Mode {
         NORMAL,     // Both banks participate in the rolling history.
-        TRANSITION, // Banks are frozen while packets enter the transition buffer.
-        SINGLE      // One bank is protected; the other receives new packets.
+        SINGLE      // Event slots stay protected; other slots receive live packets.
     };
     uint64_t settledEndUnlocked() const;
     uint64_t settledEndUnlocked(std::chrono::steady_clock::time_point now) const;
@@ -81,7 +80,7 @@ class ReceiveRingBuffer {
     void addPacketLoss(uint64_t firstPeriod, uint64_t lastPeriod,
                        uint64_t missingPackets, uint64_t affectedPeriods);
     void logPacketLoss(std::chrono::steady_clock::time_point now);
-    void copySlot(const Buffer &src, Buffer &dst, uint64_t p);
+    const Buffer *eventBuffer(uint64_t period) const;
     const unsigned portIndex;
     const size_t half, transitionCapacity, eventLimit;
     const unsigned packetSlots, packetsPerBoard, physicalBoards, packetBytes;
@@ -94,15 +93,15 @@ class ReceiveRingBuffer {
     mutable std::mutex mutex;
     Mode mode = NORMAL;
     bool haveData = false, frozen = false, consolidated = false;
-    unsigned target = 0;    // Bank reserved for the event while frozen.
     unsigned firstBank = 0; // First bank used after anchor in NORMAL mode.
     uint64_t anchor = 0;
     uint64_t oldest = 0;
     uint64_t latest = 0;
     uint64_t finalizedEnd = 0;
-    uint64_t transitionStart = 0;
     uint64_t eventStart = 0;
     uint64_t eventCount = 0;
+    // 0/1 selects the immutable bank for each event period; 2 means missing.
+    std::vector<unsigned char> eventBanks;
     uint64_t received = 0;
     uint64_t duplicate = 0;
     uint64_t late = 0;

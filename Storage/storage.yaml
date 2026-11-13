@@ -146,4 +146,4 @@ receivers:  # Both logical lanes share one physical 100 GbE interface and IP.
     allowedSource: "192.168.210.113"
 backendAddress: "192.168.200.10"  # Dedispersion backend IP for completion notices.
 backendPort: 19001  # TCP/JSON port for CAPTURE_RESULT/ACK_RESULT.
-backendBindAddress: "172.0.0.142"  # Storage management IP for TCP completion notices.
+backendBindAddress: "0.0.0.0"  # Let routing select the completion-notice source IP.

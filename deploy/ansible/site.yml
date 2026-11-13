@@ -15,6 +15,7 @@
           - tianlai_controller_ip is match('^[0-9.]+$')
           - tianlai_controller_ip == hostvars[groups['storage'][0]].ansible_host
           - tianlai_backend_ip is match('^[0-9.]+$')
+          - tianlai_backend_bind_ip is match('^[0-9.]+$')
           - tianlai_storage_ip is match('^[0-9.]+$')
           - tianlai_storage_directory is match('^/[^ ]+$')
           - "'CHANGE_ME' not in tianlai_storage_directory"
@@ -129,12 +130,18 @@
       loop:
         - "{{ tianlai_root }}/tools"
         - "{{ tianlai_root }}/config"
+        - "{{ tianlai_root }}/docs"
     - name: Install display management tools
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../tools/{{ item }}"
         dest: "{{ tianlai_root }}/tools/{{ item }}"
         mode: '0755'
       loop: [cache_status.py, trigger.py]
+    - name: Install dedispersion backend guide
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../DEDISPERSION_BACKEND_GUIDE.md"
+        dest: "{{ tianlai_root }}/docs/DEDISPERSION_BACKEND_GUIDE.md"
+        mode: '0640'
     - name: Render display node list
       ansible.builtin.template:
         src: templates/nodes.json.j2
@@ -469,6 +476,7 @@
         - "{{ tianlai_root }}/tools"
         - "{{ tianlai_root }}/config"
         - "{{ tianlai_root }}/journal"
+        - "{{ tianlai_root }}/docs"
     - name: Install controller tools
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../tools/{{ item }}"
@@ -476,6 +484,11 @@
         mode: "{{ '0755' if item in ['cache_status.py', 'trigger.py'] else '0644' }}"
       loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py, trigger.py]
       notify: stop controller after deployment
+    - name: Install controller copy of the backend guide
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../DEDISPERSION_BACKEND_GUIDE.md"
+        dest: "{{ tianlai_root }}/docs/DEDISPERSION_BACKEND_GUIDE.md"
+        mode: '0640'
     - name: Install tlcache on controller
       ansible.builtin.include_tasks: tasks/install_tlcache.yml
     - name: Install tltrigger on controller

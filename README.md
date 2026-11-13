@@ -82,7 +82,7 @@ sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
 默认每积分周期 200 us，每 trace 50000 周期：
 
 - 每口 A/B 两个各 50 秒的缓冲；正常逐周期覆盖，合起来保留最近约 100 秒。
-- 每台额外配置 32 GiB 过渡区，平均分到各接收口。
+- 每台仍预留 32 GiB 兼容过渡区；当前零复制冻结路径不会在触发时搬运业务数据。
 - 启动检查 `/proc/meminfo` 的 `MemAvailable`，另外预留 48 GiB 给系统/驱动等。
 - F0-2 的 A/B 业务数据合计 334.080 GB；F3-10 为 318.528 GB。
   F11-13 为 397.056 GB；再加 32 GiB 过渡区和周期元数据，需按实际可用内存验证。
@@ -97,12 +97,11 @@ sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
 `QUERY_PORT` 进一步返回单口峰值、冻结次数等指标。事件查询返回冻结耗时、发送耗时、
 实测应用层发送速率及过渡区峰值，便于部署验收和定位过渡区不足。
 
-收到合法触发，所有口先进入过渡接收，再后台将事件较少一侧复制到较多一侧。
-同一事件最多 5 秒，按 `period % halfPeriods` 放置，原始大侧片段不移动。
-两个 A/B 在复制期间均不可写，过渡区承接新包和切换时未定稿的尾部。
-整理后，一个主缓冲区冻结用于发送，另一个按 50 秒循环接收。
-过渡数据按周期/板卡合并，不覆盖已到达的新周期或重复板卡。
-过渡区溢出会明确报错停机，不会静默覆盖事件并报告成功。
+收到合法触发后，最长 50 秒的事件仍保留在原 A/B 槽位，不复制业务负载。
+每个事件槽位原地保护；相同循环位置的新周期自动写入另一块缓冲区。
+事件所有权表按小批次建立，批次之间立即让出锁，接收线程持续运行。
+因此触发不再产生大块内存复制，也不会因冻结流程瞬间占满内存带宽。
+发送完成或取消后解除槽位保护，A/B 恢复正常滚动覆盖。
 
 事件落盘确认后由调度器发送 RELEASE。节点保留当前实时缓冲，优先写已释放缓冲，
 保留的周期编号跨度达到约 100 秒后才再次 READY；该状态不保证每个周期或包均已收到，也不证明当前仍在收包，需检查缺包与收包指标。
@@ -119,6 +118,7 @@ sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
 
 - `tools/controller.py`：外部TCP/JSON触发入口；288路调度节点0～10，384路调度节点0～13。
 - `tools/trigger.py`：简化触发客户端，自动选择最近的共同缓存区，也兼容完整JSON请求。
+- [DEDISPERSION_BACKEND_GUIDE.md](DEDISPERSION_BACKEND_GUIDE.md)：提供给消色散后端用户的精简触发、完成查询和通知确认说明。
 - `Storage/tianlai-storage`：生产部署使用的 C++ ZeroMQ 接收与落盘服务。
 - `Storage/storage.yaml`：C++ 落盘服务的完整示例配置；Ansible 会按现场清单生成正式配置。
 
@@ -141,12 +141,12 @@ python3 tools/controller.py --nodes tools/nodes_example.json \
 部署后可在任意缓存节点或存储节点直接保存最近3秒的384路数据：
 
 ```bash
-tltrigger capture 3
+tltrigger 3
 ```
 
-只触发指定缓存服务器可执行`tltrigger capture 3 --servers 1,2,5-7`；这里使用机柜标签`tianlaistore1～14`中的编号。也可写成`--servers tianlaistore1,tianlaistore2`。不指定时仍选择当前288/384路模式的全部服务器。使用`tltrigger status --channels 288 --servers 1-3`查询所选服务器的共同缓存区间，使用`tltrigger event EVENT_ID`查询写盘进度；高级联调仍支持`tltrigger --file tools/trigger_example.json`。
+只触发指定缓存服务器可执行`tltrigger 3 --servers 1,2,5-7`；这里使用机柜标签`tianlaistore1～14`中的编号。也可写成`--servers tianlaistore1,tianlaistore2`。不指定时仍选择当前288/384路模式的全部服务器。使用`tltrigger status --channels 288 --servers 1-3`查询所选服务器的共同缓存区间，使用`tltrigger EVENT_ID`查询写盘进度；高级联调仍支持`tltrigger --file tools/trigger_example.json`。
 
-单次触发支持1～50秒，保存完整50秒可执行`tltrigger capture 50 --channels 384`。50秒384路数据约2.37 TB，传输和落盘期间该事件持续占用冻结缓冲区，完成或取消前不能接受下一事件；部署前须验证100G链路、阵列持续写入速度和剩余容量。
+单次触发支持1～50秒，保存完整50秒并等待结束可执行`tltrigger 50 --channels 384`。50秒384路数据约2.37 TB，传输和落盘期间该事件持续占用冻结缓冲区，完成或取消前不能接受下一事件；部署前须验证100G链路、阵列持续写入速度和剩余容量。
 
 `tltrigger`由Ansible统一安装到控制器和显控节点；`deploy.sh`负责首次安装，`update_software.sh`随其他程序一并更新。
 
@@ -154,7 +154,7 @@ tltrigger capture 3
 QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
 内部固定标识仍进入缓存事件和TLSTORE1元数据。升级时必须先停止触发并处理完旧事件，在维护窗口统一更新控制器、14台缓存服务和存储服务，不能混跑协议版本不同的进程。
 所选模式的11台或14台节点持久化完成后，C++存储服务通过TCP/JSON直接向消色散后端发送
-`CAPTURE_RESULT`；后端持久化结果后向报文来源地址回复 `ACK_RESULT`。未确认结果会落盘保存并在重启后继续重试。示例接收器为 `tools/result_listener.py`，协议和缺包含义见 `PROTOCOL.md`。默认要求配置全部
+`CAPTURE_RESULT`；后端持久化结果后向报文来源地址回复 `ACK_RESULT`。未确认结果会落盘保存并在重启后继续重试。单文件接收器`tools/result_listener.py`会先按`event_id`持久化结果再确认，协议和缺包含义见`PROTOCOL.md`。默认要求配置全部
 14台。调试时可通过Ansible的`tianlai_disabled_cache_nodes`明确排除离线节点；该模式不能表示288或384路全部完成。
 原始输入头的 `ifTrace` 不充当触发位，也不修改保留字节。
 协议字段和状态详见 [PROTOCOL.md](PROTOCOL.md)。
@@ -204,7 +204,7 @@ make test
 `make test`通过统一入口构建模拟版后运行回归和联调；可通过`PYTHON`、`CXX`指定解释器和编译器，例如`make test PYTHON=python3 CXX=g++`。测试仍需Boost、yaml-cpp、spdlog和支持ASan/UBSan的编译器，不需要ixcap。`make clean`会删除三个类型的构建目录、可执行文件及落盘服务构建产物；`make clean PROFILE=F3-10`只清理指定类型，运行前请确认不需要保留相关产物。
 
 测试另需系统 Python 的 pyzmq、libzmq 和 nlohmann-json 开发库。测试使用 ASan/UBSan 检查真实缓冲实现，覆盖跨 A/B、非零起始周期、循环覆盖、缺包、
-整周期缺失、并发收包、过渡溢出、冻结及恢复。回环联调运行三类真实程序的 `--simulate`，
+整周期缺失、并发收包、原地冻结及恢复。回环联调运行三类真实程序的 `--simulate`，
 验证UDP数据输入、TCP/JSON控制、重复触发、ZeroMQ发送失败保留与重试、最终确认丢失、逐字节落盘内容和调度流程，
 并检查全部 14 份节点映射；新模式额外验证同板奇偶包独立存储及末口填充频点。
 测试使用临时目录和缩小的缓存，不访问实际采集网卡。

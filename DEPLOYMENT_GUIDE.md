@@ -103,14 +103,14 @@ cd F0-2
 
    此处地址为示例。控制器内部固定使用`tianlai`，外部请求不填写采集编号。控制器和落盘服务是同机的两个独立进程：控制器走管理网，落盘服务走高速数据网。控制器默认 `--period-us 200 --integration-per-trace 50000`，须与所有节点对应配置一致；程序不会自动验证此一致性。生产默认必须配置 0～13 全部节点；`--allow-partial` 只用于模拟或部分节点联调。不要启动两个控制器同时管理相同节点。
 
-4. 消色散后端通过TCP/JSON监听19001，接收C++存储程序发来的写盘完成通知，并在同一连接回复确认。供联调的示例：
+4. 消色散后端通过TCP/JSON监听19001，接收C++存储程序发来的写盘完成通知，并在同一连接回复确认。先在存储服务器执行`ip route get 192.168.200.10`确认实际`src`地址，再在后端启动可持久化通知的接收器：
 
    ```bash
    python3 tools/result_listener.py --bind 192.168.200.10 --port 19001 \
-     --allow-source 172.0.0.142
+     --allow-source STORAGE_SOURCE_IP --journal /data/tianlai-completions
    ```
 
-   示例程序打印后立即确认，仅供联调；生产后端应持久化处理结果后再确认。288路事件在节点0～10共22个lane形成持久化标记后发送`status=STORED`；384路事件需要节点0～13共28个lane。
+   该程序先将每个`event_id`原子写入指定目录并`fsync`，再回复`ACK_RESULT`；同一事件重试时幂等确认。生产业务程序可直接消费这些JSON文件，或按同一协议集成。288路事件在节点0～10共22个lane形成持久化标记后发送`status=STORED`；384路事件需要节点0～13共28个lane。
 
 ## 5. 检查状态与发送触发
 
@@ -147,24 +147,24 @@ tlcache stop all --yes
 可在任意缓存节点或存储节点使用`tltrigger`；它已内置控制器地址，并自动生成请求编号和事件编号。先查询384路是否就绪：
 
 ```bash
-tltrigger status --channels 384
+tltrigger
 ```
 
 控制器响应中的`node_runtime_states`和`runtime_state_counts`提供各节点运行阶段汇总。确认 `accept_trigger` 为 `true`，并确保所需起止周期位于返回的 `oldest_period` 与 `settled_end` 所示范围内；结束边界为不包含端点。然后提交触发：
 
 ```bash
-tltrigger capture 3 --channels 384
+tltrigger 3
 ```
 
-上述命令自动查询共同可用范围，并保存其中最近3秒的数据；时长可以为1～50秒。`--channels`选择288或384，省略时默认384。若必须指定历史起点，可增加`--trace 120 --integration 45000`。首次回复`PREPARING`不表示已经写盘完成；复制返回的事件编号进行查询：
+上述数字短命令自动查询共同可用范围，保存其中最近3秒的数据，并直到`COMPLETED`或出现需要人工处理的状态才退出；时长可以为1～50秒。`--channels`选择288或384，省略时默认384。若必须指定历史起点，仍可使用完整形式`tltrigger capture 3 --trace 120 --integration 45000`。使用高级形式未等待时，可复制返回的事件编号进行查询：
 
 ```bash
-tltrigger event event-20261112-012345-abc123
+tltrigger event-20261112-012345-abc123
 ```
 
 需要恢复或取消暂停事件时使用`tltrigger resume EVENT_ID`或`tltrigger cancel EVENT_ID`。高级联调仍可使用`tltrigger --file request.json`发送完整协议JSON；完整字段与跨Trace格式见[协议说明](PROTOCOL.md)。
 
-`tltrigger`由Ansible安装到控制器/存储节点`172.0.0.142`和显控节点`172.0.0.61`的`/usr/local/bin`。运行全量部署或软件更新后即可直接使用，不需要再执行独立分发脚本。
+`tltrigger`由Ansible安装到控制器/存储节点`172.0.0.142`和显控节点`172.0.0.61`的`/usr/local/bin`。运行全量部署或软件更新后即可直接使用，不需要再执行独立分发脚本。消色散后端使用说明见[Dedispersion Backend Trigger Guide](DEDISPERSION_BACKEND_GUIDE.md)。
 
 常见状态：`PREPARING`正在保护、`PREPARED`表示全体已保护、`STORING`正在双lane回传、`STORED`表示全体已持久化、`RELEASING`正在统一释放、`COMPLETED`表示全部完成。检查`missing_by_server`以及每台节点的`lane-0.json`和`lane-1.json`。
 

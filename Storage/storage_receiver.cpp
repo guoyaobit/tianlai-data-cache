@@ -732,8 +732,12 @@ class CompletionNotifier {
                 int error = 0;
                 socklen_t error_size = sizeof(error);
                 require(getsockopt(socket, SOL_SOCKET, SO_ERROR,
-                                   reinterpret_cast<char *>(&error), &error_size) == 0 && !error,
-                        "completion TCP connect failed");
+                                   reinterpret_cast<char *>(&error), &error_size) == 0,
+                        "completion TCP connect status failed");
+                if (error)
+                    throw std::runtime_error(
+                        "completion TCP connect failed: target=" + target_address + ':' +
+                        std::to_string(target_port) + " error=" + std::to_string(error));
             }
             const auto body = notice.dump();
             require(body.size() <= 1200, "completion JSON too long");

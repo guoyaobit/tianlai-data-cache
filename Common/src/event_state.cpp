@@ -37,14 +37,14 @@ static void rememberEvent(CacheRuntime &para, const EventInfo &event) {
 static void remember(CacheRuntime &para) {
     rememberEvent(para, para.event);
 }
-// Protect all receive ports before collating the event; clean up any started freeze operations on failure.
+// Protect all receive ports in place; clean up any started freeze operations on failure.
 static void prepareEvent(CacheRuntime *para) {
     size_t begun = 0;
     size_t finished = 0;
     const auto started = std::chrono::steady_clock::now();
     try {
-        // Redirect every port first, so no port overwrites its event while
-        // another port is being consolidated.
+        // Protect every port first. This is constant-time and leaves receive
+        // threads running while the event remains in its original slots.
         for (auto &pool : para->receiveBuffers) {
             pool->beginFreeze(para->event.start, para->event.count);
             ++begun;
@@ -99,7 +99,7 @@ static void prepareEvent(CacheRuntime *para) {
         else
             setPassiveRuntimeState(*para);
     } catch (const std::exception &error) {
-        // Finish any partially started freezes before releasing their banks.
+        // Publish any partially started freezes before releasing their banks.
         try {
             for (size_t i = finished; i < begun; ++i)
                 para->receiveBuffers[i]->finishFreeze();

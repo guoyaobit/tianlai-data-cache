@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <thread>
 #include <sys/mman.h>
 
 struct ReceiveRingBuffer::Allocation {
@@ -127,8 +128,7 @@ PoolStatus ReceiveRingBuffer::statusUnlocked() const {
     s.lossPeriods = lossPeriods;
     s.lastLossPeriod = lastLossPeriod;
     s.transitionCapacity = transitionCapacity;
-    if (mode == TRANSITION && latest >= transitionStart)
-        s.transitionUsed = std::min<uint64_t>(transitionCapacity, latest - transitionStart + 1);
+    s.transitionUsed = 0;
     s.transitionPeak = transitionPeak;
     s.lastFreezeMilliseconds = lastFreezeMilliseconds;
     s.freezeCount = freezeCount;
@@ -136,8 +136,7 @@ PoolStatus ReceiveRingBuffer::statusUnlocked() const {
     if (haveData)
         s.lastPacketAgeMilliseconds = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(now - lastReceive).count());
-    s.transitionWarning = mode == TRANSITION &&
-        s.transitionUsed * 100 >= transitionCapacity * transitionWarnPercent;
+    s.transitionWarning = false;
     return s;
 }
 PoolStatus ReceiveRingBuffer::status() const {
@@ -145,13 +144,16 @@ PoolStatus ReceiveRingBuffer::status() const {
     return statusUnlocked();
 }
 const ReceiveRingBuffer::Buffer *ReceiveRingBuffer::find(uint64_t p) const {
-    if (mode == TRANSITION && p >= transitionStart &&
-        transition->header(p).absolutePeriod == p)
-        return transition.get();
     for (const auto &b : bank)
         if (b->header(p).absolutePeriod == p)
             return b.get();
     return nullptr;
+}
+const ReceiveRingBuffer::Buffer *ReceiveRingBuffer::eventBuffer(uint64_t p) const {
+    if (p < eventStart || p >= eventStart + eventCount)
+        return nullptr;
+    const unsigned owner = eventBanks[p - eventStart];
+    return owner < 2 ? bank[owner].get() : nullptr;
 }
 void ReceiveRingBuffer::addPacketLoss(uint64_t firstPeriod, uint64_t lastPeriod,
                                       uint64_t missing, uint64_t affected) {
@@ -205,12 +207,8 @@ void ReceiveRingBuffer::detectPacketLoss(std::chrono::steady_clock::time_point n
     }
     logPacketLoss(now);
 }
-void ReceiveRingBuffer::copySlot(const Buffer &src, Buffer &dst, uint64_t p) {
-    dst.header(p) = src.header(p);
-    for (unsigned packetSlot = 0; packetSlot < packetSlots; ++packetSlot)
-        std::memcpy(dst.packet(p, packetSlot), src.packet(p, packetSlot), packetBytes);
-}
-// Write one packet to the rolling or transition area, deduplicate by period and packet position, and count late arrivals and conflicts.
+// Write one packet to a rolling bank, deduplicate by period and packet position,
+// and count late arrivals and conflicts.
 bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrace,
                                 const unsigned char *packet) {
     std::lock_guard<std::mutex> lock(mutex);
@@ -241,22 +239,6 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
         haveData = true;
     }
     const uint64_t previousLatest = latest;
-    if (mode == TRANSITION) {
-        if (p >= transitionStart + transitionCapacity)
-            throw std::runtime_error("transition buffer overflow; event cannot be guaranteed");
-        if (p >= transitionStart) {
-            const uint64_t used = p - transitionStart + 1;
-            transitionPeak = std::max(transitionPeak, used);
-            if (!transitionWarningLogged &&
-                used * 100 >= transitionCapacity * transitionWarnPercent) {
-                transitionWarningLogged = true;
-                LOG("Receive port " + std::to_string(portIndex) +
-                        " transition buffer at " + std::to_string(used) + "/" +
-                        std::to_string(transitionCapacity) + " periods",
-                    WARN);
-            }
-        }
-    }
     if (p > latest)
         latest = p;
     const uint64_t retention = mode == NORMAL ? 2 * half : half;
@@ -265,13 +247,28 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
     if (sampleClock)
         lastReceive = now;
 
-    // During consolidation both original banks are read-only. After it, only
-    // the bank not holding the event may receive new packets.
+    // A frozen event contains at most one period for each modulo slot. Keep
+    // that exact slot immutable and write the live period to the other bank.
     Buffer *dst;
-    if (mode == TRANSITION) {
-        dst = transition.get();
-    } else if (mode == SINGLE || p < anchor) {
-        dst = bank[1 - target].get();
+    if (mode == SINGLE) {
+        const bool protected0 = bank[0]->header(p).absolutePeriod >= eventStart &&
+                                bank[0]->header(p).absolutePeriod < eventStart + eventCount;
+        const bool protected1 = bank[1]->header(p).absolutePeriod >= eventStart &&
+                                bank[1]->header(p).absolutePeriod < eventStart + eventCount;
+        if (protected0 && protected1)
+            throw std::runtime_error("both receive slots are protected by one event");
+        if (protected0)
+            dst = bank[1].get();
+        else if (protected1)
+            dst = bank[0].get();
+        else if (bank[0]->header(p).absolutePeriod == p)
+            dst = bank[0].get();
+        else if (bank[1]->header(p).absolutePeriod == p)
+            dst = bank[1].get();
+        else
+            dst = bank[0].get();
+    } else if (p < anchor) {
+        dst = bank[1 - firstBank].get();
     } else {
         dst = bank[(firstBank + (p - anchor) / half) % 2].get();
     }
@@ -296,110 +293,55 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
         detectPacketLoss(now, previousLatest);
     return true;
 }
-// Validate the event range and redirect subsequent packets to the transition area so data pending storage is not overwritten during collation.
+// Protect an event in place. Switching mode is constant-time; ownership is
+// scanned in short lock slices and payload data is never copied.
 void ReceiveRingBuffer::beginFreeze(uint64_t start, uint64_t count) {
-    std::lock_guard<std::mutex> lock(mutex);
-    auto s = statusUnlocked();
-    if (!s.ready)
-        throw std::runtime_error("BUSY_OR_WARMING");
     if (!count || count > eventLimit || start > UINT64_MAX - count)
         throw std::runtime_error("INVALID_RANGE");
-    if (start < oldest)
-        throw std::runtime_error("EXPIRED");
-    if (start + count > s.settledEnd)
-        throw std::runtime_error("NOT_READY");
-    const uint64_t nextTransitionStart = s.settledEnd;
-    const uint64_t unsettledPeriods =
-        latest >= nextTransitionStart ? latest - nextTransitionStart + 1 : 0;
-    if (unsettledPeriods > transitionCapacity)
-        throw std::runtime_error("transition buffer too small for unsettled tail");
-    size_t inBank[2] = {};
-    for (uint64_t p = start; p < start + count; ++p) {
-        for (unsigned b = 0; b < 2; ++b)
-            if (bank[b]->header(p).absolutePeriod == p)
-                ++inBank[b];
-    }
-    target = inBank[1] > inBank[0] ? 1 : 0;
-    // Preserve the mutable tail, including packets already received for these periods.
-    eventStart = start;
-    eventCount = count;
-    transition->reset();
-    transitionStart = nextTransitionStart;
-    finalizedEnd = nextTransitionStart;
-    transitionPeak = unsettledPeriods;
-    transitionWarningLogged = false;
-    freezeStarted = std::chrono::steady_clock::now();
-    for (uint64_t p = transitionStart; p <= latest; ++p) {
-        if (const auto *src = find(p))
-            copySlot(*src, *transition, p);
-    }
-    if (transitionPeak * 100 >= transitionCapacity * transitionWarnPercent) {
-        transitionWarningLogged = true;
-        LOG("Receive port " + std::to_string(portIndex) + " transition buffer at " +
-                std::to_string(transitionPeak) + "/" + std::to_string(transitionCapacity) +
-                " periods",
-            WARN);
-    }
-    frozen = true;
-    consolidated = false;
-    mode = TRANSITION;
-}
-// Collate the event into one primary buffer, resume reception in the other, and merge data received during the transition.
-void ReceiveRingBuffer::finishFreeze() {
-    // beginFreeze redirects ingress to transition, so A and B are immutable here.
-    // Only the event's smaller bank portion is copied; p%half is unique for count<=half.
-    if (!frozen || mode != TRANSITION)
-        throw std::runtime_error("invalid freeze transition");
-    Buffer &dst = *bank[target];
-    for (uint64_t p = eventStart; p < eventStart + eventCount; ++p) {
-        if (dst.header(p).absolutePeriod == p)
-            continue;
-        const auto &src = *bank[1 - target];
-        if (src.header(p).absolutePeriod == p)
-            copySlot(src, dst, p);
-        else
-            dst.header(p) = {p, 0,
-                             0}; // Entire missing period; payload generated as zero on export.
-    }
-    uint64_t stageEnd;
+    std::vector<unsigned char> owners(count, 2);
     {
         std::lock_guard<std::mutex> lock(mutex);
-        bank[1 - target]->reset();
-        stageEnd = latest + 1;
-        oldest = transitionStart;
-        if (latest + 1 > half)
-            oldest = std::max(oldest, latest + 1 - half);
+        auto s = statusUnlocked();
+        if (!s.ready)
+            throw std::runtime_error("BUSY_OR_WARMING");
+        if (start < oldest)
+            throw std::runtime_error("EXPIRED");
+        if (start + count > s.settledEnd)
+            throw std::runtime_error("NOT_READY");
+        eventStart = start;
+        eventCount = count;
+        eventBanks = std::move(owners);
+        finalizedEnd = s.settledEnd;
+        transitionPeak = 0;
+        transitionWarningLogged = false;
+        freezeStarted = std::chrono::steady_clock::now();
+        frozen = true;
+        consolidated = false;
         mode = SINGLE;
     }
-    // Transition is now immutable. Merge by period/board; never overwrite newer live packets.
-    for (uint64_t p = transitionStart; p < stageEnd; ++p) {
-        const auto &srcHeader = transition->header(p);
-        if (srcHeader.absolutePeriod != p)
-            continue;
-        std::lock_guard<std::mutex> lock(mutex);
-        if (p < oldest)
-            continue;
-        Buffer &live = *bank[1 - target];
-        auto &h = live.header(p);
-        if (h.absolutePeriod != p) {
-            if (h.absolutePeriod != INVALID_PERIOD && h.absolutePeriod > p)
-                continue;
-            copySlot(*transition, live, p);
-        } else {
-            if (h.ifTrace != srcHeader.ifTrace) {
-                ++conflicting;
-                continue;
-            }
-            for (unsigned b = 0; b < packetSlots; ++b) {
-                uint64_t bit = 1ULL << b;
-                if ((srcHeader.boardMask & bit) && !(h.boardMask & bit)) {
-                    std::memcpy(live.packet(p, b), transition->packet(p, b), packetBytes);
-                    h.boardMask |= bit;
-                }
+    // Record ownership in small lock slices. Event slots are already protected,
+    // while receive threads can run between slices without one long pause.
+    constexpr uint64_t slicePeriods = 256;
+    for (uint64_t offset = 0; offset < count; offset += slicePeriods) {
+        const uint64_t end = std::min<uint64_t>(count, offset + slicePeriods);
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            for (uint64_t i = offset; i < end; ++i) {
+                const uint64_t p = start + i;
+                if (bank[0]->header(p).absolutePeriod == p)
+                    eventBanks[i] = 0;
+                else if (bank[1]->header(p).absolutePeriod == p)
+                    eventBanks[i] = 1;
             }
         }
+        std::this_thread::yield();
     }
+}
+// Publish the already protected event. No payload data is copied here.
+void ReceiveRingBuffer::finishFreeze() {
     std::lock_guard<std::mutex> lock(mutex);
+    if (!frozen || mode != SINGLE)
+        throw std::runtime_error("invalid freeze transition");
     consolidated = true;
     lastFreezeMilliseconds = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -407,16 +349,16 @@ void ReceiveRingBuffer::finishFreeze() {
             .count());
     ++freezeCount;
 }
-// Release the collated event area, retain live data, and resume double-buffer rotation.
+// Release the protected event slots, retain live data, and resume A/B rotation.
 void ReceiveRingBuffer::release() {
     std::lock_guard<std::mutex> lock(mutex);
     if (!frozen)
         return;
     if (!consolidated)
         throw std::runtime_error("cannot release an unfinished freeze");
-    // Retain the live 50s; fill the released bank next. No bulk data reset/copy.
+    // Retain the live window and resume alternating A/B rotation.
     anchor = latest + 1;
-    firstBank = target;
+    firstBank = 0;
     finalizedEnd = std::max(finalizedEnd, settledEndUnlocked());
     mode = NORMAL;
     frozen = false;
@@ -427,31 +369,34 @@ bool ReceiveRingBuffer::isFrozen() const {
     return frozen;
 }
 uint64_t ReceiveRingBuffer::missingPackets() const {
-    // Called only after finishFreeze; release cannot run while export is active.
+    // Called only after finishFreeze; protected slots cannot change during export.
     uint64_t missing = 0;
-    for (uint64_t p = eventStart; p < eventStart + eventCount; ++p)
-        missing += packetSlots - __builtin_popcountll(bank[target]->header(p).boardMask);
+    for (uint64_t p = eventStart; p < eventStart + eventCount; ++p) {
+        const auto *src = eventBuffer(p);
+        missing += packetSlots -
+                   __builtin_popcountll(src ? src->header(p).boardMask : 0);
+    }
     return missing;
 }
 // Export one period and its missing-packet bitmap; zero-fill missing positions and preserve received payload packets unchanged.
 void ReceiveRingBuffer::appendEventFrame(uint64_t p, std::vector<unsigned char> &out) const {
     if (!consolidated || p < eventStart || p >= eventStart + eventCount)
         throw std::runtime_error("event frame out of range");
-    const auto &src = *bank[target];
-    const auto &h = src.header(p);
+    const auto *src = eventBuffer(p);
+    const uint64_t boardMask = src ? src->header(p).boardMask : 0;
     put64(out, p);
-    put64(out, h.boardMask);
+    put64(out, boardMask);
     put32(out, packetBytes);
     put32(out, packetSlots);
-    if (h.boardMask == (1ULL << packetSlots) - 1) {
+    if (src && boardMask == (1ULL << packetSlots) - 1) {
         // Complete frames need no zero fill: append the contiguous packet block once.
-        const auto *frame = src.frame(p);
+        const auto *frame = src->frame(p);
         out.insert(out.end(), frame, frame + frameBytes);
         return;
     }
     size_t offset = out.size();
     out.resize(offset + frameBytes, 0);
     for (unsigned b = 0; b < packetSlots; ++b)
-        if (h.boardMask & (1ULL << b))
-            std::memcpy(out.data() + offset + b * packetBytes, src.packet(p, b), packetBytes);
+        if (boardMask & (1ULL << b))
+            std::memcpy(out.data() + offset + b * packetBytes, src->packet(p, b), packetBytes);
 }

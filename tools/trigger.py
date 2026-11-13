@@ -7,12 +7,29 @@ import json
 import socket
 import struct
 import sys
+import time
 import uuid
 from pathlib import Path
 
 MAX_JSON_BYTES = 1200
 MAX_CAPTURE_SECONDS = 50
 LENGTH = struct.Struct('!I')
+WAIT_SUCCESS = {'COMPLETED'}
+WAIT_FAILURE = {'PAUSED', 'CANCELLED', 'REJECTED'}
+
+
+def normalize_arguments(arguments):
+    """Support short forms: `tltrigger 3` and `tltrigger event-ID`."""
+    if not arguments:
+        return ['status']
+    if arguments[0].isdigit():
+        normalized = ['capture'] + arguments
+        if '--wait' not in normalized:
+            normalized.append('--wait')
+        return normalized
+    if arguments[0].startswith('event-'):
+        return ['event'] + arguments
+    return arguments
 
 
 def parse_servers(value):
@@ -88,11 +105,21 @@ def create_parser():
                          help=argparse.SUPPRESS)
     capture.add_argument('--servers', type=parse_servers,
                          help='cache servers, for example 1,2,5-7 (default: all)')
+    capture.add_argument('--wait', action='store_true',
+                         help='wait until the event completes or needs attention')
+    capture.add_argument('--interval', type=float, default=2,
+                         help='event polling interval in seconds (default: 2)')
+    capture.add_argument('--wait-timeout', type=float, default=7200,
+                         help='maximum wait time in seconds (default: 7200)')
 
     for name, help_text in (('event', 'query one event'), ('resume', 'resume a paused event'),
-                            ('cancel', 'cancel a paused event')):
+                            ('cancel', 'cancel a paused event'),
+                            ('wait', 'wait for one event to finish')):
         subcommand = actions.add_parser(name, help=help_text)
         subcommand.add_argument('event_id')
+        if name == 'wait':
+            subcommand.add_argument('--interval', type=float, default=2)
+            subcommand.add_argument('--wait-timeout', type=float, default=7200)
     return parser
 
 
@@ -175,21 +202,52 @@ def request_from_arguments(arguments):
         return request
     if arguments.action == 'capture':
         return capture_request(arguments)
-    if arguments.action in ('event', 'resume', 'cancel'):
+    if arguments.action in ('event', 'resume', 'cancel', 'wait'):
         commands = dict(event='QUERY_EVENT', resume='RESUME', cancel='CANCEL')
-        return dict(command=commands[arguments.action], event_id=arguments.event_id)
-    raise ValueError('choose status, capture, event, resume or cancel')
+        return dict(command=commands.get(arguments.action, 'QUERY_EVENT'),
+                    event_id=arguments.event_id)
+    raise ValueError('choose a duration, status, event, wait, resume or cancel')
+
+
+def wait_for_event(event_id, arguments, initial=None):
+    """Poll one event and return its terminal or operator-action state."""
+    if arguments.interval <= 0 or arguments.wait_timeout <= 0:
+        raise ValueError('wait interval and timeout must be positive')
+    deadline = time.monotonic() + arguments.wait_timeout
+    reply = initial
+    previous = None
+    while True:
+        if reply is None:
+            reply = transmit(dict(command='QUERY_EVENT', event_id=event_id), arguments)
+        status = reply.get('status')
+        if status != previous:
+            print(f'event={event_id} status={status}', file=sys.stderr)
+            previous = status
+        if status in WAIT_SUCCESS or status in WAIT_FAILURE or status == 'ERROR':
+            return reply
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f'event {event_id} did not finish before the wait timeout')
+        time.sleep(arguments.interval)
+        reply = None
 
 
 def main():
-    arguments = create_parser().parse_args()
+    arguments = create_parser().parse_args(normalize_arguments(sys.argv[1:]))
     try:
-        reply = transmit(request_from_arguments(arguments), arguments)
+        request = request_from_arguments(arguments)
+        reply = transmit(request, arguments)
+        if arguments.action == 'wait':
+            reply = wait_for_event(arguments.event_id, arguments, initial=reply)
+        elif arguments.action == 'capture' and arguments.wait and reply.get('status') != 'ERROR':
+            reply = wait_for_event(request['event_id'], arguments, initial=reply)
         print(json.dumps(reply, indent=2, ensure_ascii=False))
-        return 1 if reply.get('status') == 'ERROR' else 0
+        return 1 if reply.get('status') in WAIT_FAILURE | {'ERROR'} else 0
     except (OSError, ValueError, RuntimeError, TimeoutError, json.JSONDecodeError) as error:
         print(f'ERROR: {error}', file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print('Interrupted; the event may still be running. Query its event ID.', file=sys.stderr)
+        return 130
 
 
 if __name__ == '__main__':

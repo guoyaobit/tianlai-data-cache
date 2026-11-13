@@ -107,7 +107,7 @@ C++存储服务根据事件元数据中的服务器选择掩码，确认本次�
 {"version":1,"command":"ACK_RESULT","status":"ACKNOWLEDGED","event_id":"event-000001"}
 ```
 
-存储服务连接后端默认TCP 19001，在同一连接发送长度前缀JSON并等待ACK_RESULT。确认报文的命令、状态和事件编号匹配后，将同一个`event.json`中的`backend_acknowledged`原子更新为`true`；为兼容旧后端，ACK若携带`acquisition_id`则必须为`tianlai`。超时、断线或重启后，存储服务会从`event.json`继续建立新连接重试，因此后端必须按事件编号处理重复通知。`tools/result_listener.py`是演示接收器，打印后立即确认，不提供业务侧持久化。控制器不再转发完成通知，也不处理`ACK_RESULT`。若事件暂停，仍通过控制器的`QUERY_EVENT`查询并按`RESUME`或`CANCEL`处理。
+存储服务连接后端默认TCP 19001，在同一连接发送长度前缀JSON并等待ACK_RESULT。`backendBindAddress=0.0.0.0`时由系统路由选择源地址，也可显式填写存储服务器上能到达后端的本地IPv4。确认报文的命令、状态和事件编号匹配后，将同一个`event.json`中的`backend_acknowledged`原子更新为`true`；为兼容旧后端，ACK若携带`acquisition_id`则必须为`tianlai`。超时、断线或重启后，存储服务会从`event.json`继续建立新连接重试，因此后端必须按事件编号处理重复通知。`tools/result_listener.py`是可直接部署的单文件接收器，它按`event_id`持久化并同步结果后才确认。控制器不再转发完成通知，也不处理`ACK_RESULT`。若事件暂停，仍通过控制器的`QUERY_EVENT`查询并按`RESUME`或`CANCEL`处理。
 
 ### 控制器 → 节点（默认 TCP 19000）
 
@@ -117,11 +117,11 @@ PREPARE使用标量`server_mask`携带本次参与节点位图，并只向所选
 |---|---|---|
 | PREPARE | event_id、channel_count、server_mask、start、period_count | 检查节点选择和历史区间并异步保护，返回PREPARING/PREPARED |
 | STORE | event_id | PREPARED或SEND_FAILED时并行启动两个不限速ZeroMQ lane；SENDING/STORED时幂等返回 |
-| QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、过渡区峰值和 error |
+| QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、兼容过渡区指标和 error；零复制冻结时峰值为0 |
 | RELEASE | event_id | 只有该节点全部接收口数据可靠落盘后，即 STORED 状态，才允许释放冻结区 |
 | CANCEL | event_id | 未发送或发送失败时放弃事件；PREPARING 时延后安全释放 |
-| QUERY_STATUS | 无 | READY/BUSY/WARMING、runtime_state、当前数据流、活跃/无数据端口、共同周期范围及过渡区指标等 |
-| QUERY_PORT | port | 单口周期范围、收包计数、过渡区占用/容量/峰值/警告、最近冻结耗时和冻结次数 |
+| QUERY_STATUS | 无 | READY/BUSY/WARMING、runtime_state、当前数据流、活跃/无数据端口、共同周期范围及兼容过渡区指标等 |
+| QUERY_PORT | port | 单口周期范围、收包计数、兼容过渡区指标、最近冻结耗时和冻结次数 |
 
 节点主要状态：PREPARING → PREPARED → SENDING → STORED → RELEASED。
 发送失败为 SEND_FAILED，仍保护数据；准备失败为 REJECTED；明确取消为 CANCELLED。

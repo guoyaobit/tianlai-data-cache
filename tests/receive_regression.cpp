@@ -88,8 +88,8 @@ int main() {
         pool.beginFreeze(shift + 8, 4);
         for (unsigned p = shift + 20; p < shift + 26; ++p) feed(pool, p);
         auto transition = pool.status();
-        assert(transition.transitionUsed == 8 && transition.transitionPeak == 8);
-        assert(transition.transitionWarning && transition.transitionCapacity == 20);
+        assert(transition.transitionUsed == 0 && transition.transitionPeak == 0);
+        assert(!transition.transitionWarning && transition.transitionCapacity == 20);
         pool.finishFreeze();
         assert(pool.status().freezeCount == 1);
         for (unsigned p = shift + 8; p < shift + 12; ++p) check(pool, p);
@@ -116,7 +116,7 @@ int main() {
     assert(!pool.receive(1, 0, 0, v.data()));
     assert(pool.status().duplicate == 1 && pool.status().conflicting == 1 && pool.status().late == 1);
     pool.beginFreeze(8, 4);
-    rejects([&] { pool.receive(38, 0, 0, v.data()); });
+    assert(pool.receive(38, 0, 0, v.data()));
     pool.finishFreeze();
     check(pool, 8); check(pool, 9, 0); check(pool, 10, 1); check(pool, 11);
     // Export complete, missing and partial frames into an existing output buffer.
@@ -139,12 +139,14 @@ int main() {
     reused.finishFreeze();
     check(reused, 20, 1);
     reused.release();
-    // Reject a transition area that cannot hold the current unsettled tail.
+    // In-place protection does not depend on transition-buffer capacity.
     ReceiveRingBuffer undersized(0, 10, 1, 5, 2, 1, 32, 2, 100000, 80, false);
     for (unsigned p = 0; p < 20; ++p) feed(undersized, p);
-    rejects([&] { undersized.beginFreeze(8, 4); });
-    assert(!undersized.isFrozen());
-    // Exercise concurrent ingress during the transition and while exporting the frozen bank.
+    undersized.beginFreeze(8, 4);
+    undersized.finishFreeze();
+    assert(undersized.isFrozen());
+    undersized.release();
+    // Exercise concurrent ingress while exporting protected event slots.
     ReceiveRingBuffer concurrent(0, 1000, 4000, 500, 2, 1, 32, 2, 100000, 80, false);
     for (unsigned p = 0; p < 2000; ++p) feed(concurrent, p);
     concurrent.beginFreeze(900, 300);
