@@ -45,11 +45,17 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 using Bytes = std::vector<unsigned char>;
-constexpr size_t MAX_MESSAGE = 13 * 1024 * 1024;
+struct ByteView {
+    const unsigned char *data;
+    size_t size;
+    ByteView(const unsigned char *address, size_t length) : data(address), size(length) {}
+    ByteView(const Bytes &value) : data(value.data()), size(value.size()) {}
+};
+constexpr size_t MAX_MESSAGE = 32 * 1024 * 1024;
 constexpr uint64_t MAX_EVENT_MICROSECONDS = 50ULL * 1000 * 1000;
 constexpr size_t MAX_SESSIONS_PER_PORT = 1;
-constexpr uint64_t DATA_SYNC_BYTES = 256ULL * 1024 * 1024;
-constexpr auto DATA_SYNC_INTERVAL = std::chrono::seconds(1);
+constexpr uint64_t DATA_SYNC_BYTES = 1024ULL * 1024 * 1024;
+constexpr auto DATA_SYNC_INTERVAL = std::chrono::seconds(5);
 constexpr unsigned CACHE_NODE_COUNT = 14;
 constexpr unsigned LANE_COUNT = 2;
 constexpr unsigned STORAGE_PORT_COUNT = CACHE_NODE_COUNT * LANE_COUNT;
@@ -103,10 +109,10 @@ static void sync_dir(const fs::path &path) {
 static void ensure_dir(const fs::path &parent, const std::string &name) {
     const auto child = parent / name;
     std::error_code error;
-    fs::create_directory(child, error);
+    const bool created = fs::create_directory(child, error);
     if (error) throw std::runtime_error("create directory: " + error.message());
     require(fs::is_directory(child), "storage path is not a directory");
-    sync_dir(parent);
+    if (created) sync_dir(parent);
 }
 static void write_all(int fd, const unsigned char *data, size_t size, uint64_t offset) {
     while (size) {
@@ -136,11 +142,17 @@ class StorageRuntimeStatus {
     const unsigned listener_count;
     unsigned listeners_ready = 0, active_transfers = 0;
     uint64_t completed_transfers = 0, aborted_transfers = 0;
-    std::atomic<uint64_t> written_bytes{0};
-    bool notifying = false, failed = false, stopping = false;
-    std::string state = "STARTING", last_error;
+    unsigned event_expected_lanes = 0;
+    uint64_t event_completed_lanes = 0, event_aborted_lanes = 0;
+    std::atomic<uint64_t> written_bytes_total{0}, event_written_bytes{0};
+    uint64_t sampled_written_bytes = 0, write_rate_bytes_per_second = 0;
+    bool notifying = false, failed = false, stopping = false, heartbeat_stopped = false;
+    std::string state = "STARTING", event_id, last_error, notification_error;
     std::chrono::steady_clock::time_point state_changed = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point rate_sampled = state_changed;
     std::mutex mutex;
+    std::condition_variable heartbeat_condition;
+    std::thread heartbeat;
 
     std::string current_state() const {
         if (failed) return "ERROR";
@@ -148,18 +160,30 @@ class StorageRuntimeStatus {
         if (notifying) return "NOTIFYING_BACKEND";
         if (active_transfers) return "RECEIVING_AND_WRITING";
         if (listeners_ready < listener_count) return "STARTING";
+        if (!notification_error.empty()) return "NOTIFICATION_RETRY";
         return "WAITING_FOR_DATA";
     }
 
     void publish() {
+        const auto now = std::chrono::steady_clock::now();
         const auto next = current_state();
         if (next != state) {
             state = next;
-            state_changed = std::chrono::steady_clock::now();
+            state_changed = now;
             std::cout << "storage runtime state: " << state << std::endl;
         }
+        const auto rate_milliseconds =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - rate_sampled).count();
+        if (rate_milliseconds >= 500) {
+            const auto total = written_bytes_total.load(std::memory_order_relaxed);
+            write_rate_bytes_per_second =
+                (total - sampled_written_bytes) * 1000ULL /
+                static_cast<uint64_t>(rate_milliseconds);
+            sampled_written_bytes = total;
+            rate_sampled = now;
+        }
         const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::steady_clock::now() - state_changed)
+                             now - state_changed)
                              .count();
         const auto updated = std::chrono::duration_cast<std::chrono::seconds>(
                                  std::chrono::system_clock::now().time_since_epoch())
@@ -171,9 +195,20 @@ class StorageRuntimeStatus {
                                {"listeners_ready", listeners_ready},
                                {"listener_count", listener_count},
                                {"active_transfers", active_transfers},
-                               {"completed_lane_transfers", completed_transfers},
-                               {"aborted_lane_transfers", aborted_transfers},
-                               {"written_bytes", written_bytes.load(std::memory_order_relaxed)},
+                               {"event_id", event_id},
+                               {"event_expected_lanes", event_expected_lanes},
+                               {"event_completed_lanes", event_completed_lanes},
+                               {"event_aborted_lanes", event_aborted_lanes},
+                               {"event_written_bytes",
+                                event_written_bytes.load(std::memory_order_relaxed)},
+                               {"completed_lanes_total", completed_transfers},
+                               {"aborted_lanes_total", aborted_transfers},
+                               {"written_bytes_total",
+                                written_bytes_total.load(std::memory_order_relaxed)},
+                               {"write_rate_bytes_per_second", write_rate_bytes_per_second},
+                               {"notification_state", notifying ? "SENDING" :
+                                    (notification_error.empty() ? "IDLE" : "RETRYING")},
+                               {"notification_error", notification_error},
                                {"last_error", last_error}});
             ::chmod(path.string().c_str(), 0644);
         } catch (const std::exception &error) {
@@ -181,47 +216,77 @@ class StorageRuntimeStatus {
         }
     }
 
+    void runHeartbeat() {
+        std::unique_lock<std::mutex> lock(mutex);
+        while (!heartbeat_condition.wait_for(
+            lock, std::chrono::seconds(1), [&] { return heartbeat_stopped; }))
+            publish();
+    }
+
   public:
     StorageRuntimeStatus(fs::path status_path, unsigned listeners)
         : path(std::move(status_path)), listener_count(listeners) {
         require(path.is_absolute() && listener_count, "invalid storage status configuration");
         publish();
+        heartbeat = std::thread(&StorageRuntimeStatus::runHeartbeat, this);
+    }
+    ~StorageRuntimeStatus() {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            heartbeat_stopped = true;
+        }
+        heartbeat_condition.notify_one();
+        if (heartbeat.joinable()) heartbeat.join();
     }
     void listenerReady() {
         std::lock_guard<std::mutex> lock(mutex);
         if (listeners_ready < listener_count) ++listeners_ready;
         publish();
     }
-    void transferStarted() {
+    void transferStarted(const std::string &transfer_event, unsigned expected_lanes) {
         std::lock_guard<std::mutex> lock(mutex);
+        if (event_id != transfer_event) {
+            event_id = transfer_event;
+            event_expected_lanes = expected_lanes;
+            event_completed_lanes = 0;
+            event_aborted_lanes = 0;
+            event_written_bytes.store(0, std::memory_order_relaxed);
+        }
         ++active_transfers;
         publish();
     }
     void addWrittenBytes(uint64_t bytes) {
-        written_bytes.fetch_add(bytes, std::memory_order_relaxed);
+        written_bytes_total.fetch_add(bytes, std::memory_order_relaxed);
+        event_written_bytes.fetch_add(bytes, std::memory_order_relaxed);
     }
     void transferFinished(bool completed) {
         std::lock_guard<std::mutex> lock(mutex);
         if (active_transfers) --active_transfers;
-        if (completed) ++completed_transfers;
-        else ++aborted_transfers;
+        if (completed) {
+            ++completed_transfers;
+            ++event_completed_lanes;
+        } else {
+            ++aborted_transfers;
+            ++event_aborted_lanes;
+        }
         publish();
     }
     void notificationStarted() {
         std::lock_guard<std::mutex> lock(mutex);
         notifying = true;
+        notification_error.clear();
         publish();
     }
     void notificationFinished(const std::string &error) {
         std::lock_guard<std::mutex> lock(mutex);
         notifying = false;
-        last_error = error;
+        notification_error = error.substr(0, 300);
         publish();
     }
     void fail(const std::string &error) {
         std::lock_guard<std::mutex> lock(mutex);
         failed = true;
-        last_error = error;
+        last_error = error.substr(0, 300);
         publish();
     }
     void stop() {
@@ -290,15 +355,23 @@ class EventWriter {
     uint64_t unsynced_bytes = 0;
     std::chrono::steady_clock::time_point last_data_sync;
 
-    void sync_data(bool force) {
+    void sync_current_file(int fd, bool file_complete) {
         const auto now = std::chrono::steady_clock::now();
-        if (!force && unsynced_bytes < DATA_SYNC_BYTES && now - last_data_sync < DATA_SYNC_INTERVAL)
+        if (!file_complete && unsynced_bytes < DATA_SYNC_BYTES &&
+            now - last_data_sync < DATA_SYNC_INTERVAL)
             return;
+        if (::fdatasync(fd))
+            throw system_error("fdatasync event file");
+        unsynced_bytes = 0;
+        last_data_sync = now;
+    }
+
+    void sync_all_files() {
         for (int fd : files)
             if (fd >= 0 && ::fdatasync(fd))
                 throw system_error("fdatasync event file");
         unsynced_bytes = 0;
-        last_data_sync = now;
+        last_data_sync = std::chrono::steady_clock::now();
     }
 
   public:
@@ -319,11 +392,11 @@ class EventWriter {
     }
     // Returns an already durable STORED result when the same transfer is retried.
     // This avoids rewriting an event merely because the previous final reply was lost.
-    Bytes begin(const Bytes &message) {
-        require(message.size() >= 4 && message.size() <= 1204, "invalid metadata length");
-        auto n = read32(message.data());
-        require(n > 0 && n == message.size() - 4, "invalid metadata length");
-        metadata = json::parse(message.begin() + 4, message.end());
+    Bytes begin(ByteView message) {
+        require(message.size >= 4 && message.size <= 1204, "invalid metadata length");
+        auto n = read32(message.data);
+        require(n > 0 && n == message.size - 4, "invalid metadata length");
+        metadata = json::parse(message.data + 4, message.data + message.size);
         require(metadata.is_object(), "metadata must be an object");
         event = metadata.at("event_id").get<std::string>();
         acquisition = metadata.at("acquisition_id").get<std::string>();
@@ -426,15 +499,16 @@ class EventWriter {
         }
         last_data_sync = std::chrono::steady_clock::now();
         if (runtime) {
-            runtime->transferStarted();
+            runtime->transferStarted(
+                event, static_cast<unsigned>(__builtin_popcountll(server_mask)) * LANE_COUNT);
             runtime_active = true;
         }
         return {};
     }
     // A block acknowledgment means validated and written. Only STORED is durable.
-    void block(const Bytes &message) {
-        require(message.size() >= CHUNK_HEADER, "truncated chunk header");
-        const auto *p = message.data();
+    void block(ByteView message) {
+        require(message.size >= CHUNK_HEADER, "truncated chunk header");
+        const auto *p = message.data;
         auto kind = read32(p), port = read32(p + 4), packet = read32(p + 8), board = read32(p + 12);
         auto first = read64(p + 16), n = read64(p + 24);
         auto size = read32(p + 32), reserved = read32(p + 36);
@@ -443,8 +517,8 @@ class EventWriter {
             2 * ((server - 11) * 4 + port) : 24 + (server - 3) * 2 + port / 2;
         unsigned expected_board = server < 3 ? 0 : server >= 11 ? 36 : (port % 2) * 18;
         require(packet == expected_packet && board == expected_board && first == progress[port] &&
-                n >= 1 && n <= 64 && first + n <= start + count && size == n * stride && reserved == 0 &&
-                message.size() == CHUNK_HEADER + size, "invalid chunk range/layout");
+                n >= 1 && n <= 128 && first + n <= start + count && size == n * stride && reserved == 0 &&
+                message.size == CHUNK_HEADER + size, "invalid chunk range/layout");
         const auto *body = p + CHUNK_HEADER;
         uint64_t absent = 0;
         for (uint64_t i = 0; i < n; ++i) {
@@ -470,17 +544,19 @@ class EventWriter {
         write_all(files[port], body, size, (first - start) * stride);
         if (runtime) runtime->addWrittenBytes(size);
         unsynced_bytes += size;
-        sync_data(false);
+        sync_current_file(files[port], first + n == start + count);
         progress[port] += n; missing[port] += absent;
     }
-    Bytes finish(const Bytes &message) {
-        require(message.size() == CHUNK_HEADER && read32(message.data()) == 2 &&
-                std::all_of(message.begin() + 4, message.end(), [](unsigned char c) { return c == 0; }), "invalid END record");
+    Bytes finish(ByteView message) {
+        require(message.size == CHUNK_HEADER && read32(message.data) == 2 &&
+                std::all_of(message.data + 4, message.data + message.size,
+                            [](unsigned char c) { return c == 0; }),
+                "invalid END record");
         for (unsigned p = 0; p < ports; ++p) {
             if (!selected[p]) continue;
             require(progress[p] == start + count, "incomplete lane transfer");
         }
-        sync_data(true);
+        sync_all_files();
         json ack = {{"version", 1}, {"status", "STORED"}, {"event_id", event},
                     {"acquisition_id", acquisition}, {"server_id", server}, {"lane", lane}};
         json state = metadata; state["status"] = "STORED";
@@ -892,12 +968,12 @@ struct ActiveTransfer {
 // without creating more lane-level parallelism.
 static std::pair<Bytes, bool> process_transfer(
         std::map<std::string, ActiveTransfer> &sessions, const std::string &identity,
-        const Bytes &body, const fs::path &root, Shared &shared, unsigned server, unsigned lane,
+        ByteView body, const fs::path &root, Shared &shared, unsigned server, unsigned lane,
         StorageRuntimeStatus *runtime = nullptr) {
     auto it = sessions.find(identity);
     if (it == sessions.end()) {
         require(sessions.size() < MAX_SESSIONS_PER_PORT, "receiver port busy");
-        require(body.size() <= 1204, "metadata exceeds limit");
+        require(body.size <= 1204, "metadata exceeds limit");
         auto writer = std::unique_ptr<EventWriter>(
             new EventWriter(root, shared, server, lane, runtime));
         auto existing = writer->begin(body);
@@ -906,8 +982,8 @@ static std::pair<Bytes, bool> process_transfer(
                                                   std::chrono::steady_clock::now()});
         return {Bytes{'O', 'K'}, false};
     }
-    require(body.size() >= 4, "truncated message");
-    if (read32(body.data()) == 2) {
+    require(body.size >= 4, "truncated message");
+    if (read32(body.data) == 2) {
         auto result = it->second.writer->finish(body);
         sessions.erase(it);
         return {std::move(result), true};
@@ -952,7 +1028,8 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
             if (rc < 0) { if (zmq_errno() == EINTR) continue; throw std::runtime_error("ZeroMQ poll failed"); }
             if (!(item.revents & ZMQ_POLLIN)) continue;
             std::string identity, peer;
-            Bytes body;
+            ZmqMessage body_frame;
+            bool body_received = false;
             size_t parts = 0;
             bool delimiter = false, more;
             do {
@@ -966,11 +1043,13 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
                 else if (parts == 2) delimiter = size == 0;
                 else if (parts == 3) {
                     if (auto *source = zmq_msg_gets(&frame.value, "Peer-Address")) peer = source;
-                    if (size) body.assign(data, data + size);
+                    if (zmq_msg_copy(&body_frame.value, &frame.value))
+                        throw std::runtime_error("ZeroMQ message reference failed");
+                    body_received = true;
                 }
                 more = zmq_msg_more(&frame.value) != 0;
             } while (more);
-            if (parts != 3 || !delimiter || identity.empty()) {
+            if (parts != 3 || !delimiter || identity.empty() || !body_received) {
                 if (!identity.empty()) reply(router, identity, error_reply("invalid message envelope"));
                 continue;
             }
@@ -979,8 +1058,12 @@ static void serve_port(void *context, const fs::path &root, const std::string &a
                 continue;
             }
             try {
-                auto result = process_transfer(sessions, identity, body, root, shared, server, lane,
-                                               &runtime);
+                const auto *body = static_cast<const unsigned char *>(
+                    zmq_msg_data(&body_frame.value));
+                const auto body_size = zmq_msg_size(&body_frame.value);
+                auto result = process_transfer(
+                    sessions, identity, ByteView(body, body_size), root, shared, server, lane,
+                    &runtime);
                 reply(router, identity, result.first);
                 if (result.second) notifier.wake();
             } catch (const std::exception &error) {

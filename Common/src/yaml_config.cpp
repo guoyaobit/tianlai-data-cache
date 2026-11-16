@@ -68,7 +68,7 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     reorderPeriods = number(cfg, "reorderPeriods", 1, 10000);
     settleMilliseconds = number(cfg, "settleMilliseconds", 1, 10000);
     transitionWarnPercent = number(cfg, "transitionWarnPercent", 1, 99);
-    chunkPeriods = number(cfg, "chunkPeriods", 1, 64);
+    chunkPeriods = number(cfg, "chunkPeriods", 1, 128);
     socketTimeoutSeconds = number(cfg, "socketTimeoutSeconds", 1, 300);
     debug = boolean(cfg, "debug", false);
     if (cfg["acquisitionId"])

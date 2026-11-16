@@ -215,12 +215,12 @@ def main():
             deadline = time.monotonic() + 10
             while True:
                 status = json.loads(status_file.read_text())
-                if status['state'] == 'WAITING_FOR_DATA' and status['completed_lane_transfers'] == 28:
+                if status['state'] == 'WAITING_FOR_DATA' and status['completed_lanes_total'] == 28:
                     break
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'storage status did not settle: {status}')
                 time.sleep(.05)
-            assert status['written_bytes'] > 0 and status['active_transfers'] == 0
+            assert status['written_bytes_total'] > 0 and status['active_transfers'] == 0
             # A lost node-side final reply now returns the durable result at metadata,
             # without clearing the completion marker or rewriting the files.
             send_event(context, port + 3, root, 3, 0, notify_port)

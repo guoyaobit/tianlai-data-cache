@@ -9,7 +9,7 @@
 #include <zmq.h>
 
 namespace {
-constexpr size_t MAX_MESSAGE = 13 * 1024 * 1024;
+constexpr size_t MAX_MESSAGE = 32 * 1024 * 1024;
 constexpr size_t MAX_RESULT_JSON = 1200;
 
 uint32_t read32(const unsigned char *p) {

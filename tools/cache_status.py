@@ -124,7 +124,10 @@ def remote_storage_snapshot(host, port, acquisition, timeout):
     except (ConnectionError, OSError, ValueError, json.JSONDecodeError) as error:
         return dict(service='tianlai-storage', state='OFFLINE', error=str(error),
                     listeners_ready=0, listener_count=0, active_transfers=0,
-                    completed_lane_transfers=0, written_bytes=0)
+                    event_id='', event_expected_lanes=0, event_completed_lanes=0,
+                    event_aborted_lanes=0, event_written_bytes=0,
+                    completed_lanes_total=0, aborted_lanes_total=0,
+                    written_bytes_total=0, write_rate_bytes_per_second=0)
 
 
 def load_nodes(path):
@@ -154,6 +157,18 @@ def format_uptime(milliseconds):
     if minutes:
         return f'{minutes}m{seconds:02d}s'
     return f'{seconds}s'
+
+
+def format_bytes(value):
+    if not isinstance(value, (int, float)) or value < 0:
+        return '-'
+    units = ('B', 'KiB', 'MiB', 'GiB', 'TiB')
+    amount = float(value)
+    for unit in units[:-1]:
+        if amount < 1024:
+            return f'{amount:.1f}{unit}'
+        amount /= 1024
+    return f'{amount:.1f}{units[-1]}'
 
 
 def print_table(results):
@@ -217,9 +232,14 @@ def print_periods(results, integration_per_trace):
 def storage_snapshot(path):
     try:
         status = json.loads(Path(path).read_text(encoding='utf-8'))
+        if status.get('service') != 'tianlai-storage':
+            raise ValueError('invalid storage status')
         pid = status.get('pid')
         if type(pid) is not int or pid <= 0:
             raise ValueError('invalid storage PID')
+        updated = status.get('updated_unix')
+        if type(updated) is not int or abs(time.time() - updated) > 10:
+            raise ValueError('stale storage status')
         try:
             os.kill(pid, 0)
         except PermissionError:
@@ -228,17 +248,32 @@ def storage_snapshot(path):
     except (OSError, ValueError, json.JSONDecodeError) as error:
         return dict(service='tianlai-storage', state='OFFLINE', error=str(error),
                     listeners_ready=0, listener_count=0, active_transfers=0,
-                    completed_lane_transfers=0, written_bytes=0)
+                    event_id='', event_expected_lanes=0, event_completed_lanes=0,
+                    event_aborted_lanes=0, event_written_bytes=0,
+                    completed_lanes_total=0, aborted_lanes_total=0,
+                    written_bytes_total=0, write_rate_bytes_per_second=0)
 
 
 def print_storage(status):
     state = status.get('state', 'OFFLINE')
     listeners = f"{status.get('listeners_ready', 0)}/{status.get('listener_count', 0)}"
+    state_age = format_uptime(status.get('state_age_ms'))
+    rate = format_bytes(status.get('write_rate_bytes_per_second', 0)) + '/s'
+    event = status.get('event_id') or '-'
+    event_lanes = f"{status.get('event_completed_lanes', 0)}/{status.get('event_expected_lanes', 0)}"
     print('STORAGE')
-    print(f"  state={state} "
-          f"listeners={listeners} active_transfers={status.get('active_transfers', 0)} "
-          f"completed_lanes={status.get('completed_lane_transfers', 0)} "
-          f"written_bytes={status.get('written_bytes', 0)}")
+    print(f"  state={state} age={state_age} listeners={listeners} "
+          f"active_lanes={status.get('active_transfers', 0)} rate={rate}")
+    print(f"  event={event} lanes={event_lanes} aborted={status.get('event_aborted_lanes', 0)} "
+          f"written={format_bytes(status.get('event_written_bytes', 0))}")
+    print(f"  totals completed={status.get('completed_lanes_total', 0)} "
+          f"aborted={status.get('aborted_lanes_total', 0)} "
+          f"written={format_bytes(status.get('written_bytes_total', 0))}")
+    notification = status.get('notification_state')
+    notification_error = status.get('notification_error')
+    if (notification and notification != 'IDLE') or notification_error:
+        print(f"  notification={notification}" +
+              (f" error={notification_error}" if notification_error else ''))
     error = status.get('last_error') or status.get('error')
     if error:
         print(f"  last_error={error}")
@@ -362,7 +397,7 @@ def main():
                 print_table(results)
                 period_ready = True
             if not arguments.watch:
-                unhealthy = storage.get('state') in ('OFFLINE', 'ERROR') or any(
+                unhealthy = storage.get('state') in ('OFFLINE', 'ERROR', 'NOTIFICATION_RETRY') or any(
                     item['runtime_state'] in ('OFFLINE', 'ERROR') for item in results)
                 return 1 if unhealthy or not period_ready else 0
             time.sleep(max(arguments.watch, 0.2))

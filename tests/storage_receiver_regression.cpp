@@ -52,10 +52,14 @@ int main(int argc, char **argv) {
         status.listenerReady(); status.listenerReady();
         json snapshot = read_json_file(status_path);
         assert(snapshot.at("state") == "WAITING_FOR_DATA");
-        status.transferStarted(); status.addWrittenBytes(4096); status.transferFinished(true);
+        status.transferStarted("status-event", 2);
+        status.addWrittenBytes(4096);
+        status.transferFinished(true);
         snapshot = read_json_file(status_path);
-        assert(snapshot.at("completed_lane_transfers") == 1);
-        assert(snapshot.at("written_bytes") == 4096);
+        assert(snapshot.at("event_completed_lanes") == 1);
+        assert(snapshot.at("completed_lanes_total") == 1);
+        assert(snapshot.at("event_written_bytes") == 4096);
+        assert(snapshot.at("written_bytes_total") == 4096);
         status.stop();
         assert(read_json_file(status_path).at("state") == "STOPPING");
     }

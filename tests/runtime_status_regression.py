@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,10 +48,12 @@ for field in ('lost_packets', 'loss_periods', 'last_loss_period', 'late_packets'
     assert f'\\"{field}\\"' in EVENT
 assert 'RuntimeState::SendingCachedData' in EVENT
 assert 'RuntimeState::StorageConfirmed' in SENDER
-for state in ('RECEIVING_AND_WRITING', 'NOTIFYING_BACKEND', 'WAITING_FOR_DATA'):
+for state in ('RECEIVING_AND_WRITING', 'NOTIFYING_BACKEND', 'NOTIFICATION_RETRY',
+              'WAITING_FOR_DATA'):
     assert state in STORAGE
-for field in ('listeners_ready', 'active_transfers', 'completed_lane_transfers',
-              'written_bytes'):
+for field in ('listeners_ready', 'active_transfers', 'event_completed_lanes',
+              'event_written_bytes', 'completed_lanes_total', 'written_bytes_total',
+              'write_rate_bytes_per_second'):
     assert field in STORAGE
 assert 'cache_status.py' in SITE and 'cache_status.py' in UPDATE
 assert SITE.count('tasks/install_tlcache.yml') == 3
@@ -108,7 +111,9 @@ assert ('COMMON range=[10010,60000) latest=59999 trace=1 integration=9999'
         in periods.getvalue())
 with tempfile.TemporaryDirectory() as directory:
     status_path = Path(directory) / 'storage.json'
-    status_path.write_text(json.dumps(dict(pid=os.getpid(), state='WAITING_FOR_DATA')),
+    status_path.write_text(json.dumps(dict(service='tianlai-storage', pid=os.getpid(),
+                                           updated_unix=int(time.time()),
+                                           state='WAITING_FOR_DATA')),
                            encoding='utf-8')
     assert module.storage_snapshot(status_path)['state'] == 'WAITING_FOR_DATA'
     fallback = module.load_nodes(Path(directory) / 'missing-nodes.json')
@@ -118,7 +123,10 @@ storage_table = io.StringIO()
 with redirect_stdout(storage_table):
     module.print_storage(dict(state='WAITING_FOR_DATA', listeners_ready=28,
                               listener_count=28, active_transfers=0,
-                              completed_lane_transfers=2, written_bytes=4096))
+                              event_id='event', event_expected_lanes=28,
+                              event_completed_lanes=2, event_written_bytes=4096,
+                              completed_lanes_total=2, written_bytes_total=4096,
+                              notification_state='IDLE'))
 assert 'STORAGE' in storage_table.getvalue() and '28/28' in storage_table.getvalue()
 
 print('runtime state reporting checks passed')

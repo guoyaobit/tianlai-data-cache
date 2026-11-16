@@ -241,6 +241,11 @@
             src: "{{ tianlai_root }}/src/{{ tianlai_profile }}/tianlai-store-{{ tianlai_profile | lower }}"
             dest: "{{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }}"
             mode: '0755'
+        - name: Increase cache storage block size
+          ansible.builtin.lineinfile:
+            path: "{{ tianlai_root }}/config/recv.yaml"
+            regexp: '^chunkPeriods:'
+            line: 'chunkPeriods: 128  # Integration periods per storage block (1-128).'
       always:
         - name: Restore running cache
           ansible.builtin.systemd:

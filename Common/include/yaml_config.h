@@ -46,7 +46,7 @@ class YamlConfig {
     unsigned serverId = 0, inputDataBytes = 0, integrationPerTrace = 50000;
     unsigned periodMicroseconds = 200, halfBufferSeconds = 50, maxEventSeconds = 50;
     unsigned reorderPeriods = 50, settleMilliseconds = 20, transitionWarnPercent = 80;
-    unsigned chunkPeriods = 64;
+    unsigned chunkPeriods = 128;
     unsigned controlPort = 19000, socketTimeoutSeconds = 15;
     uint64_t transitionBytes = 32ULL << 30, reserveMemoryBytes = 48ULL << 30;
     bool prefaultMemory = true, debug = false;
