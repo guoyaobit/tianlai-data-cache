@@ -21,6 +21,7 @@ RPC_ATTEMPTS = 6
 REPLAY_TTL_SECONDS = 300
 REPLAY_MAX_ENTRIES = 1024
 DEFAULT_ACQUISITION = 'tianlai'
+COMPLETION_PORT = 19001
 
 
 def parse_request(data):
@@ -360,13 +361,15 @@ class Controller:
         if not resume:
             selected_nodes = self.event_nodes(channel_count, message.get('server_ids'))
         normalized = None if resume else self.capture_range(message)
-        result_port = 0 if resume else message.get('result_port', 0)
-        if not resume and (type(result_port) is not int or
-                           result_port != 0 and not 1024 <= result_port <= 65535):
-            raise ValueError('result_port must be 0 or between 1024 and 65535')
-        if result_port and peer is None:
-            raise ValueError('result callback requires a TCP peer')
-        result_address = '' if not result_port else peer[0]
+        if not resume and ('result_address' in message or 'result_port' in message):
+            raise ValueError('completion endpoint is assigned automatically')
+        notify = False if resume else message.get('notify', peer is not None)
+        if type(notify) is not bool:
+            raise ValueError('notify must be a boolean')
+        if notify and peer is None:
+            raise ValueError('completion notification requires a TCP peer')
+        result_port = COMPLETION_PORT if notify else 0
+        result_address = peer[0] if notify else ''
         with self.lock:
             existing = self.events.get(event_id)
             if existing and not resume:
