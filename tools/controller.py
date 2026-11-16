@@ -313,6 +313,29 @@ class Controller:
                 raise RuntimeError('; '.join(errors))
             return results
 
+    def node_status(self, node):
+        """Return cache runtime state even when the cache process is intentionally stopped."""
+        try:
+            return rpc(node, self.acquisition, 'QUERY_STATUS', timeout=.15, retries=1)
+        except Exception as cache_error:
+            service = manager_rpc(node, 'STATUS')
+            service_state = service.get('service_state', 'unknown')
+            if service.get('status') != 'OK':
+                runtime_state = 'OFFLINE'
+                error = service.get('error') or str(cache_error)
+            elif service_state == 'active':
+                runtime_state = 'STARTING'
+                error = str(cache_error)
+            else:
+                runtime_state = 'STOPPED'
+                error = ''
+            result = dict(server_id=node['server_id'], status=runtime_state,
+                          runtime_state=runtime_state, service_state=service_state,
+                          accept_trigger=False, oldest_period=0, settled_end=0)
+            if error:
+                result['error'] = str(error)[:120]
+            return result
+
     def poll_event(self, node, event_id, terminal, timeout):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -537,10 +560,11 @@ class Controller:
                 busy = any(e['status'] not in ('COMPLETED', 'CANCELLED') for e in self.events.values())
             channel_count = message.get('channel_count', 384)
             nodes = self.event_nodes(channel_count, message.get('server_ids'))
-            states = self.parallel('QUERY_STATUS', nodes=nodes)
-            oldest = max(s['oldest_period'] for s in states)
-            end = min(s['settled_end'] for s in states)
-            ready = not busy and oldest < end and all(s['accept_trigger'] for s in states)
+            with ThreadPoolExecutor(max_workers=len(nodes)) as workers:
+                states = list(workers.map(self.node_status, nodes))
+            oldest = max(s.get('oldest_period', 0) for s in states)
+            end = min(s.get('settled_end', 0) for s in states)
+            ready = not busy and oldest < end and all(s.get('accept_trigger', False) for s in states)
             node_runtime_states = {
                 str(node['server_id']): state.get('runtime_state', state.get('status', 'UNKNOWN'))
                 for node, state in zip(nodes, states)
@@ -548,7 +572,9 @@ class Controller:
             runtime_state_counts = {}
             for state in node_runtime_states.values():
                 runtime_state_counts[state] = runtime_state_counts.get(state, 0) + 1
-            return dict(status='READY' if ready else 'BUSY_OR_WARMING', accept_trigger=ready,
+            summary = ('READY' if ready else 'STOPPED'
+                       if set(node_runtime_states.values()) == {'STOPPED'} else 'BUSY_OR_WARMING')
+            return dict(status=summary, accept_trigger=ready,
                         channel_count=channel_count, oldest_period=oldest, settled_end=end,
                         partial_node_set=len(nodes) != (11 if channel_count == 288 else 14),
                         participating_server_ids=[node['server_id'] for node in nodes],

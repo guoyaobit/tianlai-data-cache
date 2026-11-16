@@ -54,7 +54,8 @@ bash update_software.sh
 
 部署默认最多并行处理20台主机；缓存节点各自推进，不等待较慢节点完成同一步骤。每台目标主机默认使用4个编译线程，可在`group_vars/all/settings.yml`中将`tianlai_build_jobs`调整为1～16。现场直接运行`bash deploy.sh`或`bash update_software.sh`即可，不需要设置并发环境变量。
 
-该命令更新并编译缓存程序和C++落盘程序，同时更新Python控制器，以及控制器/显控节点上的`tlcache`、`tltrigger`。更新前正在运行的服务会在程序替换后恢复运行；原本停止的服务保持停止。先更新单台缓存服务器可执行 `bash update_software.sh --limit tianlaistore1`；只更新显控节点可使用`--limit display`，只更新存储/控制器可使用 `--limit storage` 或 `--limit controller`。使用INI清单时执行 `TIANLAI_INVENTORY=inventory.ini bash update_software.sh`。
+该命令更新并编译缓存程序和C++落盘程序，同时更新Python控制器，以及控制器/显控节点上的`tlcache`、`tltrigger`。存储和控制器保持更新前的运行状态；所有缓存节点在更新后统一保持禁用和停止，并恢复接收网卡的ixgbe驱动，需要采集时再执行`tlcache start`。先更新单台缓存服务器可执行 `bash update_software.sh --limit tianlaistore1`；只更新显控节点可使用`--limit display`，只更新存储/控制器可使用 `--limit storage` 或 `--limit controller`。使用INI清单时执行 `TIANLAI_INVENTORY=inventory.ini bash update_software.sh`。
+缓存节点关闭时，`tltrigger`状态查询通过常驻管理服务返回`STOPPED`；缓存进程启动但控制端口尚未就绪时返回`STARTING`，不会把正常停机显示为TCP超时错误。
 
 主部署会在所有缓存节点、存储服务器、控制器和显控节点安装网络诊断工具，包括 `bwm-ng`、`ethtool`、`iperf3`、`tcpdump`、完整的`wireshark`、命令行工具`tshark`、`mtr`、`nmap`、`iftop` 和 `nload`。`tshark`和`dumpcap`默认要求sudo权限。独立Playbook只安装或更新这组工具，不执行系统全量升级，也不修改网络和业务配置：
 
