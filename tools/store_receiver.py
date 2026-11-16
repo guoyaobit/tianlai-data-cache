@@ -65,6 +65,7 @@ def atomic_json(path, value):
         out.flush()
         os.fsync(out.fileno())
     os.replace(temp, path)
+    path.chmod(0o644)
     sync_directory(path.parent)
 
 
@@ -127,6 +128,7 @@ class StoreReceiver:
     def __init__(self, directory, allowed_sources=()):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
+        self.directory.chmod(0o755)
         self.allowed_sources = set(allowed_sources)
         self.lock = threading.Lock()
         self.active = set()
@@ -186,6 +188,7 @@ class StoreReceiver:
             for part in (event_directory_name(event), data_directory_name(server)):
                 child = path / part
                 child.mkdir(exist_ok=True)
+                child.chmod(0o755)
                 sync_directory(path)
                 path = child
             state_path = path / f'lane-{lane}.json'
@@ -207,7 +210,8 @@ class StoreReceiver:
             stride = FRAME.size + boards * packet_bytes
             for p in progress:
                 filename = path / data_file_name(server, p)
-                fd = os.open(filename, os.O_CREAT | os.O_RDWR, 0o640)
+                fd = os.open(filename, os.O_CREAT | os.O_RDWR, 0o644)
+                os.fchmod(fd, 0o644)
                 files[p] = fd
                 os.ftruncate(fd, count * stride)
             unsynced_bytes = 0

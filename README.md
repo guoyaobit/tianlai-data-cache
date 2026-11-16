@@ -186,6 +186,7 @@ make storage
 `sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。每个lane只使用一个`lane-N.json`保存元数据、接收状态和缺包统计；最终确认丢失时，已完成lane在元数据阶段直接返回STORED。未指定服务器时，288路需要22个lane、384路需要28个lane持久化状态一致；指定服务器时只等待所选节点的两个lane。随后生成事件根目录的`event.json`并通知后端；同一文件的`backend_acknowledged`记录后端是否确认，`partial_node_set`及`participating_server_ids`明确记录实际参与节点。
 
 落盘根目录统一为`/data`，自动生成的事件路径为`/data/YYYYMMDD-HHMMSS/`，不包含随机码。包号和频率子目录采用短名称，例如`p24-25/packet-24_boards-00-17.bin`或`f0688-1023/frequency-0688-0773_boards-36-47.bin`；文件名仍完整描述数据内容，完整事件编号保存在`event.json`中。
+落盘目录权限为`0755`，数据文件及JSON状态文件权限为`0644`，所有本机用户均可读取，仅服务所属用户可以修改。
 
 ZeroMQ 数据通道不使用 UDP 分片参数；旧配置中的 udpFragmentBytes 必须删除。TCP/IP MTU 仍须按实际网络配置。ZeroMQ 不会补回 FPGA 到缓存服务器之间丢失的 UDP 包；旧 UDP/TCP 存储发送端与 ZeroMQ 接收器不兼容，需协调同时更新。
 

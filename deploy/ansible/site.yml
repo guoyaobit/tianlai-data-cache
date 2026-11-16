@@ -174,7 +174,7 @@
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
-        mode: '0750'
+        mode: "{{ '0755' if item == tianlai_storage_directory else '0750' }}"
       loop:
         - "{{ tianlai_root }}/src/Storage"
         - "{{ tianlai_root }}/bin"

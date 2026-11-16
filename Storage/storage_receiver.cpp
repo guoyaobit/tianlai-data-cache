@@ -112,6 +112,7 @@ static void ensure_dir(const fs::path &parent, const std::string &name) {
     const bool created = fs::create_directory(child, error);
     if (error) throw std::runtime_error("create directory: " + error.message());
     require(fs::is_directory(child), "storage path is not a directory");
+    if (::chmod(child.string().c_str(), 0755)) throw system_error("chmod directory");
     if (created) sync_dir(parent);
 }
 static void write_all(int fd, const unsigned char *data, size_t size, uint64_t offset) {
@@ -124,7 +125,7 @@ static void write_all(int fd, const unsigned char *data, size_t size, uint64_t o
 }
 static void atomic_json(const fs::path &path, const json &value) {
     const auto temp = path.string() + ".tmp";
-    int fd = ::open(temp.c_str(), O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0640);
+    int fd = ::open(temp.c_str(), O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
     if (fd < 0) throw system_error("open JSON temporary file");
     try {
         const auto text = value.dump(2);
@@ -133,6 +134,7 @@ static void atomic_json(const fs::path &path, const json &value) {
         if (::close(fd)) { fd = -1; throw system_error("close JSON"); }
         fd = -1;
         if (::rename(temp.c_str(), path.string().c_str())) throw system_error("rename JSON");
+        if (::chmod(path.string().c_str(), 0644)) throw system_error("chmod JSON");
         sync_dir(path.parent_path());
     } catch (...) { if (fd >= 0) ::close(fd); throw; }
 }
@@ -506,8 +508,9 @@ class EventWriter {
         for (unsigned p = 0; p < ports; ++p) {
             if (!selected[p]) continue;
             auto path = directory / data_file_name(server, p);
-            files[p] = ::open(path.string().c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0640);
+            files[p] = ::open(path.string().c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
             if (files[p] < 0) throw system_error("open event file");
+            if (::fchmod(files[p], 0644)) throw system_error("chmod event file");
             if (::ftruncate(files[p], static_cast<off_t>(count * stride))) throw system_error("resize event file");
         }
         last_data_sync = std::chrono::steady_clock::now();
@@ -1262,6 +1265,8 @@ int main(int argc, char **argv) {
             return 0;
         }
         fs::create_directories(config.directory);
+        if (::chmod(config.directory.string().c_str(), 0755))
+            throw system_error("chmod storage directory");
         std::signal(SIGINT, stop_handler); std::signal(SIGTERM, stop_handler);
         serve(config.directory, config.receivers, config.io_threads, config.expected_servers,
               config.status_file, config.result_bind_address);
