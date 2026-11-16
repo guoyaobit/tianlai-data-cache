@@ -284,6 +284,13 @@
         - "{{ tianlai_root }}/tools"
         - "{{ tianlai_root }}/src/{{ tianlai_profile }}"
         - "{{ tianlai_root }}/config"
+    - name: Create persistent cache log directory
+      ansible.builtin.file:
+        path: "{{ tianlai_cache_log_file | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
     - name: Install cache status tool on cache nodes
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../tools/{{ item }}"

@@ -49,7 +49,8 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 - `transitionWarnPercent` 默认 80；过渡区达到该占用比例时记录一次 WARN，并在查询结果中置警告标志。
 - `chunkPeriods` 默认 128；单个 ZeroMQ 数据块最大 32 MiB，以减少消息往返、解析和写入调用次数。
 - Ansible根据网卡NUMA拓扑自动填写`cpuIdN`和`sendCpuId0/1`。每个NUMA保留首个物理核用于后台任务，两个发送lane在`ens2f0`所在NUMA使用独立物理核，接收线程再使用其余不重复的本地物理核。内存预触页默认开启，仍需结合现场验证网卡、线程和缓存的本地性。
-- `logFilePath` 是日志文件全路径；`-` 只输出到 stderr。`receive_config.yaml` 中可选的
+- Ansible默认将历史日志写入`/var/log/tianlai/cache.log`，同时将stderr交给journald；
+  `logFilePath`也可改为其他绝对路径，设为`-`时只输出stderr。`receive_config.yaml` 中可选的
   `debug: true` 启用详细诊断日志，省略或设为 `false` 时保持 INFO 级别。日志由 spdlog
   输出，带毫秒时间和线程号；指定文件时同时输出到 stderr，文件按 50 MiB 轮转，保留最多
   5 个备份。WARN 及以上立即刷新，其他日志按约 3 秒周期刷新；日志并非事件持久化凭据。

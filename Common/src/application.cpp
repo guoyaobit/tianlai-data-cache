@@ -1,15 +1,18 @@
 #include "functions.h"
 #include "log_output.h"
+#include <algorithm>
 #include <csignal>
 #include <exception>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <pthread.h>
 #include <sched.h>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <unistd.h>
 static void Prepare(CacheRuntime &para);
 static void Finish(CacheRuntime &para);
 static void isolateWorkerCpus(const YamlConfig &config);
@@ -213,20 +216,114 @@ static uint64_t availableMemory() {
     throw std::runtime_error("cannot read MemAvailable");
 }
 
-// First-touch one large port buffer on the same CPU used by its receive thread.
-// Prepare runs these independent workers in parallel across NUMA memory paths.
+static int cpuNumaNode(int cpu) {
+    if (cpu < 0)
+        return -1;
+    for (int node = 0; node < CPU_SETSIZE; ++node) {
+        const std::string path = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
+                                 "/node" + std::to_string(node);
+        if (access(path.c_str(), F_OK) == 0)
+            return node;
+    }
+    return -1;
+}
+
+static uint64_t numaNodeMemory(int node) {
+    std::ifstream in("/sys/devices/system/node/node" + std::to_string(node) + "/meminfo");
+    std::string field;
+    while (in >> field) {
+        if (field != "MemTotal:")
+            continue;
+        uint64_t kib = 0;
+        if (in >> kib)
+            return kib * 1024;
+        break;
+    }
+    return 0;
+}
+
+static int backgroundCpuOnNode(int node) {
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    if (sched_getaffinity(0, sizeof(allowed), &allowed))
+        return -1;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+        if (CPU_ISSET(cpu, &allowed) && cpuNumaNode(cpu) == node)
+            return cpu;
+    return -1;
+}
+
+struct PortAllocationPlan {
+    unsigned port;
+    int receiveNode;
+    int allocationNode;
+    int allocationCpu;
+};
+
+// Keep receive workers local to their NICs. If all four NICs share one NUMA
+// node, spread the large buffers over memory-bearing NUMA nodes to avoid
+// exhausting one node during prefault. Allocation remains serial per node.
+static std::vector<PortAllocationPlan> planPortAllocations(const YamlConfig &config) {
+    std::vector<PortAllocationPlan> plans;
+    plans.reserve(config.receivePorts.size());
+    for (unsigned port = 0; port < config.receivePorts.size(); ++port) {
+        const int node = cpuNumaNode(config.receivePorts[port].cpuId);
+        plans.push_back({port, node, node, config.receivePorts[port].cpuId});
+    }
+
+    const bool fourPortsOnOneNode = plans.size() == 4 && plans.front().receiveNode >= 0 &&
+        std::all_of(plans.begin(), plans.end(), [&](const PortAllocationPlan &plan) {
+            return plan.receiveNode == plans.front().receiveNode;
+        });
+    if (!fourPortsOnOneNode)
+        return plans;
+
+    const int localNode = plans.front().receiveNode;
+    std::vector<std::pair<int, int>> targets;
+    if (numaNodeMemory(localNode))
+        targets.emplace_back(localNode, plans.front().allocationCpu);
+    for (int node = 0; node < CPU_SETSIZE; ++node) {
+        if (node == localNode || !numaNodeMemory(node))
+            continue;
+        const int cpu = backgroundCpuOnNode(node);
+        if (cpu >= 0)
+            targets.emplace_back(node, cpu);
+    }
+    if (targets.size() < 2) {
+        LOG("Four receive ports share NUMA" + std::to_string(plans.front().receiveNode) +
+                "; buffer prefault will be serialized on that node",
+            WARN);
+        return plans;
+    }
+    if (targets.size() > plans.size())
+        targets.resize(plans.size());
+
+    for (unsigned index = 0; index < plans.size(); ++index) {
+        const auto &target = targets[index % targets.size()];
+        plans[index].allocationNode = target.first;
+        plans[index].allocationCpu = target.first == plans[index].receiveNode
+            ? config.receivePorts[plans[index].port].cpuId : target.second;
+    }
+    LOG("Four receive ports share NUMA" + std::to_string(plans.front().receiveNode) +
+            "; buffers balanced across " + std::to_string(targets.size()) + " NUMA nodes",
+        WARN);
+    return plans;
+}
+
+// First-touch one large port buffer on the CPU selected by the NUMA plan.
 static std::unique_ptr<ReceiveRingBuffer> allocatePortBuffer(
-        unsigned index, const ReceivePortConfig &port, const YamlConfig &config) {
-    if (port.cpuId >= 0) {
-        if (port.cpuId >= CPU_SETSIZE)
+        unsigned index, const ReceivePortConfig &port, const YamlConfig &config,
+        int allocationCpu) {
+    if (allocationCpu >= 0) {
+        if (allocationCpu >= CPU_SETSIZE)
             throw std::runtime_error("buffer allocation CPU ID is out of range");
         cpu_set_t cpus;
         CPU_ZERO(&cpus);
-        CPU_SET(port.cpuId, &cpus);
+        CPU_SET(allocationCpu, &cpus);
         if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus))
             throw std::runtime_error(
                 "buffer allocation CPU affinity failed for port " +
-                std::to_string(index) + " cpu " + std::to_string(port.cpuId));
+                std::to_string(index) + " cpu " + std::to_string(allocationCpu));
     }
     return std::unique_ptr<ReceiveRingBuffer>(new ReceiveRingBuffer(
         index, config.halfPeriods(), config.transitionPeriods(),
@@ -244,33 +341,52 @@ static void Prepare(CacheRuntime &para) {
         throw std::runtime_error(
             "insufficient available RAM for A/B/transition and system reserve");
     LOG("Allocating " + std::to_string(c.allocationBytes()) + " bytes, no CUDA dependency.", START);
+    const auto plans = planPortAllocations(c);
     std::vector<std::unique_ptr<ReceiveRingBuffer>> buffers(c.receivePorts.size());
     std::vector<std::exception_ptr> failures(c.receivePorts.size());
+    std::map<int, std::vector<PortAllocationPlan>> groups;
+    for (const auto &plan : plans)
+        groups[plan.allocationNode].push_back(plan);
     std::vector<std::thread> workers;
-    workers.reserve(c.receivePorts.size());
+    workers.reserve(groups.size());
     try {
-        for (unsigned index = 0; index < c.receivePorts.size(); ++index) {
-            const auto &port = c.receivePorts[index];
-            LOG("Receive port " + std::to_string(index) +
+        for (const auto &plan : plans) {
+            const auto &port = c.receivePorts[plan.port];
+            LOG("Receive port " + std::to_string(plan.port) +
                     " buffer: packet_slots=" + std::to_string(port.packetSlots()) +
                     " physical_boards=" + std::to_string(port.boardNum) +
                     " packets_per_board=" + std::to_string(port.packetsPerBoard) +
-                    " cpu=" + std::to_string(port.cpuId) +
+                    " receive_numa=" + std::to_string(plan.receiveNode) +
+                    " allocation_numa=" + std::to_string(plan.allocationNode) +
+                    " allocation_cpu=" + std::to_string(plan.allocationCpu) +
                     " frame_bytes=" +
                     std::to_string(port.packetSlots() *
                                    uint64_t(c.inputDataBytes + INPUT_HEADER_BYTES)),
                 DEBUG);
-            workers.emplace_back([&, index]() {
-                try {
-                    const auto started = std::chrono::steady_clock::now();
-                    buffers[index] = allocatePortBuffer(index, c.receivePorts[index], c);
-                    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - started).count();
-                    LOG("Receive port " + std::to_string(index) +
-                            " memory ready: ms=" + std::to_string(milliseconds),
-                        INFO);
-                } catch (...) {
-                    failures[index] = std::current_exception();
+        }
+        for (const auto &entry : groups) {
+            const auto group = entry.second;
+            workers.emplace_back([&, group]() {
+                for (const auto &plan : group) {
+                    try {
+                        const auto started = std::chrono::steady_clock::now();
+                        LOG("RX" + std::to_string(plan.port) +
+                                " memory start: numa=" + std::to_string(plan.allocationNode),
+                            INFO);
+                        buffers[plan.port] = allocatePortBuffer(
+                            plan.port, c.receivePorts[plan.port], c, plan.allocationCpu);
+                        const auto milliseconds =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - started).count();
+                        LOG("RX" + std::to_string(plan.port) +
+                                " memory ready: numa=" +
+                                std::to_string(plan.allocationNode) +
+                                " ms=" + std::to_string(milliseconds),
+                            INFO);
+                    } catch (...) {
+                        failures[plan.port] = std::current_exception();
+                        return;
+                    }
                 }
             });
         }

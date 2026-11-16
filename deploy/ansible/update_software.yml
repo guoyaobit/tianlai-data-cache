@@ -95,6 +95,13 @@
       ansible.builtin.assert:
         that: cache_deployment_files.results | map(attribute='stat.exists') | min
         fail_msg: Run deploy.sh once before using update_software.sh.
+    - name: Create persistent cache log directory
+      ansible.builtin.file:
+        path: "{{ tianlai_cache_log_file | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
     - name: Read deployed cache configuration
       ansible.builtin.slurp:
         src: "{{ tianlai_root }}/config/server.yaml"
@@ -252,6 +259,12 @@
         insertafter: "{{ '^sendEthName:' if item == 0 else '^sendCpuId0:' }}"
         line: "sendCpuId{{ item }}: {{ tianlai_send_cpu_ids[item] }}  # Dedicated physical CPU for storage lane {{ item }}."
       loop: [0, 1]
+    - name: Enable persistent rotating cache log
+      ansible.builtin.lineinfile:
+        path: "{{ tianlai_root }}/config/server.yaml"
+        regexp: '^logFilePath:'
+        insertafter: '^controlPort:'
+        line: 'logFilePath: {{ tianlai_cache_log_file | to_json }}  # Rotating file; stderr uses journald.'
     - name: Build updated cache program
       ansible.builtin.command:
         argv:

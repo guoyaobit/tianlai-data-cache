@@ -49,7 +49,7 @@ BMC/HDM带外电源控制脚本位于[`deploy/bmc/bmc_power.sh`](deploy/bmc/bmc_
 | `sendDestinationIp` / `sendDestinationPort0/1` | 存储100G口的单个IP；两个逻辑lane端口为`20000 + server_id`和`20100 + server_id`。 |
 | 发送速率 | 不设置应用层限速，使用单个网口的可用带宽。 |
 | `tools/nodes_example.json` | 改为所有 14 台节点的实际管理网地址和端口，并保存为现场配置。 |
-| `logFilePath` | `-` 表示只输出 stderr；填文件路径则额外输出 50 MiB 轮转日志、最多保留 5 个备份。 |
+| `logFilePath` | 默认`/var/log/tianlai/cache.log`；50 MiB轮转、最多5个备份，同时输出stderr。 |
 
 从项目根目录编译：
 

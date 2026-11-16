@@ -4,6 +4,8 @@
 ansible_user: ubuntu
 # Install root on target servers.
 tianlai_root: /opt/tianlai-store
+# Persistent rotating cache log.
+tianlai_cache_log_file: /var/log/tianlai/cache.log
 # Compiler jobs used independently on each target host.
 tianlai_build_jobs: 4
 # MTU applied to physical interfaces faster than 1 Gb/s.

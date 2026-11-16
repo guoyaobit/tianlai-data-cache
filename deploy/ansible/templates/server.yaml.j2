@@ -3,7 +3,7 @@ SERVERID: {{ tianlai_server_id | int }}  # Unique cache node ID (0-13).
 controlBindIp: {{ tianlai_control_ip | to_json }}  # Local management IP for control commands.
 controlPeerIp: {{ tianlai_controller_ip | to_json }}  # Controller IP allowed to send commands.
 controlPort: {{ tianlai_control_port | int }}  # Local management TCP/JSON control port.
-logFilePath: "-"  # Log path; "-" writes only to stderr.
+logFilePath: {{ tianlai_cache_log_file | to_json }}  # Rotating file; stderr uses journald.
 {% for device in tianlai_receive_devices %}
 deviceName{{ loop.index0 }}: {{ device | to_json }}  # ixcap PCI address for this receive port.
 cpuId{{ loop.index0 }}: {{ tianlai_receive_cpu_ids[loop.index0] | int }}  # NUMA-local physical CPU.
