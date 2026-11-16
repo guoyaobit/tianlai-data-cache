@@ -95,6 +95,42 @@
       ansible.builtin.assert:
         that: cache_deployment_files.results | map(attribute='stat.exists') | min
         fail_msg: Run deploy.sh once before using update_software.sh.
+    - name: Read deployed cache configuration
+      ansible.builtin.slurp:
+        src: "{{ tianlai_root }}/config/server.yaml"
+      register: deployed_cache_configuration
+    - name: Read receive devices from deployed cache configuration
+      ansible.builtin.set_fact:
+        tianlai_service_receive_devices: >-
+          {{ (deployed_cache_configuration.content | b64decode) |
+          regex_findall('(?m)^deviceName[0-9]+:[ \t]+"([0-9A-Fa-f:.]+)"') }}
+    - name: Require all receive devices for cache service update
+      ansible.builtin.assert:
+        that:
+          - tianlai_service_receive_devices | length == (8 if tianlai_server_id | int < 3 else 4)
+          - tianlai_service_receive_devices | unique | list | length == tianlai_service_receive_devices | length
+        fail_msg: The deployed server.yaml does not contain the expected receive PCI devices.
+    - name: Update cache service unit
+      ansible.builtin.template:
+        src: templates/cache.service.j2
+        dest: /etc/systemd/system/tianlai-cache.service
+        mode: '0644'
+      vars:
+        tianlai_receive_devices: "{{ tianlai_service_receive_devices }}"
+    - name: Remove obsolete cache memory override
+      ansible.builtin.file:
+        path: /etc/systemd/system/tianlai-cache.service.d/10-memory.conf
+        state: absent
+    - name: Verify updated cache service unit
+      ansible.builtin.command:
+        argv:
+          - systemd-analyze
+          - verify
+          - /etc/systemd/system/tianlai-cache.service
+      changed_when: false
+    - name: Reload updated cache service unit
+      ansible.builtin.systemd:
+        daemon_reload: true
     - name: Check configured ixcap SDK paths
       ansible.builtin.stat:
         path: "{{ item }}"

@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <thread>
 #include <sys/mman.h>
+#include <unistd.h>
 
 struct ReceiveRingBuffer::Allocation {
     size_t bytes;
@@ -17,8 +18,19 @@ struct ReceiveRingBuffer::Allocation {
             throw std::runtime_error("receive buffer mmap failed");
         madvise(data, bytes, MADV_HUGEPAGE);
         madvise(data, bytes, MADV_DONTDUMP);
-        if (prefault)
-            std::memset(data, 0, bytes);
+        if (prefault) {
+            // Anonymous mappings are already logically zero. Ask the kernel to
+            // populate writable pages in bulk; older kernels fall back to one
+            // byte per page. Neither path rewrites the complete payload.
+#ifdef MADV_POPULATE_WRITE
+            if (madvise(data, bytes, MADV_POPULATE_WRITE) == 0)
+                return;
+#endif
+            const size_t systemPage = static_cast<size_t>(getpagesize());
+            volatile unsigned char *pages = data;
+            for (size_t offset = 0; offset < bytes; offset += systemPage)
+                pages[offset] = 0;
+        }
     }
     ~Allocation() { munmap(data, bytes); }
 };

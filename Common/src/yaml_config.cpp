@@ -78,6 +78,9 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     if (cfg["udpFragmentBytes"])
         throw std::runtime_error("udpFragmentBytes is obsolete; remove it for ZeroMQ storage transport");
     prefaultMemory = number(cfg, "prefaultMemory", 0, 1) != 0;
+    if (!prefaultMemory)
+        throw std::runtime_error(
+            "prefaultMemory must be 1 so receive pages are ready before capture starts");
     controlBindIp = ip(node, "controlBindIp");
     controlPeerIp = ip(node, "controlPeerIp");
     if (controlPeerIp == "0.0.0.0")

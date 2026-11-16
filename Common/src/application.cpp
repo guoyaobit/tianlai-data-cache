@@ -184,63 +184,81 @@ static uint64_t availableMemory() {
     throw std::runtime_error("cannot read MemAvailable");
 }
 
-// First-touch each large port buffer on the same CPU used by its receive
-// thread. Linux then places the pages on that CPU's NUMA node when possible.
+// First-touch one large port buffer on the same CPU used by its receive thread.
+// Prepare runs these independent workers in parallel across NUMA memory paths.
 static std::unique_ptr<ReceiveRingBuffer> allocatePortBuffer(
         unsigned index, const ReceivePortConfig &port, const YamlConfig &config) {
-    std::unique_ptr<ReceiveRingBuffer> result;
-    std::exception_ptr failure;
-    std::thread worker([&]() {
-        try {
-            if (port.cpuId >= 0) {
-                if (port.cpuId >= CPU_SETSIZE)
-                    throw std::runtime_error("buffer allocation CPU ID is out of range");
-                cpu_set_t cpus;
-                CPU_ZERO(&cpus);
-                CPU_SET(port.cpuId, &cpus);
-                if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus))
-                    throw std::runtime_error(
-                        "buffer allocation CPU affinity failed for port " +
-                        std::to_string(index) + " cpu " + std::to_string(port.cpuId));
-            }
-            result.reset(new ReceiveRingBuffer(
-                index, config.halfPeriods(), config.transitionPeriods(),
-                config.maxEventPeriods(), port.packetSlots(), port.packetsPerBoard,
-                config.inputDataBytes + INPUT_HEADER_BYTES, config.reorderPeriods,
-                config.settleMilliseconds, config.transitionWarnPercent,
-                config.prefaultMemory));
-        } catch (...) {
-            failure = std::current_exception();
-        }
-    });
-    worker.join();
-    if (failure)
-        std::rethrow_exception(failure);
-    return result;
+    if (port.cpuId >= 0) {
+        if (port.cpuId >= CPU_SETSIZE)
+            throw std::runtime_error("buffer allocation CPU ID is out of range");
+        cpu_set_t cpus;
+        CPU_ZERO(&cpus);
+        CPU_SET(port.cpuId, &cpus);
+        if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus))
+            throw std::runtime_error(
+                "buffer allocation CPU affinity failed for port " +
+                std::to_string(index) + " cpu " + std::to_string(port.cpuId));
+    }
+    return std::unique_ptr<ReceiveRingBuffer>(new ReceiveRingBuffer(
+        index, config.halfPeriods(), config.transitionPeriods(),
+        config.maxEventPeriods(), port.packetSlots(), port.packetsPerBoard,
+        config.inputDataBytes + INPUT_HEADER_BYTES, config.reorderPeriods,
+        config.settleMilliseconds, config.transitionWarnPercent,
+        config.prefaultMemory));
 }
 
 // Check available memory and create double buffers plus a transition area for each receive port.
 static void Prepare(CacheRuntime &para) {
     const auto &c = *para.config;
+    const auto allocationStarted = std::chrono::steady_clock::now();
     if (c.allocationBytes() + c.reserveMemoryBytes > availableMemory())
         throw std::runtime_error(
             "insufficient available RAM for A/B/transition and system reserve");
     LOG("Allocating " + std::to_string(c.allocationBytes()) + " bytes, no CUDA dependency.", START);
-    std::vector<std::unique_ptr<ReceiveRingBuffer>> buffers;
-    buffers.reserve(c.receivePorts.size());
-    for (unsigned index = 0; index < c.receivePorts.size(); ++index) {
-        const auto &port = c.receivePorts[index];
-        LOG("Receive port " + std::to_string(index) +
-                " buffer: packet_slots=" + std::to_string(port.packetSlots()) +
-                " physical_boards=" + std::to_string(port.boardNum) +
-                " packets_per_board=" + std::to_string(port.packetsPerBoard) +
-                " cpu=" + std::to_string(port.cpuId) +
-                " frame_bytes=" +
-                std::to_string(port.packetSlots() *
-                               uint64_t(c.inputDataBytes + INPUT_HEADER_BYTES)),
-            DEBUG);
-        buffers.emplace_back(allocatePortBuffer(index, port, c));
+    std::vector<std::unique_ptr<ReceiveRingBuffer>> buffers(c.receivePorts.size());
+    std::vector<std::exception_ptr> failures(c.receivePorts.size());
+    std::vector<std::thread> workers;
+    workers.reserve(c.receivePorts.size());
+    try {
+        for (unsigned index = 0; index < c.receivePorts.size(); ++index) {
+            const auto &port = c.receivePorts[index];
+            LOG("Receive port " + std::to_string(index) +
+                    " buffer: packet_slots=" + std::to_string(port.packetSlots()) +
+                    " physical_boards=" + std::to_string(port.boardNum) +
+                    " packets_per_board=" + std::to_string(port.packetsPerBoard) +
+                    " cpu=" + std::to_string(port.cpuId) +
+                    " frame_bytes=" +
+                    std::to_string(port.packetSlots() *
+                                   uint64_t(c.inputDataBytes + INPUT_HEADER_BYTES)),
+                DEBUG);
+            workers.emplace_back([&, index]() {
+                try {
+                    const auto started = std::chrono::steady_clock::now();
+                    buffers[index] = allocatePortBuffer(index, c.receivePorts[index], c);
+                    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - started).count();
+                    LOG("Receive port " + std::to_string(index) +
+                            " memory ready: ms=" + std::to_string(milliseconds),
+                        INFO);
+                } catch (...) {
+                    failures[index] = std::current_exception();
+                }
+            });
+        }
+    } catch (...) {
+        for (auto &worker : workers)
+            if (worker.joinable())
+                worker.join();
+        throw;
     }
+    for (auto &worker : workers)
+        worker.join();
+    for (const auto &failure : failures)
+        if (failure)
+            std::rethrow_exception(failure);
+    const auto allocationMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - allocationStarted).count();
+    LOG("All receive memory ready: ms=" + std::to_string(allocationMilliseconds), START);
     std::lock_guard<std::mutex> lock(para.eventMutex);
     para.receiveBuffers = std::move(buffers);
 }

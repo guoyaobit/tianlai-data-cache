@@ -425,6 +425,13 @@
         dest: "{{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }}"
         mode: '0755'
       notify: stop cache after deployment
+    - name: Verify cache service unit
+      ansible.builtin.command:
+        argv:
+          - systemd-analyze
+          - verify
+          - /etc/systemd/system/tianlai-cache.service
+      changed_when: false
     - name: Apply cache changes before enabling
       ansible.builtin.meta: flush_handlers
     - name: Keep cache disabled and stopped by default
