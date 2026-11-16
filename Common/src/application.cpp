@@ -6,12 +6,13 @@
 #include <iostream>
 #include <pthread.h>
 #include <sched.h>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
 static void Prepare(CacheRuntime &para);
 static void Finish(CacheRuntime &para);
-static void isolateReceiveCpus(const YamlConfig &config);
+static void isolateWorkerCpus(const YamlConfig &config);
 static volatile std::sig_atomic_t stopped = 0;
 static void stopHandler(int) {
     stopped = 1;
@@ -47,7 +48,8 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
                   << " transitionPeriods=" << config.transitionPeriods()
                   << " debug=" << (config.debug ? "true" : "false") << "\n";
         std::cout << "transport=ZeroMQ lanes=2 sendInterface=" << config.sendLink.ethName
-                  << " rateLimit=none\n";
+                  << " sendCpu0=" << config.sendLink.cpuIds[0]
+                  << " sendCpu1=" << config.sendLink.cpuIds[1] << " rateLimit=none\n";
         for (unsigned p = 0; p < config.receivePorts.size(); ++p) {
             const auto &port = config.receivePorts[p];
             std::cout << "port=" << p << " packetId=" << port.packetId
@@ -79,10 +81,10 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
                 link.sourceIp == "0.0.0.0" || link.destinationIp == "0.0.0.0")
                 throw std::runtime_error("configure the storage send interface before running");
         }
-        // Background workers inherit this mask. Receive workers later replace
-        // it with their dedicated NUMA-local CPU, preventing logging, control,
-        // event collation and storage sending from preempting packet capture.
-        isolateReceiveCpus(config);
+        // Background workers inherit this mask. Receive and lane workers later
+        // replace it with their dedicated CPUs, so logging, control and event
+        // management cannot run on packet capture or storage-send CPUs.
+        isolateWorkerCpus(config);
         initLogOut(config.logFilePath, config.debug);
         LOG("Runtime config: server=" + std::to_string(config.serverId) +
                 " receive_ports=" + std::to_string(config.receivePorts.size()) +
@@ -147,25 +149,52 @@ int StoreMain(int argc, char **argv, StoreMode mode) {
     }
 }
 
-static void isolateReceiveCpus(const YamlConfig &config) {
+static void isolateWorkerCpus(const YamlConfig &config) {
     cpu_set_t background;
     CPU_ZERO(&background);
     if (sched_getaffinity(0, sizeof(background), &background))
         throw std::runtime_error("cannot read process CPU affinity");
-    bool changed = false;
+    std::vector<int> dedicated;
     for (const auto &port : config.receivePorts) {
-        if (port.cpuId >= 0 && port.cpuId < CPU_SETSIZE && CPU_ISSET(port.cpuId, &background)) {
-            CPU_CLR(port.cpuId, &background);
-            changed = true;
+        if (port.cpuId >= 0)
+            dedicated.push_back(port.cpuId);
+    }
+    dedicated.push_back(config.sendLink.cpuIds[0]);
+    dedicated.push_back(config.sendLink.cpuIds[1]);
+    std::set<int> isolated;
+    for (int cpu : dedicated) {
+        if (cpu < 0 || cpu >= CPU_SETSIZE || !CPU_ISSET(cpu, &background))
+            throw std::runtime_error("dedicated worker CPU is unavailable: " +
+                                     std::to_string(cpu));
+        if (isolated.count(cpu))
+            throw std::runtime_error("dedicated workers share one physical CPU core");
+        std::ifstream siblingsFile("/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
+                                   "/topology/thread_siblings_list");
+        std::string siblings;
+        if (!(siblingsFile >> siblings))
+            throw std::runtime_error("cannot read CPU thread siblings for " +
+                                     std::to_string(cpu));
+        std::stringstream ranges(siblings);
+        std::string range;
+        while (std::getline(ranges, range, ',')) {
+            const auto separator = range.find('-');
+            const int first = std::stoi(range.substr(0, separator));
+            const int last = separator == std::string::npos
+                ? first : std::stoi(range.substr(separator + 1));
+            if (first < 0 || last < first || last >= CPU_SETSIZE)
+                throw std::runtime_error("invalid CPU thread sibling list");
+            for (int sibling = first; sibling <= last; ++sibling)
+                isolated.insert(sibling);
         }
     }
-    if (!changed)
-        return;
+    for (int cpu : isolated)
+        if (CPU_ISSET(cpu, &background))
+            CPU_CLR(cpu, &background);
     bool available = false;
     for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
         available = available || CPU_ISSET(cpu, &background);
     if (!available)
-        throw std::runtime_error("receive CPUs leave no CPU for background threads");
+        throw std::runtime_error("dedicated worker CPUs leave no CPU for background threads");
     if (pthread_setaffinity_np(pthread_self(), sizeof(background), &background))
         throw std::runtime_error("background CPU affinity failed");
 }

@@ -110,6 +110,47 @@
           - tianlai_service_receive_devices | length == (8 if tianlai_server_id | int < 3 else 4)
           - tianlai_service_receive_devices | unique | list | length == tianlai_service_receive_devices | length
         fail_msg: The deployed server.yaml does not contain the expected receive PCI devices.
+    - name: Resolve the send interface PCI address during software update
+      ansible.builtin.script:
+        cmd: "files/map_interfaces_to_pci.py {{ tianlai_send_interface }}"
+        executable: /usr/bin/python3
+      register: update_send_device_raw
+      changed_when: false
+    - name: Decode the send interface PCI address during software update
+      ansible.builtin.set_fact:
+        update_send_device_report: "{{ update_send_device_raw.stdout | from_json }}"
+      changed_when: false
+    - name: Require one valid send PCI device during software update
+      ansible.builtin.assert:
+        that:
+          - update_send_device_report.missing_interfaces | length == 0
+          - update_send_device_report.invalid_interfaces | length == 0
+          - update_send_device_report.pci_addresses | length == 1
+        fail_msg: "Cannot resolve send interface {{ tianlai_send_interface }} to one PCI device."
+    - name: Assign dedicated receive and send CPUs during software update
+      ansible.builtin.script:
+        cmd: >-
+          files/assign_receive_cpus.py
+          --reserve-cores-per-node {{ tianlai_receive_reserved_cores_per_numa | int }}
+          --send-pci {{ update_send_device_report.pci_addresses[0] }}
+          --send-core-count 2
+          {{ tianlai_service_receive_devices | join(' ') }}
+        executable: /usr/bin/python3
+      register: update_cpu_assignment_raw
+      changed_when: false
+    - name: Decode dedicated CPUs during software update
+      ansible.builtin.set_fact:
+        tianlai_receive_cpu_ids: "{{ (update_cpu_assignment_raw.stdout | from_json).cpu_ids }}"
+        tianlai_send_cpu_ids: "{{ (update_cpu_assignment_raw.stdout | from_json).send_cpu_ids }}"
+      changed_when: false
+    - name: Require unique dedicated CPUs during software update
+      ansible.builtin.assert:
+        that:
+          - tianlai_receive_cpu_ids | length == tianlai_service_receive_devices | length
+          - tianlai_receive_cpu_ids | unique | list | length == tianlai_receive_cpu_ids | length
+          - tianlai_send_cpu_ids | length == 2
+          - tianlai_send_cpu_ids | unique | list | length == 2
+          - tianlai_send_cpu_ids | intersect(tianlai_receive_cpu_ids) | length == 0
     - name: Update cache service unit
       ansible.builtin.template:
         src: templates/cache.service.j2
@@ -198,6 +239,19 @@
         mode: '0755'
     - name: Update tlcache on cache nodes
       ansible.builtin.include_tasks: tasks/install_tlcache.yml
+    - name: Update receive CPU IDs in the deployed cache configuration
+      ansible.builtin.lineinfile:
+        path: "{{ tianlai_root }}/config/server.yaml"
+        regexp: "^cpuId{{ item }}:"
+        line: "cpuId{{ item }}: {{ tianlai_receive_cpu_ids[item] }}  # NUMA-local physical CPU."
+      loop: "{{ range(0, tianlai_receive_cpu_ids | length) | list }}"
+    - name: Update dedicated send CPU IDs in the deployed cache configuration
+      ansible.builtin.lineinfile:
+        path: "{{ tianlai_root }}/config/server.yaml"
+        regexp: "^sendCpuId{{ item }}:"
+        insertafter: "{{ '^sendEthName:' if item == 0 else '^sendCpuId0:' }}"
+        line: "sendCpuId{{ item }}: {{ tianlai_send_cpu_ids[item] }}  # Dedicated physical CPU for storage lane {{ item }}."
+      loop: [0, 1]
     - name: Build updated cache program
       ansible.builtin.command:
         argv:

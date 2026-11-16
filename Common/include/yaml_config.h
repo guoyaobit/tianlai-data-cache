@@ -21,6 +21,7 @@ struct ReceivePortConfig {
 struct SendLinkConfig {
     std::string ethName, sourceIp, destinationIp;
     unsigned destinationPorts[2]{};
+    int cpuIds[2]{-1, -1};
 };
 class YamlConfig {
   public:

@@ -15,6 +15,8 @@ import uuid
 DEFAULT_CONTROL_PORT = 19000
 DEFAULT_STORAGE_HOST = '172.0.0.142'
 DEFAULT_STORAGE_CONTROL_PORT = 18999
+STATUS_ATTEMPTS = 2
+STATUS_ATTEMPT_TIMEOUT = .5
 MAX_JSON_BYTES = 1200
 LENGTH = struct.Struct('!I')
 DEFAULT_CACHE_NODES = [
@@ -86,24 +88,75 @@ def query(node, acquisition, timeout):
     request = dict(version=1, request_id=uuid.uuid4().hex,
                    acquisition_id=acquisition, command='QUERY_STATUS')
     body = json.dumps(request, separators=(',', ':')).encode()
-    try:
-        with socket.create_connection((node['host'], node.get('port', 19000)),
-                                      timeout=timeout) as connection:
-            connection.settimeout(timeout)
-            send_frame(connection, body)
-            reply = json.loads(receive_frame(connection))
-        if reply.get('request_id') != request['request_id']:
-            raise ValueError('request ID mismatch')
-        return dict(reply, host=node['host'])
-    except (ConnectionError, OSError, ValueError, json.JSONDecodeError) as error:
-        return dict(server_id=node['server_id'], host=node['host'], status='OFFLINE',
-                    runtime_state='OFFLINE', error=str(error))
+    error = None
+    for attempt in range(STATUS_ATTEMPTS):
+        attempt_timeout = min(timeout, STATUS_ATTEMPT_TIMEOUT)
+        try:
+            with socket.create_connection((node['host'], node.get('port', 19000)),
+                                          timeout=attempt_timeout) as connection:
+                connection.settimeout(attempt_timeout)
+                send_frame(connection, body)
+                reply = json.loads(receive_frame(connection))
+            if reply.get('request_id') != request['request_id']:
+                raise ValueError('request ID mismatch')
+            return dict(reply, host=node['host'])
+        except (ConnectionError, OSError, ValueError, json.JSONDecodeError) as caught:
+            error = caught
+            if attempt + 1 < STATUS_ATTEMPTS:
+                time.sleep(.05)
+    if isinstance(error, ConnectionRefusedError) or getattr(error, 'errno', None) == 111:
+        state = 'STOPPED'
+    elif isinstance(error, TimeoutError):
+        state = 'NO_REPLY'
+    else:
+        state = 'OFFLINE'
+    return dict(server_id=node['server_id'], host=node['host'], status=state,
+                runtime_state=state, error=str(error))
 
 
 def snapshot(nodes, acquisition, timeout):
     with ThreadPoolExecutor(max_workers=len(nodes)) as workers:
         results = list(workers.map(lambda node: query(node, acquisition, timeout), nodes))
     return sorted(results, key=lambda item: item['server_id'])
+
+
+def cache_service_snapshot(nodes, host, port, acquisition, timeout):
+    """Ask the controller for systemd states while direct status queries run."""
+    request = dict(version=1, request_id=uuid.uuid4().hex,
+                   acquisition_id=acquisition, command='CACHE_SERVICE', action='STATUS',
+                   server_ids=[node['server_id'] for node in nodes], force=False)
+    body = json.dumps(request, separators=(',', ':')).encode()
+    try:
+        with socket.create_connection((host, port), timeout=max(timeout, 1)) as connection:
+            connection.settimeout(max(timeout, 3))
+            send_frame(connection, body)
+            reply = json.loads(receive_frame(connection))
+        if (reply.get('request_id') != request['request_id'] or
+                reply.get('status') != 'OK' or not isinstance(reply.get('nodes'), dict)):
+            raise ValueError('invalid cache service status reply')
+        return reply['nodes']
+    except (ConnectionError, OSError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def merge_service_states(results, service_states):
+    """Replace ambiguous direct-query failures with authoritative service states."""
+    for item in results:
+        service = service_states.get(str(item['server_id']))
+        if not isinstance(service, dict) or service.get('status') != 'OK':
+            continue
+        state = service.get('state', 'unknown')
+        item['service_state'] = state
+        if state == 'active':
+            if item.get('runtime_state') == 'STOPPED':
+                item['status'] = item['runtime_state'] = 'STARTING'
+        elif state in ('activating', 'reloading'):
+            item['status'] = item['runtime_state'] = 'STARTING'
+            item.pop('error', None)
+        else:
+            item['status'] = item['runtime_state'] = 'STOPPED'
+            item.pop('error', None)
+    return results
 
 
 def remote_storage_snapshot(host, port, acquisition, timeout):
@@ -176,14 +229,15 @@ def print_table(results):
           f"{'AGE_MS':>8} {'EVENT':<13} {'LOST':>10} {'NO_DATA_PORTS':<14} {'LOSS_PORTS'}")
     for item in results:
         state = item.get('runtime_state', 'UNKNOWN')
-        data_flow = item.get('data_flow', 'UNKNOWN') if state != 'OFFLINE' else 'OFFLINE'
+        unavailable = state in ('OFFLINE', 'NO_REPLY', 'STOPPED', 'STARTING')
+        data_flow = item.get('data_flow', 'UNKNOWN') if not unavailable else state
         ports = (f"{item.get('receiving_ports', 0)}/{item.get('receive_ports', 0)}"
-                 if state != 'OFFLINE' else '-')
-        age = item.get('last_packet_age_ms', '-') if state != 'OFFLINE' else '-'
+                 if not unavailable else '-')
+        age = item.get('last_packet_age_ms', '-') if not unavailable else '-'
         if data_flow == 'NO_DATA' and age == 0:
             age = '-'
         inactive = ','.join(str(port) for port in item.get('inactive_ports', [])) or '-'
-        uptime = format_uptime(item.get('uptime_ms')) if state != 'OFFLINE' else '-'
+        uptime = format_uptime(item.get('uptime_ms')) if not unavailable else '-'
         losses = item.get('lost_by_port', {})
         loss_ports = ','.join(f'{port}:{count}' for port, count in
                               sorted(losses.items(), key=lambda entry: int(entry[0]))) or '-'
@@ -201,7 +255,8 @@ def print_periods(results, integration_per_trace):
         state = item.get('runtime_state', 'UNKNOWN')
         oldest = item.get('oldest_period')
         end = item.get('settled_end')
-        usable = (state != 'OFFLINE' and type(oldest) is int and type(end) is int and
+        usable = (state not in ('OFFLINE', 'NO_REPLY', 'STOPPED', 'STARTING') and
+                  type(oldest) is int and type(end) is int and
                   oldest < end)
         if usable:
             latest = end - 1
@@ -215,7 +270,7 @@ def print_periods(results, integration_per_trace):
               f"{values[3]:>8} {values[4]:>12}")
 
     if len(online) != len(results) or not online:
-        print('COMMON unavailable: one or more nodes are offline or have no settled data')
+        print('COMMON unavailable: one or more nodes are unavailable or have no settled data')
         return False
     oldest = max(item['oldest_period'] for item in online)
     end = min(item['settled_end'] for item in online)
@@ -377,12 +432,20 @@ def main():
     nodes = select_nodes(load_nodes(arguments.nodes), targets)
     try:
         while True:
-            storage = remote_storage_snapshot(arguments.storage_host, arguments.storage_port,
-                                              arguments.acquisition, arguments.timeout)
+            with ThreadPoolExecutor(max_workers=3) as workers:
+                storage_future = workers.submit(
+                    remote_storage_snapshot, arguments.storage_host, arguments.storage_port,
+                    arguments.acquisition, arguments.timeout)
+                cache_future = workers.submit(
+                    snapshot, nodes, arguments.acquisition, arguments.timeout)
+                services_future = workers.submit(
+                    cache_service_snapshot, nodes, arguments.storage_host,
+                    arguments.storage_port, arguments.acquisition, arguments.timeout)
+                storage = storage_future.result()
+                results = merge_service_states(cache_future.result(), services_future.result())
             local_storage = local_storage_snapshot(arguments.storage_status)
             if storage.get('state') == 'OFFLINE' and local_storage is not None:
                 storage = local_storage
-            results = snapshot(nodes, arguments.acquisition, arguments.timeout)
             if arguments.watch and sys.stdout.isatty():
                 print('\033[2J\033[H', end='')
             if arguments.json:
@@ -398,7 +461,8 @@ def main():
                 period_ready = True
             if not arguments.watch:
                 unhealthy = storage.get('state') in ('OFFLINE', 'ERROR', 'NOTIFICATION_RETRY') or any(
-                    item['runtime_state'] in ('OFFLINE', 'ERROR') for item in results)
+                    item['runtime_state'] in ('OFFLINE', 'NO_REPLY', 'STOPPED', 'STARTING', 'ERROR')
+                    for item in results)
                 return 1 if unhealthy or not period_ready else 0
             time.sleep(max(arguments.watch, 0.2))
     except KeyboardInterrupt:

@@ -18,7 +18,7 @@ tianlai_f0_receive_interfaces: [ens4f0, ens4f1, ens5f0, ens5f1, ens1f0, ens1f1, 
 tianlai_f3_10_receive_interfaces: [ens4f0, ens4f1, ens5f0, ens5f1]
 # Cache hosts excluded from controller scheduling during debugging.
 tianlai_disabled_cache_nodes: []
-# Physical CPU cores reserved per NIC NUMA node.
+# Physical CPU cores left for background work on each NIC NUMA node.
 tianlai_receive_reserved_cores_per_numa: 1
 # Fixed 100 GbE receive interface on the storage server.
 tianlai_storage_receive_interface: enp152s0f0np0

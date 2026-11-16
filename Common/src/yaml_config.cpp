@@ -117,9 +117,18 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     sendLink.ethName = field(node, "sendEthName");
     sendLink.sourceIp = ip(node, "sendSourceIp");
     sendLink.destinationIp = ip(node, "sendDestinationIp");
-    for (unsigned lane = 0; lane < 2; ++lane)
+    std::set<int> workerCpus;
+    for (const auto &port : receivePorts)
+        if (port.cpuId >= 0 && !workerCpus.insert(port.cpuId).second)
+            throw std::runtime_error("receive CPU IDs must be unique");
+    for (unsigned lane = 0; lane < 2; ++lane) {
         sendLink.destinationPorts[lane] =
             number(node, "sendDestinationPort" + std::to_string(lane), 1024, 65535);
+        sendLink.cpuIds[lane] =
+            static_cast<int>(number(node, "sendCpuId" + std::to_string(lane), 0, 1023));
+        if (!workerCpus.insert(sendLink.cpuIds[lane]).second)
+            throw std::runtime_error("receive and send CPU IDs must be unique");
+    }
     if (sendLink.destinationPorts[0] == sendLink.destinationPorts[1])
         throw std::runtime_error("storage lane destination ports must be distinct");
     if (reorderPeriods >= halfPeriods() || transitionPeriods() < reorderPeriods * 2ULL)

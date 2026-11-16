@@ -71,8 +71,9 @@ def check_receive_performance_guards():
     assert "const bool periodAdvanced = !haveData || p > latest" in receive_pool
     assert "const bool sampleClock = periodAdvanced || (received & 63U) == 0" in receive_pool
     assert "frame(p) + size_t(packetSlot) * packetSize" in receive_pool
-    assert "isolateReceiveCpus(config)" in application
-    assert "CPU_CLR(port.cpuId, &background)" in application
+    assert "isolateWorkerCpus(config)" in application
+    assert "dedicated.push_back(config.sendLink.cpuIds[0])" in application
+    assert "pinSendThread(*para, lane)" in read("Common/src/send_store.cpp")
     assert "spdlog::async_logger" in log_source
     assert "spdlog::async_overflow_policy::overrun_oldest" in log_source
 

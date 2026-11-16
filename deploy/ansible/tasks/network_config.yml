@@ -108,11 +108,36 @@
     - "'cache_nodes' in group_names"
     - tianlai_server_id | int < 11
 
+- name: Resolve the cache send interface PCI address
+  ansible.builtin.script:
+    cmd: "files/map_interfaces_to_pci.py {{ tianlai_send_interface }}"
+    executable: /usr/bin/python3
+  register: send_device_raw
+  changed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Decode the cache send interface PCI address
+  ansible.builtin.set_fact:
+    tianlai_send_device_report: "{{ send_device_raw.stdout | from_json }}"
+  changed_when: false
+  when: "'cache_nodes' in group_names"
+
+- name: Require one valid cache send PCI device
+  ansible.builtin.assert:
+    that:
+      - tianlai_send_device_report.missing_interfaces | length == 0
+      - tianlai_send_device_report.invalid_interfaces | length == 0
+      - tianlai_send_device_report.pci_addresses | length == 1
+    fail_msg: "Cannot resolve send interface {{ tianlai_send_interface }} to one PCI device."
+  when: "'cache_nodes' in group_names"
+
 - name: Assign receive threads to physical CPUs on their NIC NUMA nodes
   ansible.builtin.script:
     cmd: >-
       files/assign_receive_cpus.py
       --reserve-cores-per-node {{ tianlai_receive_reserved_cores_per_numa | int }}
+      --send-pci {{ tianlai_send_device_report.pci_addresses[0] }}
+      --send-core-count 2
       {{ tianlai_receive_devices | join(' ') }}
     executable: /usr/bin/python3
   register: receive_cpu_assignment_raw
@@ -123,6 +148,7 @@
   ansible.builtin.set_fact:
     tianlai_receive_cpu_report: "{{ receive_cpu_assignment_raw.stdout | from_json }}"
     tianlai_receive_cpu_ids: "{{ (receive_cpu_assignment_raw.stdout | from_json).cpu_ids }}"
+    tianlai_send_cpu_ids: "{{ (receive_cpu_assignment_raw.stdout | from_json).send_cpu_ids }}"
   changed_when: false
   when: "'cache_nodes' in group_names"
 
@@ -131,6 +157,9 @@
     that:
       - tianlai_receive_cpu_ids | length == tianlai_receive_devices | length
       - tianlai_receive_cpu_ids | unique | list | length == tianlai_receive_cpu_ids | length
+      - tianlai_send_cpu_ids | length == 2
+      - tianlai_send_cpu_ids | unique | list | length == 2
+      - tianlai_send_cpu_ids | intersect(tianlai_receive_cpu_ids) | length == 0
     fail_msg: "Invalid receive CPU assignment: {{ tianlai_receive_cpu_report }}"
   when: "'cache_nodes' in group_names"
 

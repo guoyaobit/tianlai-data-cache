@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assign each receive PCI device a physical CPU on its NUMA node."""
+"""Assign receive devices and storage-send lanes to NUMA-local physical CPUs."""
 
 import argparse
 import json
@@ -53,29 +53,52 @@ def physical_cpus(sysfs, numa_node):
     return sorted(cores.values())
 
 
-def assign(sysfs, pci_addresses, reserve_cores=1):
-    """Assign ordered devices to unique local physical cores."""
+def device_numa_node(root, address):
+    if not PCI_ADDRESS.fullmatch(address):
+        raise ValueError(f'invalid PCI address: {address}')
+    value = read_text(root / 'bus/pci/devices' / address / 'numa_node')
+    try:
+        node = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f'NUMA node is unavailable for {address}') from error
+    if node < 0:
+        raise ValueError(f'NUMA node is unknown for {address}')
+    return node
+
+
+def assign(sysfs, pci_addresses, reserve_cores=1, send_pci=None, send_core_count=0):
+    """Assign receive devices and optional send lanes to distinct physical cores."""
     if reserve_cores < 0:
         raise ValueError('reserve_cores must not be negative')
+    if send_core_count < 0 or (send_core_count and send_pci is None):
+        raise ValueError('send core assignment requires a send PCI device')
     root = Path(sysfs)
-    by_node = {}
     device_nodes = []
     for address in pci_addresses:
-        if not PCI_ADDRESS.fullmatch(address):
-            raise ValueError(f'invalid PCI address: {address}')
-        value = read_text(root / 'bus/pci/devices' / address / 'numa_node')
-        try:
-            node = int(value)
-        except (TypeError, ValueError) as error:
-            raise ValueError(f'NUMA node is unavailable for {address}') from error
-        if node < 0:
-            raise ValueError(f'NUMA node is unknown for {address}')
-        device_nodes.append(node)
-        if node not in by_node:
-            candidates = physical_cpus(root, node)
-            if len(candidates) <= reserve_cores:
-                raise ValueError(f'NUMA node {node} has no assignable physical CPU')
-            by_node[node] = candidates[reserve_cores:]
+        device_nodes.append(device_numa_node(root, address))
+
+    send_node = device_numa_node(root, send_pci) if send_pci is not None else None
+    nodes = set(device_nodes)
+    if send_node is not None:
+        nodes.add(send_node)
+    physical_by_node = {node: physical_cpus(root, node) for node in nodes}
+    for node, candidates in physical_by_node.items():
+        required = reserve_cores + device_nodes.count(node)
+        if node == send_node:
+            required += send_core_count
+        if len(candidates) < required:
+            raise ValueError(
+                f'NUMA node {node} needs {required} physical CPUs but has {len(candidates)}')
+
+    send_cpu_ids = []
+    if send_node is not None:
+        candidates = physical_by_node[send_node]
+        send_cpu_ids = candidates[reserve_cores:reserve_cores + send_core_count]
+
+    by_node = {}
+    for node in set(device_nodes):
+        offset = reserve_cores + (send_core_count if node == send_node else 0)
+        by_node[node] = physical_by_node[node][offset:]
 
     used = {node: 0 for node in by_node}
     assignments = []
@@ -91,18 +114,26 @@ def assign(sysfs, pci_addresses, reserve_cores=1):
             'numa_node': node,
             'cpu_id': cpu,
         })
-    return {'cpu_ids': [item['cpu_id'] for item in assignments], 'assignments': assignments}
+    return {
+        'cpu_ids': [item['cpu_id'] for item in assignments],
+        'send_cpu_ids': send_cpu_ids,
+        'send_numa_node': send_node,
+        'assignments': assignments,
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sysfs', default='/sys')
     parser.add_argument('--reserve-cores-per-node', type=int, default=1)
+    parser.add_argument('--send-pci')
+    parser.add_argument('--send-core-count', type=int, default=0)
     parser.add_argument('pci_addresses', nargs='+')
     arguments = parser.parse_args()
     try:
         report = assign(arguments.sysfs, arguments.pci_addresses,
-                        arguments.reserve_cores_per_node)
+                        arguments.reserve_cores_per_node,
+                        arguments.send_pci, arguments.send_core_count)
     except ValueError as error:
         parser.error(str(error))
     print(json.dumps(report, sort_keys=True))

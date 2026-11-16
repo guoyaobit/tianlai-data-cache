@@ -44,7 +44,7 @@ tianlai_disabled_cache_nodes: [tianlaistore5, tianlaistore9]
 
 控制器节点清单和落盘端等待列表都会排除这些主机，并自动启用部分节点模式。至少保留一个缓存节点，名称必须属于`cache_nodes`且不能重复。此模式生成的数据不完整，不得作为288或384路完整结果；恢复生产前必须清空该列表并重新部署存储服务器上的控制器和落盘服务。Ansible仍会尝试部署离线主机，现场可配合`--limit`只更新在线节点及存储服务器。
 
-部署会读取每个接收PCI设备的NUMA节点，并为接收线程选择同NUMA的不同物理CPU核；默认每个NUMA节点预留第一个物理核。最终`cpuIdN`写入`server.yaml`，NUMA未知或可用物理核不足时部署停止。预留数量由`tianlai_receive_reserved_cores_per_numa`配置。
+部署会读取接收PCI设备和`ens2f0`的NUMA节点。每个NUMA默认预留第一个物理核用于后台任务，随后在发送网卡NUMA节点为两个lane分配两个独立物理核，再为接收线程分配不重复的NUMA本地物理核。最终`cpuIdN`和`sendCpuId0/1`写入`server.yaml`；NUMA未知、物理核重复或数量不足时部署停止。后台预留数量由`tianlai_receive_reserved_cores_per_numa`配置。
 
 首次完整部署完成后，可只更新项目源代码和程序，不修改Netplan、缓存节点YAML、采集任务ID或系统软件包；存储端`storage.yaml`会随落盘程序同步，确保通知地址、监听端口和节点列表保持一致。为保证任意节点启停功能可直接升级，该流程会安装或更新独立的`tianlai-cache-manager.service`单元：
 

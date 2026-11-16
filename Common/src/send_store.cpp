@@ -4,8 +4,20 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <pthread.h>
+#include <sched.h>
 #include <stdexcept>
 #include <thread>
+
+static void pinSendThread(const CacheRuntime &para, unsigned lane) {
+    const int cpu = para.config->sendLink.cpuIds[lane];
+    cpu_set_t cpus;
+    CPU_ZERO(&cpus);
+    CPU_SET(cpu, &cpus);
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus))
+        throw std::runtime_error("send CPU affinity failed for lane " +
+                                 std::to_string(lane) + " cpu " + std::to_string(cpu));
+}
 
 static void sendJson(StoreConnection &socket, const std::string &json) {
     std::vector<unsigned char> message;
@@ -117,6 +129,10 @@ void InitSendStoreThread(CacheRuntime *para) {
         for (unsigned lane = 0; lane < 2; ++lane) {
             workers[lane] = std::thread([&, lane] {
                 try {
+                    pinSendThread(*para, lane);
+                    LOG("Send lane " + std::to_string(lane) + " thread: cpu=" +
+                            std::to_string(para->config->sendLink.cpuIds[lane]),
+                        INFO);
                     sendLane(*para, lane, event);
                 } catch (const std::exception &caught) {
                     laneErrors[lane] = caught.what();

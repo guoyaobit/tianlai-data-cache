@@ -71,9 +71,11 @@ def manager_rpc(node, action):
     request = dict(version=1, request_id=uuid.uuid4().hex, action=action)
     body = json.dumps(request, separators=(',', ':')).encode()
     peer = (socket.gethostbyname(node['host']), node.get('manager_port', 19002))
+    connect_timeout = .5 if action == 'STATUS' else 3
+    reply_timeout = 1 if action == 'STATUS' else 90
     try:
-        with socket.create_connection(peer, timeout=3) as connection:
-            connection.settimeout(90)
+        with socket.create_connection(peer, timeout=connect_timeout) as connection:
+            connection.settimeout(reply_timeout)
             send_frame(connection, body)
             reply = parse_request(receive_frame(connection))
         if reply.get('request_id') != request['request_id']:
@@ -264,7 +266,7 @@ class Controller:
         action = message.get('action')
         server_ids = message.get('server_ids')
         force = message.get('force', False)
-        if (action not in ('START', 'STOP', 'RESTART') or
+        if (action not in ('START', 'STOP', 'RESTART', 'STATUS') or
                 not isinstance(server_ids, list) or not server_ids or
                 any(type(value) is not int for value in server_ids) or
                 len(set(server_ids)) != len(server_ids) or type(force) is not bool):
@@ -292,7 +294,7 @@ class Controller:
         node_states = {}
         for result in results:
             state = dict(status=result['status'], state=result['service_state'])
-            if result.get('error'):
+            if action != 'STATUS' and result.get('error'):
                 state['error'] = result['error'][:60]
             node_states[str(result['server_id'])] = state
         return dict(status='OK', action=action, nodes=node_states)
@@ -531,6 +533,17 @@ class Controller:
         if command == 'QUERY_EVENT':
             with self.lock:
                 return dict(self.events[message['event_id']])
+        if command == 'QUERY_ACTIVE_EVENT':
+            with self.lock:
+                if self.running is not None and self.running in self.events:
+                    return dict(self.events[self.running])
+                active = [event for event in self.events.values()
+                          if event.get('status') not in ('COMPLETED', 'CANCELLED')]
+                if len(active) == 1:
+                    return dict(active[0])
+                if not active:
+                    raise ValueError('NO_ACTIVE_EVENT')
+                raise RuntimeError('MULTIPLE_ACTIVE_EVENTS')
         if command == 'CANCEL':
             event_id = message['event_id']
             with self.lock:

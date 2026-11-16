@@ -34,12 +34,20 @@ with tempfile.TemporaryDirectory() as directory:
     addresses = ['pci-01-0', 'pci-01-1', 'pci-02-0', 'pci-02-1']
     for address, node in zip(addresses, [0, 0, 1, 1]):
         write(sysfs / 'bus/pci/devices' / address / 'numa_node', node)
+    send_address = 'pci-03-0'
+    write(sysfs / 'bus/pci/devices' / send_address / 'numa_node', 0)
     with patch.object(module, 'PCI_ADDRESS', re.compile(r'^pci-[0-9]{2}-[0-7]$')):
         report = module.assign(sysfs, addresses, reserve_cores=1)
+        send_report = module.assign(sysfs, addresses, reserve_cores=0,
+                                    send_pci=send_address, send_core_count=2)
     assert report['cpu_ids'] == [2, 4, 10, 12]
     assert [item['numa_node'] for item in report['assignments']] == [0, 0, 1, 1]
+    assert send_report['send_cpu_ids'] == [0, 2]
+    assert send_report['cpu_ids'] == [4, 6, 8, 10]
 
 assert 'Assign receive threads to physical CPUs on their NIC NUMA nodes' in TASKS
 assert 'tianlai_receive_cpu_ids | unique' in TASKS
+assert 'tianlai_send_cpu_ids | unique' in TASKS
 assert 'cpuId{{ loop.index0 }}: {{ tianlai_receive_cpu_ids[loop.index0]' in TEMPLATE
+assert 'sendCpuId0: {{ tianlai_send_cpu_ids[0]' in TEMPLATE
 print('NUMA-local receive CPU assignment checks passed')

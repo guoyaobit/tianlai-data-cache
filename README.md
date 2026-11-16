@@ -48,7 +48,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
 - 节点间内部固定使用`acquisition_id=tianlai`；缓存YAML不再包含该固定项，消色散后端触发时也可省略该字段。
 - `transitionWarnPercent` 默认 80；过渡区达到该占用比例时记录一次 WARN，并在查询结果中置警告标志。
 - `chunkPeriods` 默认 128；单个 ZeroMQ 数据块最大 32 MiB，以减少消息往返、解析和写入调用次数。
-- Ansible根据接收网卡NUMA拓扑自动填写`cpuIdN`并避开每个NUMA的首个物理核；手工配置时`-1`表示不绑定。内存预触页默认开启，仍需结合现场验证网卡、线程和缓存的本地性。
+- Ansible根据网卡NUMA拓扑自动填写`cpuIdN`和`sendCpuId0/1`。每个NUMA保留首个物理核用于后台任务，两个发送lane在`ens2f0`所在NUMA使用独立物理核，接收线程再使用其余不重复的本地物理核。内存预触页默认开启，仍需结合现场验证网卡、线程和缓存的本地性。
 - `logFilePath` 是日志文件全路径；`-` 只输出到 stderr。`receive_config.yaml` 中可选的
   `debug: true` 启用详细诊断日志，省略或设为 `false` 时保持 INFO 级别。日志由 spdlog
   输出，带毫秒时间和线程号；指定文件时同时输出到 stderr，文件按 50 MiB 轮转，保留最多
@@ -144,9 +144,13 @@ python3 tools/controller.py --nodes tools/nodes_example.json \
 tltrigger 3
 ```
 
-只触发指定缓存服务器可执行`tltrigger 3 --servers 1,2,5-7`；这里使用机柜标签`tianlaistore1～14`中的编号。也可写成`--servers tianlaistore1,tianlaistore2`。不指定时仍选择当前288/384路模式的全部服务器。使用`tltrigger status --channels 288 --servers 1-3`查询所选服务器的共同缓存区间，使用`tltrigger EVENT_ID`查询写盘进度；高级联调仍支持`tltrigger --file tools/trigger_example.json`。
+`tltrigger`按288或384路模式自动选择全部对应服务器，无需填写节点列表。`tltrigger period`显示共同可用的最新积分周期及trace/integration，`tltrigger EVENT_ID`查询写盘进度。默认输出为单行结果，加`--json`可查看完整返回。
 
-单次触发支持1～50秒，保存完整50秒并等待结束可执行`tltrigger 50 --channels 384`。50秒384路数据约2.37 TB，传输和落盘期间该事件持续占用冻结缓冲区，完成或取消前不能接受下一事件；部署前须验证100G链路、阵列持续写入速度和剩余容量。
+按绝对积分周期触发可执行`tltrigger 3 --period 7010000`，表示从周期7010000开始保存3秒。命令会在提交前校验整个区间仍在参与节点的共同缓存内。
+
+通过JSON文件触发可执行`tltrigger tools/trigger_example.json`。简化JSON只包含`seconds`、`period`和`channels`，后两项可按需省略；服务器集合由通道模式自动确定。`tltrigger`会自动生成事件编号并等待落盘完成。
+
+单次触发支持1～50秒，保存完整50秒并等待结束可执行`tltrigger 50`。50秒384路数据约2.37 TB，传输和落盘期间该事件持续占用冻结缓冲区，完成或取消前不能接受下一事件；部署前须验证100G链路、阵列持续写入速度和剩余容量。
 
 `tltrigger`由Ansible统一安装到控制器和显控节点；`deploy.sh`负责首次安装，`update_software.sh`随其他程序一并更新。
 
@@ -184,6 +188,8 @@ make storage
 ```
 
 `sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。每个lane只使用一个`lane-N.json`保存元数据、接收状态和缺包统计；最终确认丢失时，已完成lane在元数据阶段直接返回STORED。未指定服务器时，288路需要22个lane、384路需要28个lane持久化状态一致；指定服务器时只等待所选节点的两个lane。随后生成事件根目录的`event.json`并通知后端；同一文件的`backend_acknowledged`记录后端是否确认，`partial_node_set`及`participating_server_ids`明确记录实际参与节点。
+
+每个接收线程绑定一个NUMA本地物理核，lane 0和lane 1发送线程也分别绑定到发送网卡NUMA节点上的独立物理核。接收核和发送核互不重复，并从日志、控制和事件管理等后台线程的CPU集合中排除。
 
 落盘根目录统一为`/data`，自动生成的事件路径为`/data/YYYYMMDD-HHMMSS/`，不包含随机码。包号和频率子目录采用短名称，例如`p24-25/packet-24_boards-00-17.bin`或`f0688-1023/frequency-0688-0773_boards-36-47.bin`；文件名仍完整描述数据内容，完整事件编号保存在`event.json`中。
 落盘目录权限为`0755`，数据文件及JSON状态文件权限为`0644`，所有本机用户均可读取，仅服务所属用户可以修改。

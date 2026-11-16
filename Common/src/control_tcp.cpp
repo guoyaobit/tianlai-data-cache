@@ -98,7 +98,7 @@ void InitControlThread(CacheRuntime *runtime) {
     inet_pton(AF_INET, runtime->config->controlBindIp.c_str(), &address.sin_addr);
     inet_pton(AF_INET, runtime->config->controlPeerIp.c_str(), &allowed.sin_addr);
     if (bind(listener.get(), reinterpret_cast<sockaddr *>(&address), sizeof(address)) ||
-        listen(listener.get(), 16))
+        listen(listener.get(), 64))
         throw std::runtime_error("control TCP listen failed");
     LOG("TCP/JSON control ready, acquisition=" + runtime->config->acquisitionId, START);
     while (runtime->flags->ifControl) {
@@ -110,7 +110,7 @@ void InitControlThread(CacheRuntime *runtime) {
         Socket connection(accept(listener.get(), reinterpret_cast<sockaddr *>(&peer), &peerSize));
         if (connection.get() < 0)
             continue;
-        timeval timeout{5, 0};
+        timeval timeout{1, 0};
         setsockopt(connection.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
         setsockopt(connection.get(), SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
         unsigned char header[4];

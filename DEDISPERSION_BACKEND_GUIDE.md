@@ -14,12 +14,45 @@
 tltrigger
 ```
 
-只有看到以下字段时才可以触发：
+只有看到`READY`时才可以触发：
+
+```text
+READY channels=384 nodes=14 range=[6775934,7025934)
+```
+
+查看当前可用的最新积分周期：
+
+```bash
+tltrigger period
+```
+
+```text
+PERIOD latest=7025933 trace=140 integration=25933 range=[6775934,7025934) channels=384 nodes=14
+```
+
+从指定绝对积分周期开始保存3秒：
+
+```bash
+tltrigger 3 --period 7010000
+```
+
+命令会保存区间`[7010000,7025000)`。起始周期和整个保存区间必须位于`tltrigger period`显示的共同`range`内，否则命令直接拒绝。
+
+也可通过简单JSON文件触发：
 
 ```json
-"status": "READY",
-"accept_trigger": true
+{
+  "seconds": 3,
+  "period": 7010000,
+  "channels": 384
+}
 ```
+
+```bash
+tltrigger trigger.json
+```
+
+`period`和`channels`可省略；省略`period`时保存最新稳定数据，省略`channels`时默认384路。控制器会根288/384路模式自动选择服务器。命令会自动生成事件编号、提交触发并等待完成。
 
 保存最近3秒的384路数据，并等待整个事件结束：
 
@@ -36,11 +69,12 @@ tltrigger 50
 使用288路模式：
 
 ```bash
-tltrigger status --channels 288
-tltrigger 3 --channels 288
+tltrigger status --288
+tltrigger period --288
+tltrigger 3 --288
 ```
 
-命令会自动选择全部参与节点共同缓存中最新且已经稳定的数据，不需要用户提供trace或integration编号。
+不指定`--period`时，命令自动选择所有参与节点共同缓存中最新且已经稳定的数据。需要查看完整协议返回时在任意命令后加`--json`。
 
 ## 判断是否完成
 
@@ -50,10 +84,12 @@ tltrigger 3 --channels 288
 event=20261113-045012-a1b2c3
 ```
 
+事件编号由`tltrigger`自动生成，日常使用不需要填写。
+
 使用数字短命令时，命令默认持续查询。最终返回：
 
-```json
-"status": "COMPLETED"
+```text
+COMPLETED event=20261113-045012-a1b2c3
 ```
 
 表示所选缓存节点已经完成发送，存储服务器已经持久化数据，缓存节点也已经释放本次事件。命令退出码为0。
@@ -64,11 +100,13 @@ event=20261113-045012-a1b2c3
 tltrigger 20261113-045012-a1b2c3
 ```
 
-也可等待已有事件结束：
+命令中断后，可以不填事件编号，直接等待当前未完成的事件：
 
 ```bash
-tltrigger wait 20261113-045012-a1b2c3
+tltrigger wait
 ```
+
+如果当前没有未完成事件，返回`NO_ACTIVE_EVENT`。排障时仍可使用`tltrigger wait EVENT_ID`等待指定事件。
 
 状态顺序通常为：
 
@@ -91,7 +129,7 @@ tltrigger cancel EVENT_ID
 tltrigger
 ```
 
-只有重新返回`READY`和`accept_trigger=true`时才能发起下一次保存。
+只有重新返回`READY`时才能发起下一次保存。
 
 ## 接收存储完成通知
 

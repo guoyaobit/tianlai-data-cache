@@ -9,6 +9,8 @@ deviceName{{ loop.index0 }}: {{ device | to_json }}  # ixcap PCI address for thi
 cpuId{{ loop.index0 }}: {{ tianlai_receive_cpu_ids[loop.index0] | int }}  # NUMA-local physical CPU.
 {% endfor %}
 sendEthName: {{ tianlai_send_interface | to_json }}  # Both logical lanes share this physical storage-network interface.
+sendCpuId0: {{ tianlai_send_cpu_ids[0] | int }}  # Dedicated physical CPU for storage lane 0.
+sendCpuId1: {{ tianlai_send_cpu_ids[1] | int }}  # Dedicated physical CPU for storage lane 1.
 sendSourceIp: {{ tianlai_send_ip | to_json }}
 sendDestinationIp: {{ tianlai_storage_ip | to_json }}
 sendDestinationPort0: {{ (tianlai_storage_port | int) + (tianlai_server_id | int) }}  # Logical lane ports on the same physical link.

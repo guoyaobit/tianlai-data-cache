@@ -6,6 +6,8 @@
       roles: "{{ group_names | intersect(['cache_nodes', 'storage', 'controller', 'display']) }}"
       configured:
         receive_pci_addresses: "{{ tianlai_receive_devices | default([]) }}"
+        receive_cpu_ids: "{{ tianlai_receive_cpu_ids | default([]) }}"
+        send_cpu_ids: "{{ tianlai_send_cpu_ids | default([]) }}"
         send_interfaces: >-
           {{ [tianlai_send_interface] if tianlai_send_interface is defined else
           ([tianlai_storage_receive_interface] if 'storage' in group_names else []) }}

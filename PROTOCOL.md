@@ -74,6 +74,7 @@ request_id 用于请求/回复匹配，event_id 用于执行去重。同一事�
 |---|---|---|
 | CAPTURE | event_id、channel_count、server_ids（可选）、start、period_count | 创建事件；完成结果推送到触发来源IP的固定端口19001 |
 | QUERY_EVENT | event_id | 查询事件准备/传输/完成状态 |
+| QUERY_ACTIVE_EVENT | 无 | 查询当前运行或暂停的唯一未完成事件 |
 | QUERY_STATUS | channel_count、server_ids（均可选） | 查询指定节点共同的可用时间范围和 accept_trigger |
 | QUERY_STORAGE | 无 | 查询142节点上存储服务的运行状态，供任意节点的`tlcache`使用 |
 | CACHE_SERVICE | action、server_ids、force | 从受管管理节点并行启动、停止或重启指定缓存服务 |

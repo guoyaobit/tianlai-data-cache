@@ -40,9 +40,10 @@ BMC/HDM带外电源控制脚本位于[`deploy/bmc/bmc_power.sh`](deploy/bmc/bmc_
 | --- | --- |
 | `acquisition_id` | 内部固定为`tianlai`，不再写入缓存YAML。 |
 | `integrationPerTrace` / `periodMicroseconds` | 默认 50000 / 200；须与前端实际包头一致。 |
-| `halfBufferSeconds` / `maxEventSeconds` | 默认 50 / 5；当前代码对事件长度有 5 秒上限。 |
+| `halfBufferSeconds` / `maxEventSeconds` | 默认 50 / 50；单次触发最长 50 秒。 |
 | `transitionMiB` / `reserveMemoryMiB` | 默认每台 32768 / 49152 MiB；分别为全机过渡区及系统预留。 |
 | `deviceNameN` / `cpuIdN` | 每个接收口实际 PCI 地址和 CPU 绑定；`-1` 表示不绑定。 |
+| `sendCpuId0/1` | 两个存储发送lane各自独占的物理CPU核。 |
 | `controlBindIp` / `controlPort` / `controlPeerIp` | 节点管理网监听地址、端口及允许的控制器 IP；默认端口 19000。 |
 | `sendEthName` / `sendSourceIp` | 单个存储数据网口及其无标签IP地址。 |
 | `sendDestinationIp` / `sendDestinationPort0/1` | 存储100G口的单个IP；两个逻辑lane端口为`20000 + server_id`和`20100 + server_id`。 |
@@ -126,6 +127,9 @@ tlcache restart 2,5-7
 ```
 
 `tlcache`可在存储服务器、任意缓存节点或显控节点执行状态查询。它先显示存储服务状态，再显示缓存节点当前是否在收数据。`UPTIME`以秒、分、小时或天显示缓存进程本次启动后的运行时间。`DATA`为`RECEIVING`表示所有接收口在2秒内有数据，`PARTIAL`表示只有部分口有数据，`NO_DATA`表示所有口均已超过2秒未见数据。`RX_PORTS`显示活跃口数/总口数，`AGE_MS`是最久未收到数据的已启动端口时长，`NO_DATA_PORTS`直接列出无数据端口。主表不再显示累计收包和迟到包，保留累计缺包；`LOSS_PORTS`中的`3:6`表示端口3累计缺6包。`tlcache period`列出每个节点的周期范围及全部启用节点的共同可触发范围。累计计数仍保留在`tlcache --json`中供排障。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发。
+状态查询会并行读取缓存运行数据和systemd服务状态，并对直接查询快速重试一次，通常在1秒内完成。`STOPPED`表示缓存服务未启动，`STARTING`表示服务正在启动或控制端口尚未就绪，`NO_REPLY`表示运行服务连续未返回完整响应，只有连接或网络不可达时才显示`OFFLINE`。
+
+部署会为每个接收线程分配一个网卡NUMA本地物理核，并在`ens2f0`所在NUMA节点为两个存储lane各分配一个独立发送核。生成的`server.yaml`使用`cpuIdN`和`sendCpuId0/1`记录分配；任何重复或CPU不足都会阻止服务启动或部署继续。
 
 多节点服务启停可在存储服务器、任意缓存节点或显控节点执行。目标支持`all`、逗号和范围；命令经142控制器并行调用各缓存节点上独立运行的root管理服务，不在运行时调用Ansible、SSH或sudo。管理服务只接受142控制器地址，控制器只接受存储节点、缓存节点和显控节点发起的启停命令。停止或重启会先拒绝涉及未完成事件的操作并要求一次确认；自动化可加`--yes`，只有人工确认可以丢弃活动事件时才加`--force`：
 
@@ -153,19 +157,23 @@ tlcache stop all --yes
 tltrigger
 ```
 
-控制器响应中的`node_runtime_states`和`runtime_state_counts`提供各节点运行阶段汇总。确认 `accept_trigger` 为 `true`，并确保所需起止周期位于返回的 `oldest_period` 与 `settled_end` 所示范围内；结束边界为不包含端点。然后提交触发：
+看到`READY`时表示参与节点具备共同可用缓存区间。`tltrigger period`可快速显示最新稳定积分周期及对应的trace/integration；需要查看节点阶段和完整协议返回时执行`tltrigger --json`。然后提交触发：
 
 ```bash
 tltrigger 3
 ```
 
-上述数字短命令自动查询共同可用范围，保存其中最近3秒的数据，并直到`COMPLETED`或出现需要人工处理的状态才退出；时长可以为1～50秒。`--channels`选择288或384，省略时默认384。若必须指定历史起点，仍可使用完整形式`tltrigger capture 3 --trace 120 --integration 45000`。使用高级形式未等待时，可复制返回的事件编号进行查询：
+按绝对积分周期触发可使用`tltrigger 3 --period 7010000`，表示从周期7010000开始保存3秒。提交前会校验完整区间仍在所有参与节点的共同缓存内。
+
+上述数字短命令自动查询共同可用范围，保存其中最近3秒的数据，并直到`COMPLETED`或出现需要人工处理的状态才退出；时长可以为1～50秒。`--288`选择288路，省略时默认384路，控制器会自动选择对应服务器。默认只打印简短结果，加`--json`查看完整返回。若必须指定历史起点，仍可使用完整形式`tltrigger capture 3 --trace 120 --integration 45000`。使用高级形式未等待时，可复制返回的事件编号进行查询：
 
 ```bash
 tltrigger 20261112-012345-abc123
 ```
 
 需要恢复或取消暂停事件时使用`tltrigger resume EVENT_ID`或`tltrigger cancel EVENT_ID`。高级联调仍可使用`tltrigger --file request.json`发送完整协议JSON；完整字段与跨Trace格式见[协议说明](PROTOCOL.md)。
+
+命令中断后执行`tltrigger wait`会自动找到当前未完成事件并继续等待，无需填写事件编号；当前无活动事件时返回`NO_ACTIVE_EVENT`。
 
 `tltrigger`由Ansible安装到控制器/存储节点`172.0.0.142`和显控节点`172.0.0.61`的`/usr/local/bin`。运行全量部署或软件更新后即可直接使用，不需要再执行独立分发脚本。消色散后端使用说明见[Dedispersion Backend Trigger Guide](DEDISPERSION_BACKEND_GUIDE.md)。
 
