@@ -4,6 +4,7 @@
 import argparse
 from datetime import datetime, timezone
 import json
+import re
 import socket
 import struct
 import sys
@@ -19,7 +20,7 @@ WAIT_FAILURE = {'PAUSED', 'CANCELLED', 'REJECTED'}
 
 
 def normalize_arguments(arguments):
-    """Support short forms: `tltrigger 3` and `tltrigger event-ID`."""
+    """Support short capture and generated event ID forms."""
     if not arguments:
         return ['status']
     if arguments[0].isdigit():
@@ -27,7 +28,8 @@ def normalize_arguments(arguments):
         if '--wait' not in normalized:
             normalized.append('--wait')
         return normalized
-    if arguments[0].startswith('event-'):
+    if (arguments[0].startswith('event-') or
+            re.fullmatch(r'\d{8}-\d{6}-[0-9a-fA-F]{6}', arguments[0])):
         return ['event'] + arguments
     return arguments
 
@@ -147,7 +149,7 @@ def transmit(request, arguments):
 
 def generated_event_id():
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
-    return f'event-{timestamp}-{uuid.uuid4().hex[:6]}'
+    return f'{timestamp}-{uuid.uuid4().hex[:6]}'
 
 
 def capture_request(arguments):

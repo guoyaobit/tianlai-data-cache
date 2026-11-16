@@ -306,18 +306,30 @@ static std::string padded(unsigned value, unsigned width) {
     return std::string(text.size() < width ? width - text.size() : 0, '0') + text;
 }
 
+static std::string event_directory_name(const std::string &event) {
+    const auto digit = [](char c) { return c >= '0' && c <= '9'; };
+    const auto hex = [&](char c) {
+        return digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    };
+    const bool generated = event.size() == 22 && event[8] == '-' && event[15] == '-' &&
+        std::all_of(event.begin(), event.begin() + 8, digit) &&
+        std::all_of(event.begin() + 9, event.begin() + 15, digit) &&
+        std::all_of(event.begin() + 16, event.end(), hex);
+    return generated ? event.substr(0, 15) : event;
+}
+
 static std::string data_directory_name(unsigned server) {
     if (server < 3) {
         const unsigned first = server * 8;
-        return "packets-" + padded(first, 2) + "-" + padded(first + 7, 2);
+        return "p" + padded(first, 2) + "-" + padded(first + 7, 2);
     }
     if (server < 11) {
         const unsigned first = 24 + (server - 3) * 2;
-        return "packets-" + padded(first, 2) + "-" + padded(first + 1, 2);
+        return "p" + padded(first, 2) + "-" + padded(first + 1, 2);
     }
     const unsigned first = (server - 11) * 4 * 86;
     const unsigned last = std::min(first + 4 * 86 - 1, 1023U);
-    return "frequencies-" + padded(first, 4) + "-" + padded(last, 4);
+    return "f" + padded(first, 4) + "-" + padded(last, 4);
 }
 
 static std::string data_file_name(unsigned server, unsigned port) {
@@ -450,9 +462,10 @@ class EventWriter {
                     "invalid lane port assignment");
             selected[port] = true;
         }
-        ensure_dir(root, acquisition); ensure_dir(root / acquisition, event);
-        ensure_dir(root / acquisition / event, data_directory_name(server));
-        directory = root / acquisition / event / data_directory_name(server);
+        const auto event_directory = event_directory_name(event);
+        ensure_dir(root, event_directory);
+        ensure_dir(root / event_directory, data_directory_name(server));
+        directory = root / event_directory / data_directory_name(server);
         const auto lane_name = "lane-" + std::to_string(lane);
         const auto state_path = directory / (lane_name + ".json");
         json old_metadata, old_state;
@@ -634,6 +647,9 @@ static std::optional<json> build_completion_notice(
     }
     if (!first_state) return std::nullopt;
     const json first = *first_state;
+    require(event_directory_name(first.at("event_id").get<std::string>()) ==
+                event_directory.filename().string(),
+            "event directory does not match metadata");
     const auto channel_count = integer(first, "channel_count");
     require(channel_count == 288 || channel_count == 384, "invalid event channel count");
     const unsigned complete_node_count = channel_count == 288 ? 11U : CACHE_NODE_COUNT;
@@ -659,8 +675,8 @@ static std::optional<json> build_completion_notice(
             const auto state = read_lane_state(directory, lane);
             if (!state || state->value("status", "") != "STORED") return std::nullopt;
             require(integer(*state, "server_id") == server && integer(*state, "lane") == lane &&
-                    state->at("acquisition_id") == event_directory.parent_path().filename().string() &&
-                    state->at("event_id") == event_directory.filename().string(),
+                    state->at("acquisition_id") == first.at("acquisition_id") &&
+                    state->at("event_id") == first.at("event_id"),
                     "node completion marker mismatch");
             const uint64_t state_mask = state->contains("server_mask") ?
                 integer(*state, "server_mask") : server_mask;
@@ -875,36 +891,33 @@ class CompletionNotifier {
     void scan() {
         std::error_code error;
         if (!fs::is_directory(root, error)) return;
-        for (const auto &acquisition : fs::directory_iterator(root)) {
-            if (!acquisition.is_directory() || !valid_id(acquisition.path().filename().string())) continue;
-            for (const auto &event : fs::directory_iterator(acquisition.path())) {
-                if (!event.is_directory() || !valid_id(event.path().filename().string())) continue;
-                try {
-                    const auto state_path = event.path() / "event.json";
-                    if (fs::exists(state_path)) {
-                        try {
-                            const auto state = read_json_file(state_path);
-                            if (state.at("backend_acknowledged").is_boolean() &&
-                                state.at("backend_acknowledged").get<bool>())
-                                continue;
-                        } catch (const std::exception &) {
-                            // A malformed state cannot suppress a durable notification.
-                        }
+        for (const auto &event : fs::directory_iterator(root)) {
+            if (!event.is_directory() || !valid_id(event.path().filename().string())) continue;
+            try {
+                const auto state_path = event.path() / "event.json";
+                if (fs::exists(state_path)) {
+                    try {
+                        const auto state = read_json_file(state_path);
+                        if (state.at("backend_acknowledged").is_boolean() &&
+                            state.at("backend_acknowledged").get<bool>())
+                            continue;
+                    } catch (const std::exception &) {
+                        // A malformed state cannot suppress a durable notification.
                     }
-                    auto notice = build_completion_notice(event.path(), expected_servers);
-                    if (notice && integer(*notice, "result_port") != 0) {
-                        runtime.notificationStarted();
-                        try {
-                            send(event.path(), *notice);
-                            runtime.notificationFinished("");
-                        } catch (const std::exception &error) {
-                            runtime.notificationFinished(error.what());
-                            throw;
-                        }
-                    }
-                } catch (const std::exception &caught) {
-                    std::cerr << "completion notifier: " << caught.what() << '\n';
                 }
+                auto notice = build_completion_notice(event.path(), expected_servers);
+                if (notice && integer(*notice, "result_port") != 0) {
+                    runtime.notificationStarted();
+                    try {
+                        send(event.path(), *notice);
+                        runtime.notificationFinished("");
+                    } catch (const std::exception &error) {
+                        runtime.notificationFinished(error.what());
+                        throw;
+                    }
+                }
+            } catch (const std::exception &caught) {
+                std::cerr << "completion notifier: " << caught.what() << '\n';
             }
         }
     }

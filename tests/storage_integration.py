@@ -24,12 +24,12 @@ FRAME = struct.Struct('!QQII')
 def data_directory_name(server):
     if server < 3:
         first = server * 8
-        return f'packets-{first:02d}-{first + 7:02d}'
+        return f'p{first:02d}-{first + 7:02d}'
     if server < 11:
         first = 24 + (server - 3) * 2
-        return f'packets-{first:02d}-{first + 1:02d}'
+        return f'p{first:02d}-{first + 1:02d}'
     first = (server - 11) * 4 * 86
-    return f'frequencies-{first:04d}-{min(first + 343, 1023):04d}'
+    return f'f{first:04d}-{min(first + 343, 1023):04d}'
 
 
 def data_file_name(server, port):
@@ -109,7 +109,7 @@ def send_event(context, port, root, server, lane, result_port):
         assert result['status'] == 'STORED' and result['server_id'] == server
     finally:
         sock.close()
-    directory = root / 'acq' / 'event' / data_directory_name(server)
+    directory = root / 'event' / data_directory_name(server)
     marker = json.loads((directory / f'lane-{lane}.json').read_text())
     for p, body in zip(range(lane, ports, 2), expected):
         assert (directory / data_file_name(server, p)).read_bytes() == body
@@ -121,9 +121,9 @@ def main():
     parser.add_argument('--binary', help='use a prebuilt test binary instead of make storage')
     parser.add_argument('--test-cli', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
-    assert data_directory_name(0) == 'packets-00-07'
+    assert data_directory_name(0) == 'p00-07'
     assert data_file_name(3, 1) == 'packet-24_boards-18-35.bin'
-    assert data_directory_name(13) == 'frequencies-0688-1023'
+    assert data_directory_name(13) == 'f0688-1023'
     assert data_file_name(13, 3) == 'frequency-0946-1023_boards-36-47.bin'
     if args.binary:
         binary = Path(args.binary).resolve()
@@ -206,7 +206,7 @@ def main():
                     version=1, command='ACK_RESULT', status='ACKNOWLEDGED',
                     event_id='event')).encode())
             deadline = time.monotonic() + 10
-            event_state = root / 'acq/event/event.json'
+            event_state = root / 'event/event.json'
             while not (event_state.exists() and
                        json.loads(event_state.read_text()).get('backend_acknowledged')):
                 if time.monotonic() >= deadline:

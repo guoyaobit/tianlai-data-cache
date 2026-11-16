@@ -14,6 +14,7 @@ FRAME = struct.Struct('!QQII')
 INPUT_HEADER = struct.Struct('!Q')
 IF_TRACE_BIT = 1 << 39
 ID = re.compile(r'[A-Za-z0-9_-]{1,64}\Z')
+GENERATED_EVENT = re.compile(r'(\d{8}-\d{6})-[0-9a-fA-F]{6}\Z')
 DATA_SYNC_BYTES = 256 * 1024 * 1024
 DATA_SYNC_SECONDS = 1.0
 MAX_EVENT_MICROSECONDS = 50_000_000
@@ -97,12 +98,17 @@ def validate_frames(body, first, count, stride, boards, packet_bytes,
 def data_directory_name(server):
     if server < 3:
         first = server * 8
-        return f'packets-{first:02d}-{first + 7:02d}'
+        return f'p{first:02d}-{first + 7:02d}'
     if server < 11:
         first = 24 + (server - 3) * 2
-        return f'packets-{first:02d}-{first + 1:02d}'
+        return f'p{first:02d}-{first + 1:02d}'
     first = (server - 11) * 4 * 86
-    return f'frequencies-{first:04d}-{min(first + 343, 1023):04d}'
+    return f'f{first:04d}-{min(first + 343, 1023):04d}'
+
+
+def event_directory_name(event):
+    generated = GENERATED_EVENT.fullmatch(event)
+    return generated.group(1) if generated else event
 
 
 def data_file_name(server, port):
@@ -177,7 +183,7 @@ class StoreReceiver:
                 self.active.add(key)
             # Persist every newly created directory entry before acknowledging any data.
             path = self.directory
-            for part in (acquisition, event, data_directory_name(server)):
+            for part in (event_directory_name(event), data_directory_name(server)):
                 child = path / part
                 child.mkdir(exist_ok=True)
                 sync_directory(path)

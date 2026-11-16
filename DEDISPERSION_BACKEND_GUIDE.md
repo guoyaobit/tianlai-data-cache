@@ -47,7 +47,7 @@ tltrigger 3 --channels 288
 触发时会输出唯一事件编号，例如：
 
 ```text
-event=event-20261113-045012-a1b2c3
+event=20261113-045012-a1b2c3
 ```
 
 使用数字短命令时，命令默认持续查询。最终返回：
@@ -61,13 +61,13 @@ event=event-20261113-045012-a1b2c3
 若使用高级形式`tltrigger capture 3`只提交而不等待，可直接用事件编号查询：
 
 ```bash
-tltrigger event-20261113-045012-a1b2c3
+tltrigger 20261113-045012-a1b2c3
 ```
 
 也可等待已有事件结束：
 
 ```bash
-tltrigger wait event-20261113-045012-a1b2c3
+tltrigger wait 20261113-045012-a1b2c3
 ```
 
 状态顺序通常为：

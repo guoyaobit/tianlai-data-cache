@@ -42,9 +42,11 @@ int main(int argc, char **argv) {
     assert(argc == 2);
     const fs::path root(argv[1]);
     fs::create_directories(root);
-    assert(data_directory_name(0) == "packets-00-07");
+    assert(event_directory_name("20261116-104356-a1b2c3") == "20261116-104356");
+    assert(event_directory_name("manual-event") == "manual-event");
+    assert(data_directory_name(0) == "p00-07");
     assert(data_file_name(3, 1) == "packet-24_boards-18-35.bin");
-    assert(data_directory_name(13) == "frequencies-0688-1023");
+    assert(data_directory_name(13) == "f0688-1023");
     assert(data_file_name(13, 3) == "frequency-0946-1023_boards-36-47.bin");
     {
         const auto status_path = root / "runtime-status.json";
@@ -86,7 +88,7 @@ int main(int argc, char **argv) {
         assert(read32(lane1_result.data()) == lane1_result.size() - 4);
         assert(json::parse(result.begin() + 4, result.end()).at("status") == "STORED");
     }
-    auto directory = root / "acq/event" / data_directory_name(3);
+    auto directory = root / "event" / data_directory_name(3);
     json marker; std::ifstream(directory / "lane-0.json") >> marker;
     assert(fs::exists(directory / "lane-1.json"));
     assert(marker.at("missing_packets").at("0") == 17);
@@ -107,7 +109,7 @@ int main(int argc, char **argv) {
     }
     assert(fs::exists(directory / "lane-0.json"));
     // A 384-channel event requires both durable lanes from all 14 servers.
-    const auto complete = root / "acq/complete";
+    const auto complete = root / "complete";
     for (unsigned server = 0; server < CACHE_NODE_COUNT; ++server) {
         const auto node = complete / data_directory_name(server);
         fs::create_directories(node);
@@ -130,7 +132,7 @@ int main(int argc, char **argv) {
     assert(notice->at("missing_by_server").at("0") == 3);
     assert(fs::exists(complete / "event.json"));
     // A 288-channel event is complete after both lanes from servers 0-10.
-    const auto complete288 = root / "acq/complete-288";
+    const auto complete288 = root / "complete-288";
     for (unsigned server = 0; server < 11; ++server) {
         const auto node = complete288 / data_directory_name(server);
         fs::create_directories(node);

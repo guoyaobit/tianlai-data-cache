@@ -159,7 +159,7 @@ tltrigger 3
 上述数字短命令自动查询共同可用范围，保存其中最近3秒的数据，并直到`COMPLETED`或出现需要人工处理的状态才退出；时长可以为1～50秒。`--channels`选择288或384，省略时默认384。若必须指定历史起点，仍可使用完整形式`tltrigger capture 3 --trace 120 --integration 45000`。使用高级形式未等待时，可复制返回的事件编号进行查询：
 
 ```bash
-tltrigger event-20261112-012345-abc123
+tltrigger 20261112-012345-abc123
 ```
 
 需要恢复或取消暂停事件时使用`tltrigger resume EVENT_ID`或`tltrigger cancel EVENT_ID`。高级联调仍可使用`tltrigger --file request.json`发送完整协议JSON；完整字段与跨Trace格式见[协议说明](PROTOCOL.md)。
