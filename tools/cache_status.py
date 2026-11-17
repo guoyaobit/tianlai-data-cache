@@ -97,17 +97,23 @@ def query(node, acquisition, timeout):
                 connection.settimeout(attempt_timeout)
                 send_frame(connection, body)
                 reply = json.loads(receive_frame(connection))
-            if reply.get('request_id') != request['request_id']:
+            if not isinstance(reply, dict) or reply.get('request_id') != request['request_id']:
                 raise ValueError('request ID mismatch')
+            if reply.get('server_id') != node['server_id']:
+                raise ValueError('server ID mismatch')
+            if reply.get('status') == 'ERROR':
+                return dict(reply, host=node['host'], runtime_state='ERROR')
+            if not isinstance(reply.get('runtime_state'), str):
+                raise ValueError('missing runtime state')
             return dict(reply, host=node['host'])
         except (ConnectionError, OSError, ValueError, json.JSONDecodeError) as caught:
             error = caught
             if attempt + 1 < STATUS_ATTEMPTS:
                 time.sleep(.05)
-    if isinstance(error, ConnectionRefusedError) or getattr(error, 'errno', None) == 111:
-        state = 'STOPPED'
-    elif isinstance(error, TimeoutError):
+    if isinstance(error, TimeoutError):
         state = 'NO_REPLY'
+    elif isinstance(error, ValueError):
+        state = 'ERROR'
     else:
         state = 'OFFLINE'
     return dict(server_id=node['server_id'], host=node['host'], status=state,
@@ -147,13 +153,14 @@ def merge_service_states(results, service_states):
             continue
         state = service.get('state', 'unknown')
         item['service_state'] = state
-        if state == 'active':
-            if item.get('runtime_state') == 'STOPPED':
-                item['status'] = item['runtime_state'] = 'STARTING'
-        elif state in ('activating', 'reloading'):
+        # A direct reply may come from a manually started process. Do not
+        # replace its actual state with the unrelated systemd service state.
+        if item.get('runtime_state') not in ('OFFLINE', 'NO_REPLY'):
+            continue
+        if state in ('activating', 'reloading'):
             item['status'] = item['runtime_state'] = 'STARTING'
             item.pop('error', None)
-        else:
+        elif state in ('inactive', 'failed'):
             item['status'] = item['runtime_state'] = 'STOPPED'
             item.pop('error', None)
     return results
@@ -183,14 +190,17 @@ def remote_storage_snapshot(host, port, acquisition, timeout):
                     written_bytes_total=0, write_rate_bytes_per_second=0)
 
 
-def load_nodes(path):
+def load_nodes(path, include_disabled=False):
     try:
         nodes = json.loads(Path(path).read_text(encoding='utf-8'))
     except FileNotFoundError:
+        if include_disabled:
+            raise ValueError(f'node list not found: {path}; refusing service operation')
+        print(f'WARNING: node list not found: {path}; using default addresses', file=sys.stderr)
         nodes = DEFAULT_CACHE_NODES
     if not isinstance(nodes, list) or not nodes:
         raise ValueError('node list is empty or invalid')
-    enabled = [node for node in nodes if node.get('enabled', True)]
+    enabled = [node for node in nodes if include_disabled or node.get('enabled', True)]
     if not enabled:
         raise ValueError('enabled node list is empty')
     return enabled
@@ -225,26 +235,38 @@ def format_bytes(value):
 
 
 def print_table(results):
-    print(f"{'NODE':<5} {'HOST':<16} {'STATE':<22} {'UPTIME':>8} {'DATA':<10} {'RX_PORTS':<9} "
-          f"{'AGE_MS':>8} {'EVENT':<13} {'LOST':>10} {'NO_DATA_PORTS':<14} {'LOSS_PORTS'}")
+    print(f"{'NODE':<5} {'HOST':<16} {'STATE':<22} {'UPTIME':>8} {'RX_PORTS':<9} "
+          f"{'EVENT':<13} {'LOST':>10} {'NO_DATA_PORTS':<14} {'LOSS_PORTS'}")
     for item in results:
         state = item.get('runtime_state', 'UNKNOWN')
-        unavailable = state in ('OFFLINE', 'NO_REPLY', 'STOPPED', 'STARTING')
-        data_flow = item.get('data_flow', 'UNKNOWN') if not unavailable else state
-        ports = (f"{item.get('receiving_ports', 0)}/{item.get('receive_ports', 0)}"
-                 if not unavailable else '-')
-        age = item.get('last_packet_age_ms', '-') if not unavailable else '-'
-        if data_flow == 'NO_DATA' and age == 0:
-            age = '-'
+        unavailable = state in ('OFFLINE', 'NO_REPLY', 'STOPPED', 'STARTING', 'ERROR')
+        active, total = item.get('receiving_ports'), item.get('receive_ports')
+        ports = (f'{active}/{total}' if not unavailable and type(active) is int and
+                 type(total) is int and 0 <= active <= total else '-')
         inactive = ','.join(str(port) for port in item.get('inactive_ports', [])) or '-'
         uptime = format_uptime(item.get('uptime_ms')) if not unavailable else '-'
         losses = item.get('lost_by_port', {})
         loss_ports = ','.join(f'{port}:{count}' for port, count in
                               sorted(losses.items(), key=lambda entry: int(entry[0]))) or '-'
+        lost = item.get('lost_packets', '-') if not unavailable else '-'
         print(f"{item['server_id']:<5} {item.get('host', '-'):<16} {state:<22} "
-              f"{uptime:>8} {data_flow:<10} {ports:<9} {str(age):>8} "
-              f"{item.get('event_state', '-'):<13} {item.get('lost_packets', 0):>10} "
+              f"{uptime:>8} {ports:<9} "
+              f"{item.get('event_state', '-'):<13} {str(lost):>10} "
               f"{inactive:<14} {loss_ports}")
+
+
+def common_period_range(results):
+    if not results:
+        return None
+    for item in results:
+        if (item.get('runtime_state') in ('OFFLINE', 'NO_REPLY', 'STOPPED', 'STARTING', 'ERROR') or
+                type(item.get('oldest_period')) is not int or
+                type(item.get('settled_end')) is not int or
+                item['oldest_period'] >= item['settled_end']):
+            return None
+    oldest = max(item['oldest_period'] for item in results)
+    end = min(item['settled_end'] for item in results)
+    return (oldest, end) if oldest < end else None
 
 
 def print_periods(results, integration_per_trace):
@@ -255,7 +277,7 @@ def print_periods(results, integration_per_trace):
         state = item.get('runtime_state', 'UNKNOWN')
         oldest = item.get('oldest_period')
         end = item.get('settled_end')
-        usable = (state not in ('OFFLINE', 'NO_REPLY', 'STOPPED', 'STARTING') and
+        usable = (state not in ('OFFLINE', 'NO_REPLY', 'STOPPED', 'STARTING', 'ERROR') and
                   type(oldest) is int and type(end) is int and
                   oldest < end)
         if usable:
@@ -272,15 +294,17 @@ def print_periods(results, integration_per_trace):
     if len(online) != len(results) or not online:
         print('COMMON unavailable: one or more nodes are unavailable or have no settled data')
         return False
-    oldest = max(item['oldest_period'] for item in online)
-    end = min(item['settled_end'] for item in online)
-    if oldest >= end:
+    common = common_period_range(results)
+    if common is None:
         print('COMMON unavailable: nodes have no overlapping settled period range')
         return False
+    oldest, end = common
     latest = end - 1
     trace, integration = divmod(latest, integration_per_trace)
     print(f'COMMON range=[{oldest},{end}) latest={latest} '
           f'trace={trace} integration={integration}')
+    if not all(item.get('accept_trigger') is True for item in online):
+        print('Trigger not ready; check tltrigger status')
     return True
 
 
@@ -391,6 +415,9 @@ def manage_services(action, nodes, host, port, acquisition, timeout, assume_yes,
     expected_ids = {str(node['server_id']) for node in nodes}
     if set(node_results) != expected_ids:
         raise RuntimeError('incomplete cache service result')
+    if reply.get('errors_omitted'):
+        print('WARNING: some error details were omitted; inspect affected nodes locally',
+              file=sys.stderr)
     for server_id, result in sorted(node_results.items(), key=lambda item: int(item[0])):
         label = int(server_id) + 1
         status = result.get('status', 'ERROR')
@@ -423,9 +450,11 @@ def main():
     arguments = parser.parse_args()
     if not 1 <= arguments.integration_per_trace <= (1 << 23):
         raise ValueError('invalid integration periods per trace')
+    if arguments.timeout <= 0 or arguments.watch < 0:
+        raise ValueError('timeout must be positive and watch must be non-negative')
     targets = parse_targets(arguments.targets)
     if arguments.command in ('start', 'stop', 'restart'):
-        nodes = select_nodes(DEFAULT_CACHE_NODES, targets)
+        nodes = select_nodes(load_nodes(arguments.nodes, include_disabled=True), targets)
         return manage_services(arguments.command, nodes, arguments.storage_host,
                                arguments.storage_port, arguments.acquisition,
                                arguments.timeout, arguments.yes, arguments.force)
@@ -451,7 +480,8 @@ def main():
             if arguments.json:
                 print(json.dumps({'storage': storage, 'cache_nodes': results},
                                  indent=2, ensure_ascii=False))
-                period_ready = True
+                period_ready = (arguments.command != 'period' or
+                                common_period_range(results) is not None)
             elif arguments.command == 'period':
                 print_storage(storage)
                 period_ready = print_periods(results, arguments.integration_per_trace)
@@ -461,7 +491,7 @@ def main():
                 period_ready = True
             if not arguments.watch:
                 unhealthy = storage.get('state') in ('OFFLINE', 'ERROR', 'NOTIFICATION_RETRY') or any(
-                    item['runtime_state'] in ('OFFLINE', 'NO_REPLY', 'STOPPED', 'STARTING', 'ERROR')
+                    item.get('runtime_state') in ('OFFLINE', 'NO_REPLY', 'STOPPED', 'STARTING', 'ERROR')
                     for item in results)
                 return 1 if unhealthy or not period_ready else 0
             time.sleep(max(arguments.watch, 0.2))

@@ -3,6 +3,7 @@
 import argparse
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -94,31 +95,55 @@ class ReplayCache:
         self.capacity = capacity
         self.ttl = ttl
         self.entries = OrderedDict()
+        self.entries_lock = threading.Lock()
+        self.request_locks = [threading.Lock() for _ in range(64)]
+        self.mutation_lock = threading.Lock()
 
     def get(self, peer, request_id, digest):
         key = (peer[0], request_id)
-        entry = self.entries.get(key)
-        if entry is None:
-            return None
-        saved_digest, expires, reply = entry
-        if expires <= time.monotonic():
-            del self.entries[key]
-            return None
-        if saved_digest != digest:
-            raise ValueError('REQUEST_ID_CONFLICT')
-        self.entries.move_to_end(key)
-        return reply
+        with self.entries_lock:
+            entry = self.entries.get(key)
+            if entry is None:
+                return None
+            saved_digest, expires, reply = entry
+            if expires <= time.monotonic():
+                del self.entries[key]
+                return None
+            if saved_digest != digest:
+                raise ValueError('REQUEST_ID_CONFLICT')
+            self.entries.move_to_end(key)
+            return reply
 
     def put(self, peer, request_id, digest, reply):
         key = (peer[0], request_id)
-        self.entries[key] = (digest, time.monotonic() + self.ttl, reply)
-        self.entries.move_to_end(key)
-        while len(self.entries) > self.capacity:
-            self.entries.popitem(last=False)
+        with self.entries_lock:
+            self.entries[key] = (digest, time.monotonic() + self.ttl, reply)
+            self.entries.move_to_end(key)
+            while len(self.entries) > self.capacity:
+                self.entries.popitem(last=False)
 
 
 def backend_reply(controller, data, peer, cache):
     """Validate one backend request and provide replay-safe bounded JSON."""
+    try:
+        message = parse_request(data)
+        request_id = message['request_id']
+        if not isinstance(request_id, str) or not ID.fullmatch(request_id):
+            raise ValueError('invalid request_id')
+    except (KeyError, ValueError, TypeError, UnicodeDecodeError):
+        return _backend_reply(controller, data, peer, cache)
+    command = message.get('command')
+    read_only = command in ('QUERY_STATUS', 'QUERY_EVENT', 'QUERY_ACTIVE_EVENT', 'QUERY_STORAGE') or (
+        command == 'CACHE_SERVICE' and message.get('action') == 'STATUS')
+    # Requests with the same identity cannot execute concurrently. Mutations
+    # also remain serialized against service operations and event submission.
+    request_lock = cache.request_locks[hash((peer[0], request_id)) % len(cache.request_locks)]
+    with request_lock:
+        with nullcontext() if read_only else cache.mutation_lock:
+            return _backend_reply(controller, data, peer, cache)
+
+
+def _backend_reply(controller, data, peer, cache):
     request_id = ''
     cacheable = True
     digest = hashlib.sha256(data).digest()
@@ -137,10 +162,18 @@ def backend_reply(controller, data, peer, cache):
         reply = dict(status='ERROR', error=str(error)[:350])
     reply.update(version=1, request_id=request_id)
     body = json.dumps(reply, separators=(',', ':')).encode()
+    if (len(body) > MAX_CONTROL_BYTES and reply.get('action') in ('START', 'STOP', 'RESTART')
+            and isinstance(reply.get('nodes'), dict)):
+        # Preserve every node's outcome when verbose error messages exceed the
+        # protocol limit; a failed operation must not appear unexecuted.
+        compact = dict(reply, nodes={key: {k: v for k, v in value.items() if k != 'error'}
+                                     for key, value in reply['nodes'].items()},
+                       errors_omitted=True)
+        body = json.dumps(compact, separators=(',', ':')).encode()
     if len(body) > MAX_CONTROL_BYTES:
         body = json.dumps(dict(version=1, request_id=request_id, status='ERROR',
                                error='REPLY_TOO_LARGE'), separators=(',', ':')).encode()
-    if cacheable and ID.fullmatch(request_id):
+    if cacheable and isinstance(request_id, str) and ID.fullmatch(request_id):
         cache.put(peer, request_id, digest, body)
     return body
 
@@ -623,15 +656,19 @@ def main():
         sock.listen(16)
         print(f'TCP/JSON trigger controller listening on {sock.getsockname()}, '
               'accepting every reachable source', flush=True)
-        while True:
-            connection, peer = sock.accept()
+        def handle_connection(connection, peer):
             with connection:
                 connection.settimeout(5)
                 try:
                     send_frame(connection, backend_reply(
                         controller, receive_frame(connection), peer, replay))
                 except (ConnectionError, OSError, ValueError):
-                    continue
+                    pass
+
+        with ThreadPoolExecutor(max_workers=32) as workers:
+            while True:
+                connection, peer = sock.accept()
+                workers.submit(handle_connection, connection, peer)
 
 
 if __name__ == '__main__':

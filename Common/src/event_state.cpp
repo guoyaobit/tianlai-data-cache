@@ -156,6 +156,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             uint64_t ignoredPackets = 0;
             uint64_t lastPacketAgeMilliseconds = 0;
             unsigned receivingPorts = 0;
+            const size_t configuredPorts = para.config->receivePorts.size();
             std::string lostByPort = "{";
             std::string inactivePorts = "[";
             bool transitionWarning = false;
@@ -195,11 +196,20 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                 }
                 ready = ready && s.ready;
             }
+            // During memory preparation buffers do not exist yet, but the
+            // configured receive ports must still appear as inactive.
+            for (size_t index = para.receiveBuffers.size(); index < configuredPorts; ++index) {
+                if (inactivePorts.size() > 1)
+                    inactivePorts += ',';
+                inactivePorts += std::to_string(index);
+            }
             lostByPort += '}';
             inactivePorts += ']';
             if (para.receiveBuffers.empty())
                 end = 0;
-            ready = ready && para.initializedPorts == para.receiveBuffers.size();
+            ready = ready && configuredPorts != 0 &&
+                    para.receiveBuffers.size() == configuredPorts &&
+                    para.initializedPorts == configuredPorts;
             const char *status = "WARMING";
             if (para.failed)
                 status = "ERROR";
@@ -208,8 +218,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             else if (isActiveEventState(para.event.state))
                 status = "BUSY";
             const char *dataFlow =
-                (!para.receiveBuffers.empty() &&
-                 receivingPorts == para.receiveBuffers.size()) ? "RECEIVING" :
+                (configuredPorts != 0 && receivingPorts == configuredPorts) ? "RECEIVING" :
                 (receivingPorts ? "PARTIAL" : "NO_DATA");
             return reply("\"status\":" + quoteJson(status) +
                          ",\"runtime_state\":" +
@@ -224,7 +233,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                          ",\"event_state\":" + quoteJson(eventStateName(para.event.state)) +
                          ",\"initialized_ports\":" + std::to_string(para.initializedPorts.load()) +
                          ",\"receive_ports\":" +
-                         std::to_string(para.receiveBuffers.size()) +
+                         std::to_string(configuredPorts) +
                          ",\"data_flow\":" + quoteJson(dataFlow) +
                          ",\"receiving_ports\":" + std::to_string(receivingPorts) +
                          ",\"last_packet_age_ms\":" +

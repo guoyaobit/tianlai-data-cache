@@ -97,7 +97,7 @@ sudo ./tianlai-store-f11-13 server_11.yaml receive_config.yaml
 
 回传协议为 TLSTORE1 的 remote96 描述：物理板卡 12、每板两包、每周期 24 个包位置，
 packet_bytes=8272。C++ 存储服务和 Python 参考接收器均校验该描述；旧版存储接收器不支持
-11～13 号节点。完整格式见 [PROTOCOL.md](../PROTOCOL.md)。
+11～13 号节点。回传协议见 [INTERNAL_PROTOCOL.md](../INTERNAL_PROTOCOL.md)，最终文件格式见 [PROTOCOL.md](../PROTOCOL.md)。
 
 ## 验证
 

@@ -1,6 +1,6 @@
 # 原始数据缓存：服务器 0～13
 
-文档入口：[部署与联调操作手册](DEPLOYMENT_GUIDE.md) · [Ansible 部署](deploy/ansible/README.md) · [触发与存储协议](PROTOCOL.md) · [代码结构](CODE_STRUCTURE.md)。
+文档入口：[部署与联调操作手册](DEPLOYMENT_GUIDE.md) · [Ansible 部署](deploy/ansible/README.md) · [触发操作](DEDISPERSION_BACKEND_GUIDE.md) · [触发与存储格式](PROTOCOL.md) · [代码结构](CODE_STRUCTURE.md)。
 首次部署请先阅读操作手册；本文提供架构和配置背景。所有 IP、端口和路径示例均须按现场实际情况修改。
 
 前 11 台按 `tianlai-A288B288-20260917` 的输入包格式实现，新增 11～13 台接收远端子站数据。
@@ -54,7 +54,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
   `debug: true` 启用详细诊断日志，省略或设为 `false` 时保持 INFO 级别。日志由 spdlog
   输出，带毫秒时间和线程号；指定文件时同时输出到 stderr，文件按 50 MiB 轮转，保留最多
   5 个备份。WARN 及以上立即刷新，其他日志按约 3 秒周期刷新；日志并非事件持久化凭据。
-- 缓存程序以`Runtime state:`日志和`QUERY_STATUS.runtime_state`公开当前阶段；存储程序通过142控制器的只读`QUERY_STORAGE`公开监听、接收写盘及后端通知状态。部署后可在任意缓存、存储或显控节点运行`tlcache --watch 2`；主表优先显示`RECEIVING/PARTIAL/NO_DATA`、当前活跃接收口和无数据端口，不再显示累计收包数。`tlcache period`查询积分周期。任意上述节点均可用`tlcache start all`、`tlcache stop 1-3`或`tlcache restart 2,5-7`并行管理缓存服务，不再依赖运行时Ansible或sudo密码。
+- 缓存程序以`Runtime state:`日志和`QUERY_STATUS.runtime_state`公开当前阶段；存储程序通过142控制器的只读`QUERY_STORAGE`公开监听、接收写盘及后端通知状态。部署后可在任意缓存、存储或显控节点运行`tlcache --watch 2`，查看活跃接收口和无数据端口；`tlcache period`查询积分周期。任意上述节点均可用`tlcache start all`、`tlcache stop 1-3`或`tlcache restart 2,5-7`并行管理缓存服务，不再依赖运行时Ansible或sudo密码。
 - 显控节点为`172.0.0.61`，使用`ubuntu`账户，并作为inventory中的`display`角色由Ansible统一管理。全量部署和软件更新会同时更新其`tlcache`、`tltrigger`及节点清单，不修改显控节点网络配置。
 
 节点 YAML 的 `controlBindIp` 使用 `172.0.0.128～141`（server 0～13 对应 tianlaistore1～14），控制器/存储服务器管理地址为 `172.0.0.142`。状态查询和触发控制统一走该172管理网；消色散后端IP不固定，完成回调使用触发连接的来源IP；存储数据网地址为 `192.168.210.250`。当前配置统一使用 YAML。
@@ -110,10 +110,7 @@ sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
 
 ## 管理网触发和调度
 
-控制通道是千兆内网 **TCP + JSON**，每次连接处理一条请求和回复；每条消息使用4字节网络序长度前缀，JSON最多1200 B。
-每次请求有 request_id，每个事件有 event_id；重传使用同一 ID。
-节点通过事件状态保证幂等，同 ID 不同范围报冲突。进程内保存最近最多 64 个结束事件的
-去重记录；外部必须始终使用唯一事件 ID，不能依赖无限期历史去重。
+控制通道使用管理网 TCP + JSON。触发操作见[后端使用指南](DEDISPERSION_BACKEND_GUIDE.md)，字段、状态与完成通知见[触发与存储格式](PROTOCOL.md)。
 
 控制器等配套工具使用 Python 3.10+：
 
@@ -135,50 +132,15 @@ python3 tools/controller.py --nodes tools/nodes_example.json \
   --bind 172.0.0.142
 ```
 
-控制器接受所有能够连接其管理网监听地址的触发来源，因此可从任意缓存节点、存储节点或消色散后端操作；节点 YAML 的 `controlPeerIp` 仍应当是调度机。
-外部入口默认TCP 18999，节点默认TCP 19000。地址按现场替换。
-控制器的 `--period-us` 和 `--integration-per-trace` 默认为 200 和 50000，必须与全部节点配置一致；变更节点采集参数时同时修改控制器参数。
-
-部署后可在任意缓存节点或存储节点直接保存最近3秒的384路数据：
-
-```bash
-tltrigger 3
-```
-
-`tltrigger`按288或384路模式自动选择全部对应服务器，无需填写节点列表。`tltrigger period`显示共同可用的最新积分周期及trace/integration，`tltrigger EVENT_ID`查询写盘进度。默认输出为单行结果，加`--json`可查看完整返回。
-
-按绝对积分周期触发可执行`tltrigger 3 --period 7010000`，表示从周期7010000开始保存3秒。命令会在提交前校验整个区间仍在参与节点的共同缓存内。
-
-通过JSON文件触发可执行`tltrigger tools/trigger_example.json`。简化JSON只包含`seconds`、`period`和`channels`，后两项可按需省略；服务器集合由通道模式自动确定。`tltrigger`会自动生成事件编号并等待落盘完成。
-
-单次触发支持1～50秒，保存完整50秒并等待结束可执行`tltrigger 50`。50秒384路数据约2.37 TB，传输和落盘期间该事件持续占用冻结缓冲区，完成或取消前不能接受下一事件；部署前须验证100G链路、阵列持续写入速度和剩余容量。
-
-`tltrigger`由Ansible统一安装到控制器和显控节点；`deploy.sh`负责首次安装，`update_software.sh`随其他程序一并更新。
-
-在触发JSON中设置`"channel_count":288`或`384`；省略时默认384。可选的`server_ids`使用内部0～13编号，并且必须属于所选通道模式。返回PREPARING表示请求正在处理；查询事件得到PREPARED/STORING后才表明本次所选节点全部已保护。控制器只有确认所选节点STORED后才统一RELEASE，单节点故障不会提前释放其他节点缓存。
-QUERY_EVENT 查询进度，QUERY_STATUS 查询全系统是否 READY。
-内部固定标识仍进入缓存事件和TLSTORE1元数据。升级时必须先停止触发并处理完旧事件，在维护窗口统一更新控制器、14台缓存服务和存储服务，不能混跑协议版本不同的进程。
-所选模式的11台或14台节点持久化完成后，C++存储服务通过TCP/JSON直接向消色散后端发送
-`CAPTURE_RESULT`；后端持久化结果后向报文来源地址回复 `ACK_RESULT`。未确认结果会落盘保存并在重启后继续重试。单文件接收器`tools/result_listener.py`会先按`event_id`持久化结果再确认，协议和缺包含义见`PROTOCOL.md`。默认要求配置全部
-14台。调试时可通过Ansible的`tianlai_disabled_cache_nodes`明确排除离线节点；该模式不能表示288或384路全部完成。
-原始输入头的 `ifTrace` 不充当触发位，也不修改保留字节。
-协议字段和状态详见 [PROTOCOL.md](PROTOCOL.md)。
-
-任何准备失败、TCP 确认不明或落盘故障会使调度事件 PAUSED，保留节点可能已保护的数据，
-阻止新的独立事件。查询确认后使用 RESUME 继续，或明确 CANCEL 放弃。
-调度器有磁盘日志，重启后未完成事件标为 PAUSED，等待 RESUME 查询节点实际状态再继续。
-不要直接启动第二个调度器处理相同节点。全部节点返回 RELEASED 后事件 COMPLETED，
-但下一次触发仍须等待 QUERY_STATUS 显示 READY。
+控制器参数 `--period-us` 和 `--integration-per-trace` 必须与全部节点配置一致。升级时先停止触发并处理旧事件，再在维护窗口统一更新各服务。50秒384路事件约2.37 TB，部署前需确认链路、阵列吞吐和剩余容量。
 
 ## ZeroMQ 回传与存储
 
-存储服务始终为14台服务器保留28个监听入口。288路事件只有节点0～10回传22个lane；384路事件由节点0～13回传28个lane。每个入口由一个线程顺序完成收包、校验和写盘，不再额外创建写盘线程；协议本身逐块确认，因此仍可在不同lane之间并行。每台缓存服务器只使用一个物理网口和一个源IP，两个基于TCP的ZeroMQ连接共享该网口；lane 0发送偶数接收口，lane 1发送奇数接收口，数据不复制。存储服务器使用一个100G物理口和一个IP。发送端要求libzmq支持ZMQ_BINDTODEVICE，且源IP必须属于指定接口。
+存储服务始终为14台服务器保留28个监听入口。288路事件只有节点0～10回传22个lane；384路事件由节点0～13回传28个lane。每个入口由一个线程顺序完成收包、校验和写盘，不再额外创建写盘线程；协议本身逐块确认，因此仍可在不同lane之间并行。每台缓存服务器只使用一个物理网口和一个源IP，两个基于TCP的ZeroMQ连接共享该网口；lane 0发送偶数接收口，lane 1发送奇数接收口。发送时会从缓存复制数据以组装消息。存储服务器使用一个100G物理口和一个IP。发送端要求libzmq支持ZMQ_BINDTODEVICE，且源IP必须属于指定接口。
 
 发送端不设置应用层速率上限，两个lane会共同使用单个物理网口的可用带宽。实际吞吐由缓存服务器网卡、交换机、存储服务器100G网口和磁盘阵列中最慢的一环决定，必须实测持续写入能力和拥塞表现。
 
-每条ZeroMQ消息由存储端直接在消息缓冲区中检查并写入，避免整块数据复制；数据块写入页缓存后返回OK，再发送下一块。当前文件累计1 GiB、经过5秒或写完时执行`fdatasync`，不会在每次中间同步时重复处理同一lane的其他文件；收到END后再次同步全部数据文件，再持久化完成标记并返回STORED。目录仅在首次创建时同步父目录。块级OK只表示结构检查通过并已写入，不表示断电安全；节点只有验证最终STORED后才允许释放事件。连接、超时或写盘失败时节点保留冻结数据并报告SEND_FAILED。
-
-缓存到存储链路不计算应用层CRC，40字节块头的末4字节为0。传输可靠性依赖TCP校验与重传；存储端仍校验消息长度、周期范围、端口映射和原始包头，但不检测内存、PCIe或磁盘静默位翻转。
+数据传输与持久化确认见[内部协议](INTERNAL_PROTOCOL.md)，最终文件结构见[触发与存储格式](PROTOCOL.md)。
 
 在存储服务器编译并运行 C++ 接收器（地址按现场替换）：
 
@@ -188,12 +150,9 @@ make storage
 ./Storage/tianlai-storage --config Storage/storage.yaml
 ```
 
-`sendDestinationIp`指向100G口上的单个IP，两个lane端口分别为`20000 + server_id`和`20100 + server_id`。监听项同时校验server、lane和来源IP。每个lane只使用一个`lane-N.json`保存元数据、接收状态和缺包统计；最终确认丢失时，已完成lane在元数据阶段直接返回STORED。未指定服务器时，288路需要22个lane、384路需要28个lane持久化状态一致；指定服务器时只等待所选节点的两个lane。随后生成事件根目录的`event.json`并通知后端；同一文件的`backend_acknowledged`记录后端是否确认，`partial_node_set`及`participating_server_ids`明确记录实际参与节点。
+`sendDestinationIp`指向100G口上的单个IP；存储端口和节点映射由部署配置生成。
 
 每个接收线程绑定一个NUMA本地物理核，lane 0和lane 1发送线程也分别绑定到发送网卡NUMA节点上的独立物理核。接收核和发送核互不重复，并从日志、控制和事件管理等后台线程的CPU集合中排除。
-
-落盘根目录统一为`/data`，自动生成的事件路径为`/data/YYYYMMDD-HHMMSS/`，不包含随机码。包号和频率子目录采用短名称，例如`p24-25/packet-24_boards-00-17.bin`或`f0688-1023/frequency-0688-0773_boards-36-47.bin`；文件名仍完整描述数据内容，完整事件编号保存在`event.json`中。
-落盘目录权限为`0755`，数据文件及JSON状态文件权限为`0644`，所有本机用户均可读取，仅服务所属用户可以修改。
 
 ZeroMQ 数据通道不使用 UDP 分片参数；旧配置中的 udpFragmentBytes 必须删除。TCP/IP MTU 仍须按实际网络配置。ZeroMQ 不会补回 FPGA 到缓存服务器之间丢失的 UDP 包；旧 UDP/TCP 存储发送端与 ZeroMQ 接收器不兼容，需协调同时更新。
 

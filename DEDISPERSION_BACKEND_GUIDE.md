@@ -2,6 +2,8 @@
 
 本文面向消色散后端使用人员，说明如何检查缓存、发起保存、等待完成，以及如何确认存储服务器的完成通知。日常操作不需要填写积分周期，也不需要编写JSON。
 
+TCP 触发报文、完成通知以及最终二进制文件的字段和字节序，统一见 [Trigger and Data Format V1](PROTOCOL.md)。
+
 ## 使用位置
 
 在已经安装`tltrigger`且能够访问管理网`172.0.0.142:18999`的节点执行命令。默认使用384路模式，单次可保存最近1～50秒的数据。
@@ -52,7 +54,7 @@ tltrigger 3 --period 7010000
 tltrigger trigger.json
 ```
 
-`period`和`channels`可省略；省略`period`时保存最新稳定数据，省略`channels`时默认384路。控制器会根288/384路模式自动选择服务器。命令会自动生成事件编号、提交触发并等待完成。
+`period`和`channels`可省略；省略`period`时保存最新稳定数据，省略`channels`时默认384路。控制器会根据288/384路模式自动选择服务器。命令会自动生成事件编号、提交触发并等待完成。
 
 保存最近3秒的384路数据，并等待整个事件结束：
 
@@ -133,7 +135,7 @@ tltrigger
 
 ## 接收存储完成通知
 
-消色散后端直接发送`CAPTURE`时，控制器自动使用触发TCP连接的真实来源IP，完成通知端口固定为19001；触发JSON不包含`result_address`或`result_port`。存储服务器完成写盘后连接该IP和端口发送`CAPTURE_RESULT`。管理命令`tltrigger`内部使用状态查询等待，不要求本机监听通知端口。
+消色散后端直接发送`CAPTURE`时，需监听 TCP 19001 接收写盘完成通知。管理命令`tltrigger`使用状态查询等待，不要求本机监听通知端口。报文、重试和确认要求见[完成通知协议](PROTOCOL.md#completion-notification)。
 
 仓库中的`tools/result_listener.py`是单文件接收器，只依赖Python 3。先在存储服务器确认连接后端时使用的源地址：
 
@@ -163,32 +165,7 @@ python3 result_listener.py \
 ss -lntp | grep ':19001'
 ```
 
-接收器先将通知写入`/data/tianlai-completions/EVENT_ID.json`并同步目录，再回复确认。重复通知内容一致时直接幂等确认，内容冲突时拒绝确认。
-
-```json
-{
-  "version": 1,
-  "command": "CAPTURE_RESULT",
-  "status": "STORED",
-  "event_id": "event-20261113-045012-a1b2c3",
-  "channel_count": 384,
-  "period_count": 15000,
-  "missing_by_server": {"0": 0, "1": 0}
-}
-```
-
-后端必须先持久化该结果，再在同一TCP连接回复长度前缀JSON：
-
-```json
-{
-  "version": 1,
-  "command": "ACK_RESULT",
-  "status": "ACKNOWLEDGED",
-  "event_id": "event-20261113-045012-a1b2c3"
-}
-```
-
-存储服务器没有收到确认时会继续重试，因此后端必须按`event_id`实现幂等处理。`tltrigger`返回`COMPLETED`表示数据保存和缓存释放完成，不等于后端已经回复`ACK_RESULT`。
+接收器将通知写入`/data/tianlai-completions/EVENT_ID.json`并同步目录后回复确认；重复通知内容一致时幂等确认，内容冲突时拒绝确认。
 
 ## 常见问题
 

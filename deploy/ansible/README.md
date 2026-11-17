@@ -146,7 +146,7 @@ systemctl status tianlai-cache.service
 systemctl status tianlai-controller.service
 ```
 
-存储服务器、全部缓存节点和显控节点都会安装`tlcache`命令。它通过172管理网同时显示142存储服务状态，以及全部缓存节点的当前收数状态、活跃接收口数、最后收包年龄、无数据端口和累计缺包。`RECEIVING`表示所有口在2秒内有数据，`PARTIAL`表示部分口断流，`NO_DATA`表示全部端口断流：
+存储服务器、全部缓存节点和显控节点都会安装`tlcache`命令。它通过172管理网显示142存储服务状态，以及缓存节点的活跃接收口数、无数据端口和累计缺包；详细状态可用`tlcache --json`查看：
 
 ```bash
 tlcache

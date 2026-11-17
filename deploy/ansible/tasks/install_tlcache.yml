@@ -10,4 +10,8 @@
     mode: '0755'
     content: |
       #!/bin/sh
-      exec /usr/bin/python3 {{ tianlai_root }}/tools/cache_status.py --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"
+      exec /usr/bin/python3 {{ (tianlai_root ~ '/tools/cache_status.py') | quote }} \
+        --nodes {{ (tianlai_root ~ '/config/nodes.json') | quote }} \
+        --storage-host {{ tianlai_controller_ip | quote }} \
+        --storage-port {{ tianlai_controller_port | int }} \
+        --integration-per-trace {{ tianlai_integration_per_trace | int }} "$@"

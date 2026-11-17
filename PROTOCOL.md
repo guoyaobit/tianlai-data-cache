@@ -1,254 +1,197 @@
-# 触发控制和原始数据回传协议 V1
+# Trigger and Stored Data Interface
 
-## 输入数据和积分编号
+本文面向消色散后端和数据读取方，介绍如何触发缓存、确认写盘，以及如何解析最终文件。日常命令用法见 [Dedispersion Backend Trigger Guide](DEDISPERSION_BACKEND_GUIDE.md)。
 
-原始 16 B 业务头沿用 GPU 输入格式：
+## 1. 如何触发
 
-| 偏移 | 定义 |
+### 1.1 使用命令
+
+在已安装 `tltrigger`、能访问管理网的节点执行：
+
+```bash
+tltrigger                   # 查看384路是否可以触发
+tltrigger period --288      # 查看288路共同可用积分周期
+tltrigger 3 --288           # 保存最近3秒的288路数据，等待完成
+tltrigger 3                 # 保存最近3秒的384路数据，等待完成
+tltrigger 3 --period 7010000  # 从指定绝对积分周期开始，保存3秒
+```
+
+数字命令的单位是**秒**，支持 1～50 秒；省略 `--288` 时使用384路。命令会自动生成事件编号并选择对应服务器。更多查询和等待命令见[使用指南](DEDISPERSION_BACKEND_GUIDE.md)。
+
+### 1.2 后端直接发送触发
+
+后端通过管理网向控制器发送 TCP + JSON：
+
+| 项目 | 默认值 |
 |---|---|
-| 0 高 4 位 | 保留字段，接收、缓存和落盘时忽略 |
-| 0 低 4 位、1、2 | 20 位 tracePeriodId，高字节在前 |
-| 3 最高位 | ifTrace，跟踪标记，不是缓存触发 |
-| 3 低 7 位、4、5 | 23 位 integrationPeriodId，配置默认范围 0～49999 |
-| 6 | boardId，原系统 0～35，远端子站 36～47 |
-| 7 | 原系统：GPU ID 0～39；远端子站：频段及 FFT 半段包号 0～23 |
-| 8～15 | 原样保留 |
+| 控制器地址 | `172.0.0.142:18999`，以实际部署配置为准 |
+| 消息格式 | 4字节无符号大端长度 + UTF-8 JSON |
+| 单条 JSON 长度 | 1～1200 字节，长度按编码后的字节计算 |
+| 连接方式 | 每条连接发送一个请求、接收一个回复，随后关闭 |
 
-内部使用 `uint64_t absolutePeriod = trace * integrationPerTrace + integration`。
-区间统一为 `[start, start + count)`。默认 200 us/周期、最大 250000 周期（50 秒）。
-触发以信号采集编号为准，TCP控制请求到达时间和服务器系统时间不参与选取数据。
-仅接受已经定稿的历史区间；不等待未来未到的数据。
-
-节点、控制器和存储内部固定使用 `acquisition_id=tianlai`，外部触发和确认均可省略该字段。控制器 `--integration-per-trace` 和 `--period-us` 必须分别与所有节点 `receive_config.yaml` 中的 `integrationPerTrace`、`periodMicroseconds` 一致，默认 50000 和 200；控制器不会自动验证节点配置的一致性。
-远端和原系统须有相同的积分计数起点，才能使用同一区间代表同一物理时间；本版不做时钟偏移换算。
-前端清零、重启或 trace 20 位回绕时，需协调停止并重启缓存程序重新积累。禁止跨任务/跨计数回绕触发，不能靠收到一个倒退的包推断新任务；`event_id`必须全局唯一且不得跨观测重复使用。
-
-## 千兆内网 TCP + JSON 控制
-
-每次TCP连接只处理一个请求和一个回复，随后主动关闭。每条消息为4字节网络序JSON长度，后接UTF-8 JSON对象；JSON最长1200 B。节点只允许配置的`controlPeerIp`执行状态变更命令；与节点`controlBindIp`同一/24管理网的主机只允许执行`QUERY_STATUS`和`QUERY_PORT`。控制器入口接受所有能够连接其管理网监听地址的来源，再由控制器统一向缓存节点执行状态变更。
-
-所有请求携带：
+例如，从指定积分周期开始保存 3 秒的 288 路数据：
 
 ```json
 {
   "version": 1,
   "request_id": "req-000001",
-  "command": "QUERY_STATUS"
+  "command": "CAPTURE",
+  "event_id": "event-000001",
+  "channel_count": 288,
+  "start": {
+    "trace_period_id": 120,
+    "integration_period_id": 45000
+  },
+  "duration_ms": 3000
 }
 ```
 
-request_id和event_id只能使用 ASCII 字母、数字、下划线、短横线，长度 1～64。外部请求若仍携带`acquisition_id`，其值必须为`tianlai`；错误值会被拒绝。
-重复 JSON 字段在控制器和节点端均被拒绝；节点端不接受数组。计数及长度须是 JSON 整数，不接受小数、布尔值或负数。
-节点回复携带 version、request_id 和 server_id。控制器回复携带 version、request_id。
-错误回复为 `status=ERROR, error=原因`。
+| 字段 | 要求 | 说明 |
+|---|---|---|
+| `version` | 必填，`1` | 协议版本 |
+| `request_id` | 必填 | 请求与回复匹配编号 |
+| `command` | 必填，`CAPTURE` | 发起保存 |
+| `event_id` | 必填 | 全局唯一的事件编号，用于查询和去重 |
+| `channel_count` | 可选，`288` 或 `384` | 默认 `384`；自动选择对应服务器 |
+| `start` | 必填 | 起始 trace 与积分周期编号 |
+| `duration_ms` | 与 `period_count` 二选一 | 保存时长，正整数毫秒，须为整数个周期 |
+| `period_count` | 与 `duration_ms` 二选一 | 保存的正整数积分周期数 |
 
-request_id 用于请求/回复匹配，event_id 用于执行去重。同一事件编号只能对应同一区间。
-超时重发同一请求；收到 PREPARING 后改用 QUERY_EVENT 轮询，不反复创建新事件。
-控制器会在5分钟内缓存最多1024个后端回复；同一来源IP使用相同request_id和相同报文重试时返回完全相同的回复，即使源端口变化也不会重复调度。相同request_id携带不同内容会返回REQUEST_ID_CONFLICT。控制器重启后仍由持久化event_id和节点幂等状态保证安全续作。
-节点状态不会因为重复 STORE/RELEASE 而倒退。先收到 CANCEL 的未知事件会留下
-取消记录，防止迟到 PREPARE 再次启动该事件。
+`request_id` 和 `event_id` 使用 1～64 个 ASCII 字母、数字、下划线或短横线。默认每周期 **200 微秒**，每个 trace 为 **50000 周期**；实际数值以系统配置为准，控制器与缓存节点必须一致。单次最长 50 秒。上例的 3000 毫秒等于 15000 个周期，保存区间为 `[(120,45000), (121,10000))`，不含结束位置。
 
-### 外部 → 控制器（默认 TCP 18999）
+直接接口只接受已稳定且仍在所有参与节点共同缓存范围内的数据，不等待未来的数据；后端可先发送 `QUERY_STATUS` 获取 `oldest_period` 与 `settled_end`，其中后者是排他边界。绝对积分周期计算为 `trace_period_id × 50000 + integration_period_id`（50000 为默认配置）。各数据源须使用同一个积分计数起点，系统不会自动校正源间偏移。
+
+直接 TCP 调用示例：
+
+```python
+import json
+import socket
+import struct
+
+request = {
+    "version": 1, "request_id": "req-000001", "command": "CAPTURE",
+    "event_id": "event-000001", "channel_count": 288,
+    "start": {"trace_period_id": 120, "integration_period_id": 45000},
+    "duration_ms": 3000,
+}
+
+def read_exact(sock, size):
+    data = bytearray()
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            raise ConnectionError("incomplete reply")
+        data.extend(chunk)
+    return bytes(data)
+
+body = json.dumps(request, separators=(",", ":")).encode("utf-8")
+with socket.create_connection(("172.0.0.142", 18999), timeout=10) as sock:
+    sock.sendall(struct.pack("!I", len(body)) + body)
+    size = struct.unpack("!I", read_exact(sock, 4))[0]
+    if not 1 <= size <= 1200:
+        raise ValueError("invalid reply length")
+    reply = json.loads(read_exact(sock, size))
+    if reply.get("request_id") != request["request_id"]:
+        raise ValueError("request_id mismatch")
+    print(reply)
+```
+
+每次新事件必须使用新的 `event_id`；每条不同的请求必须使用新的 `request_id`。连接超时不代表触发失败：先按事件编号查询，或从相同来源 IP 使用相同 `request_id` 和完全相同的报文重试，避免重复触发。
+
+### 1.3 查询和完成通知
+
+初次返回 `PREPARING` 表示控制器已经接受事件，**不表示写盘完成**。使用相同的 TCP 封装发送：
+
+```json
+{"version":1,"request_id":"req-000002","command":"QUERY_EVENT","event_id":"event-000001"}
+```
+
+查询结果中的 `COMPLETED` 表示所选节点数据已持久化，缓存也已释放；`PAUSED` 表示需要排查，不表示成功。确认事件完成后，再根据缺包统计判断数据是否完整。
+
+### Completion Notification
+
+直接发送 `CAPTURE` 时，存储服务器写盘完成后主动连接**该触发 TCP 连接的来源 IP、端口 19001**，发送同样的长度前缀 JSON。后端应在触发前监听该端口；请求中不填写 `result_address` 或 `result_port`。以下通知为字段摘录，实际消息还包含地址、时间参数和参与节点等字段：
 
 ```json
 {
   "version": 1,
-  "request_id": "req-000002",
-  "command": "CAPTURE",
+  "command": "CAPTURE_RESULT",
+  "status": "STORED",
   "event_id": "event-000001",
   "channel_count": 288,
-  "server_ids": [0, 1, 2],
-  "start": {"trace_period_id": 120, "integration_period_id": 45000},
-  "period_count": 15000
+  "period_count": 15000,
+  "missing_by_server": {"0": 0, "1": 2},
+  "partial_node_set": false
 }
 ```
 
-示例以288路模式从节点0～2保存3秒，包含`(120,45000)`到`(121,9999)`，不包含`(121,10000)`。控制器使用当前TCP连接的真实来源IP作为完成通知地址，通知端口固定为19001；外部请求不得设置`result_address`或`result_port`。管理命令`tltrigger`内部关闭主动通知并通过`QUERY_EVENT`等待结果。
-`channel_count`只能为288或384：288允许节点0～10，384允许节点0～13。可选的`server_ids`为不重复的内部节点编号列表；省略时使用该模式的全部节点。同一`event_id`不能改变通道数或参与节点。命令行工具的`--servers 1,2,3`使用更直观的服务器标签编号，并转换为内部`[0,1,2]`。
+`STORED` 表示本次选定节点的数据已持久化，不保证零缺包。`missing_by_server` 的键为内部节点编号，值为该节点缺失的包位置总数；`partial_node_set=true` 表示只有部分节点参与，不能视为完整288路或384路数据。
 
-也可用 `"duration_ms":3000` 代替 `"period_count":15000`；**必须且只能提供其中一个**。毫秒时长须为正整数，换算后恰好是整数个积分周期；例如默认 200 微秒时，1 毫秒为 5 个周期。最大时长 50 秒；节点若配置更小的 `maxEventSeconds` 则按节点限制拒绝。控制器将请求规范化为 `period_count`，因此相同事件 ID、起点和等价长度可以重传，范围变化则冲突。
-
-控制器保存和查询的事件还包含 `end_exclusive`、`period_microseconds` 和 `integration_per_trace`。结束位置为排他边界，并非最后一个包含的周期。例如上例为 `{"trace_period_id":121,"integration_period_id":10000}`。若终点恰好到达计数回绕边界，排他端点可为 trace `1048576`、integration `0`；该值仅为边界，不能作为新的触发起点。旧日志中已有的事件可能没有这些新增字段。
-
-| command | 额外字段 | 含义 |
-|---|---|---|
-| CAPTURE | event_id、channel_count、server_ids（可选）、start、period_count | 创建事件；完成结果推送到触发来源IP的固定端口19001 |
-| QUERY_EVENT | event_id | 查询事件准备/传输/完成状态 |
-| QUERY_ACTIVE_EVENT | 无 | 查询当前运行或暂停的唯一未完成事件 |
-| QUERY_STATUS | channel_count、server_ids（均可选） | 查询指定节点共同的可用时间范围和 accept_trigger |
-| QUERY_STORAGE | 无 | 查询142节点上存储服务的运行状态，供任意节点的`tlcache`使用 |
-| CACHE_SERVICE | action、server_ids、force | 从受管管理节点并行启动、停止或重启指定缓存服务 |
-| RESUME | event_id | 对 PAUSED 事件查询节点实际状态后继续 |
-| CANCEL | event_id | 明确放弃已暂停事件；正在发送的节点不能直接取消 |
-
-缓存服务启停命令只允许存储节点、缓存节点和显控节点的管理IP发起。控制器再连接目标节点TCP 19002上的root管理服务；该端口只接受控制器IP，并且只支持固定的START、STOP、RESTART和STATUS动作，不执行任意命令。
-
-流程：PREPARING → PREPARED → STORING → STORED → RELEASING → COMPLETED；任何不确定的失败转 PAUSED。
-进入STORING前，所选节点必须全部PREPARED；进入RELEASING前，所选节点必须全部STORED。
-COMPLETED 只表示事件保存完成，不代表已经恢复完整 100 秒历史；再次触发应先查 READY。
-部分节点失败或超时，不自动假定那些节点没有执行过请求，也不自动删除其他节点的数据。
-控制器 `QUERY_STATUS` 只有在所有节点可触发且共同区间 `oldest_period < settled_end` 时才返回 READY；即使 READY，目标区间仍需落在共同区间内，节点可能因区间过期或未定稿而拒绝。控制器先检查包头计数的位宽，节点再按实际 `integrationPerTrace` 检查积分编号和范围。
-
-显式选择部分服务器或部署时排除离线节点，控制器响应包含`partial_node_set=true`和`participating_server_ids`；事件记录也保存`participating_server_ids`。此类结果只代表列出的参与节点，不得解释为完整288或384路数据。
-事件日志写入失败时不会在内存中发布未成功记录的状态；无法写入暂停状态时仍在内存中暂停，重启后须结合日志和各节点状态人工核对，不能假定失败操作未执行。
-
-### 写盘完成主动通知
-
-C++存储服务根据事件元数据中的服务器选择掩码，确认本次参与节点各自两个lane全部持久化且元数据一致后，先写入事件级`event.json`，再通过TCP/JSON通知消色散后端。选择结果必须是`expectedServerIds`的子集：
-
-```json
-{"version":1,"command":"CAPTURE_RESULT","status":"STORED","acquisition_id":"tianlai","event_id":"event-000001","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"end_exclusive":{"trace_period_id":121,"integration_period_id":10000},"period_count":15000,"period_microseconds":200,"integration_per_trace":50000,"missing_by_server":{"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0},"partial_node_set":false,"participating_server_ids":[0,1,2,3,4,5,6,7,8,9,10]}
-```
-
-未指定服务器时，`STORED`精确表示所选模式的11台或14台数据均已写盘并形成持久化标记；它不表示控制器已经完成缓存释放。`partial_node_set=true`时仅表示`participating_server_ids`列出的节点完成，不能解释为完整288路或384路数据。缺包数量见`missing_by_server`，因此该通知也不是零丢包保证。
-
-后端应按全局唯一的`event_id`幂等地持久化并处理结果，再在同一TCP连接回复：
+后端持久化并按 `event_id` 幂等处理结果后，在**同一连接**回复长度前缀 JSON：
 
 ```json
 {"version":1,"command":"ACK_RESULT","status":"ACKNOWLEDGED","event_id":"event-000001"}
 ```
 
-存储服务连接触发请求的真实来源IP和固定端口19001，在同一连接发送长度前缀JSON并等待ACK_RESULT；后端IP无需预先配置。`resultBindAddress=0.0.0.0`时由系统路由选择源地址。确认报文匹配后，将同一个`event.json`中的`backend_acknowledged`原子更新为`true`。超时、断线或重启后继续重试，因此后端必须按事件编号处理重复通知。管理命令`tltrigger`使用内部`notify=false`关闭回调并通过`QUERY_EVENT`查询状态。
+未收到确认时存储服务器会重试，后端需能处理重复通知。`tltrigger` 默认通过轮询等待，不要求监听通知，也不主动请求回调；`COMPLETED` 不代表后端已确认通知。
 
-### 控制器 → 节点（默认 TCP 19000）
+## 2. 最终存储文件格式
 
-PREPARE使用标量`server_mask`携带本次参与节点位图，并只向所选节点发送；缓存节点把该位图原样写入TLSTORE1元数据，供存储端建立事件完成屏障。
+### Stored Files
 
-| command | 额外字段 | 允许行为 |
+默认根目录为存储服务器的 `/data`，实际根目录由 `storage.yaml` 的 `directory` 指定。自动生成的事件编号形如 `YYYYMMDD-HHMMSS-六位十六进制`，目录使用前面的 `YYYYMMDD-HHMMSS`，其中 `tltrigger` 生成的时间为 UTC；其他合法事件编号直接用作目录名。同一秒的自动事件可能对应同一目录，发生元数据冲突时会拒绝覆盖。
+
+```text
+/data/事件目录/
+├── event.json
+├── p00-07/
+│   ├── lane-0.json
+│   ├── lane-1.json
+│   └── packet-00_boards-00-35.bin
+├── p24-25/
+│   └── packet-24_boards-00-17.bin
+└── f0688-1023/
+    └── frequency-0688-0773_boards-36-47.bin
+```
+
+上图只列出部分文件。每个接收口生成一个 `.bin`：
+
+| 内部节点 | 数据目录 | 文件名含义 |
 |---|---|---|
-| PREPARE | event_id、channel_count、server_mask、start、period_count | 检查节点选择和历史区间并异步保护，返回PREPARING/PREPARED |
-| STORE | event_id | PREPARED或SEND_FAILED时并行启动两个不限速ZeroMQ lane；SENDING/STORED时幂等返回 |
-| QUERY_EVENT | event_id | 查询事件状态、missing_packets、sent_bytes、freeze_ms、send_ms、send_rate_bps、兼容过渡区指标和 error；零复制冻结时峰值为0 |
-| RELEASE | event_id | 只有该节点全部接收口数据可靠落盘后，即 STORED 状态，才允许释放冻结区 |
-| CANCEL | event_id | 未发送或发送失败时放弃事件；PREPARING 时延后安全释放 |
-| QUERY_STATUS | 无 | READY/BUSY/WARMING、runtime_state、当前数据流、活跃/无数据端口、共同周期范围及兼容过渡区指标等 |
-| QUERY_PORT | port | 单口周期范围、收包计数、兼容过渡区指标、最近冻结耗时和冻结次数 |
+| 0～2 | `p00-07`、`p08-15`、`p16-23` | `packet-包号_boards-00-35.bin` |
+| 3～10 | `p24-25` 至 `p38-39` | `packet-包号_boards-00-17.bin` 或 `boards-18-35.bin` |
+| 11～13 | `f0000-0343`、`f0344-0687`、`f0688-1023` | `frequency-起始频点-结束频点_boards-36-47.bin` |
 
-节点主要状态：PREPARING → PREPARED → SENDING → STORED → RELEASED。
-发送失败为 SEND_FAILED，仍保护数据；准备失败为 REJECTED；明确取消为 CANCELLED。
-释放后历史不足时节点 QUERY_STATUS 返回 WARMING，而不是 READY。
+### 2.1 二进制记录
 
-`runtime_state`描述进程当前工作阶段，与事件状态分开：`PREPARING_MEMORY`、`WAITING_FOR_DATA`、`CACHING_DATA`、`PREPARING_EVENT`、`EVENT_READY`、`SENDING_CACHED_DATA`、`STORAGE_CONFIRMED`、`SEND_FAILED`、`ERROR`和`STOPPING`。节点响应同时包含进程运行时间`uptime_ms`、`runtime_state_age_ms`、`initialized_ports/receive_ports`、`data_flow`、`receiving_ports`、`last_packet_age_ms`和`inactive_ports`。`data_flow`按2秒无数据阈值返回`RECEIVING`、`PARTIAL`或`NO_DATA`；`last_packet_age_ms`是已收到过数据的端口中最大的最后收包年龄。详细响应仍保留`received_packets`以及进程启动以来的`lost_packets`、`loss_periods`、`last_loss_period`、`late_packets`和`lost_by_port`。`loss_periods`按端口-周期累计；进程重启后这些运行计数清零。控制器`QUERY_STATUS`用`node_runtime_states`和`runtime_state_counts`汇总所选节点。
+每个 `.bin` 是多个固定长度的积分记录顺序拼接，**没有文件头、Ethernet/IP/UDP 头或40字节传输块头**。所有整数为大端：
 
-存储服务将本机实时状态写入`statusFile`（部署默认`/run/tianlai-storage-status.json`）。状态包括`STARTING`、`WAITING_FOR_DATA`、`RECEIVING_AND_WRITING`、`NOTIFYING_BACKEND`、`ERROR`和`STOPPING`；文件还包含监听端点、活动传输、完成/中止lane、累计写入字节及最近错误。状态文件是监控信息，不代替lane持久化状态或事件级`event.json`。
+| 记录偏移 | 大小 | 字段 | 含义 |
+|---:|---:|---|---|
+| 0 | 8 B | `absolutePeriod` | 绝对积分周期 |
+| 8 | 8 B | `boardMask` | 第 `n` 位表示第 `n` 个包位置是否收到 |
+| 16 | 4 B | `packetBytes` | 一个包位置的字节数 |
+| 20 | 4 B | `packetSlotCount` | 每周期的包位置数 |
+| 24 | `packetBytes × packetSlotCount` | 原始包 | 按位置顺序排列，每包含16字节原始业务头及数据 |
 
-控制器只有在所选模式全部节点PREPARED后才并行发出STORE；全部节点STORED后才并行发出RELEASE。288路使用11个节点，384路使用14个节点；每节点使用两个ZeroMQ连接，任一lane失败都会使节点进入SEND_FAILED，其他已落盘节点也暂不释放缓存。
-节点RPC断线或超时时使用同一request_id重新建立TCP连接，最多进行6次指数退避重试；准备和写盘长任务通过QUERY_EVENT等待。
-调度器重启时读取日志，未完成事件先PAUSED；RESUME根据节点实际状态继续，STORE和RELEASE均可安全重复。
+位图为 1 表示该位置收到数据；位图为 0 时，整个包位置填零。整周期缺失也保留一条记录，位图和包位置均为零。数据保持原始格式，不转换为浮点数。
 
-## ZeroMQ 数据协议 TLSTORE1
+| 内部节点 | 每周期位置数 | 每包字节数 | 每条记录字节数 |
+|---|---:|---:|---:|
+| 0～2 | 36 | 2320 | 83544 |
+| 3～10 | 18 | 8848 | 159288 |
+| 11～13 | 24 | 8272 | 198552 |
 
-数据通道和管理网TCP/JSON控制通道独立。每台缓存服务器建立lane 0和lane 1两个ZeroMQ REQ连接，两个连接绑定同一个物理网口和源IP。lane 0只发送偶数接收口，lane 1只发送奇数接收口。`storage.receivers`必须显式列出28个`serverId/lane/bindAddress/port/allowedSource`组合；存储端据此启动28个ROUTER监听线程。默认端口为20000～20013和20100～20113。任一端点不匹配都会拒绝会话。
+文件大小为 `period_count × 每条记录字节数`。按默认200微秒周期，3秒为15000条记录。第 `i` 条记录的偏移是 `i × 每条记录字节数`，周期编号可通过记录头确认。
 
-每个 ZeroMQ 请求是一条消息：先发送带 4 字节长度的 JSON 元数据，然后逐条发送 40 字节块头和正文，最后发送 40 字节 END。通常除 END 外每条消息由存储端成功校验并写入后回复 ASCII OK；该 OK 不是持久化确认。存储端累计 256 MiB 或经过 1 秒后批量 `fdatasync`，END 在全部文件及完成标记持久化后回复 4 字节长度前缀的 STORED JSON。若相同元数据对应的持久化标记已经存在，首条元数据消息直接返回 STORED，发送端不再重传数据。发送端验证事件、采集编号、节点和 lane 后才进入 STORED。消息排队、块级 OK、TCP ACK 或 ZeroMQ send 成功均不代表完整落盘。
+每个原始包的16字节业务头中：字节0低4位与字节1～2组成 `trace_period_id`；字节3低7位与字节4～5组成 `integration_period_id`；字节6为板卡号，字节7为包号；字节3最高位为 `ifTrace`。字节0高4位不参与接收校验，原始头其余字节保留。
 
-每次STORE为两个lane分别建立新会话。未完成lane从头重传；已有持久化标记的lane直接返回STORED。同一server/lane不可并发写，但同一server的两个lane可以并行写入互不重叠的端口文件。
+远端节点11～13每块板卡每周期有两个包，槽位按板卡排列：`slot = (boardId - 36) × 2 + (packetId - 2g)`，其中 `g = (server_id - 11) × 4 + port`。最后一个频率文件名为 `frequency-0946-1023_boards-36-47.bin`，末尾8个填充频点仍保留在包中。
 
-发送端不做应用层限速，两个lane竞争同一物理网口的可用带宽。TCP负责拥塞控制和重传；部署时仍需验证14台节点汇聚到单100G接收口及磁盘阵列时的持续吞吐。
+### 2.2 判断文件是否写完
 
-### TLSTORE1 消息内容
+- 每个数据目录下的 `lane-0.json` 和 `lane-1.json` 记录通道状态；`status=STORED` 时，`missing_packets` 按接收口统计缺包。
+- 事件目录的 `event.json` 在本次选定节点的两条通道全部持久化后生成，包含事件结果和 `missing_by_server`。`backend_acknowledged` 表示通知确认状态；如果该事件未启用通知，值为 `true` 并不表示后端收到通知。
+- 数据文件在接收开始时就会被设置为最终大小，因此**不能仅凭文件存在或大小判断完成**。应检查事件结果及缺包数。
 
-首条消息为 4 B 大端 JSON 长度及 UTF-8 元数据，最大 1200 B。元数据包括：
-
-```json
-{
-  "version": 1,
-  "format": "TLSTORE1",
-  "event_id": "event-000001",
-  "acquisition_id": "tianlai",
-  "server_id": 3,
-  "lane": 0,
-  "channel_count": 288,
-  "server_mask": 15,
-  "port_count": 4,
-  "ports": [0, 2],
-  "start_period": 6045000,
-  "period_count": 15000,
-  "integration_per_trace": 50000,
-  "period_microseconds": 200,
-  "packet_bytes": 8848
-}
-```
-
-`channel_count`必须与触发一致。288路只允许server 0～10，384路允许server 0～13。`server_mask`每一位对应同编号server；示例值15表示server 0～3参与，且当前server对应位必须为1。`port_count`仍表示节点接收口总数；`ports`列出本lane实际发送的端口，lane 0必须为偶数口，lane 1必须为奇数口。两个列表互斥且并集覆盖全部接收口。
-
-随后逐接收口发送数据块，每块默认 64 个积分周期，最后一块可以不足 64 个。
-块头共 40 B，所有整数大端，禁止直接发送带本机填充的 C++ struct：
-
-| 偏移 | 类型 | 字段 |
-|---:|---|---|
-| 0 | uint32 | type，1=data，2=end |
-| 4 | uint32 | 本地接收 port |
-| 8 | uint32 | packetId；远端子站为该口两个包号中的偶数起始号 |
-| 12 | uint32 | boardBegin |
-| 16 | uint64 | 本块 startPeriod |
-| 24 | uint64 | 本块 periodCount |
-| 32 | uint32 | bodyBytes |
-| 36 | uint32 | 保留字段，必须为0；不计算应用层CRC |
-
-type=2 时其余 36 B 必须为零，没有 body，表示该 lane 所有数据已发完。
-数据正文不计算应用层CRC，依赖TCP校验、重传和ZeroMQ消息边界保证传输完整性；程序仍严格校验消息长度、周期、端口映射和原始包头。内存、PCIe或磁盘静默损坏不在本协议检测范围内。
-数据块 body 是连续的积分记录，每个记录为：
-
-| 大小 | 内容 |
-|---:|---|
-| 8 B | absolutePeriod，大端 |
-| 8 B | boardMask，大端，每个包位置一位；原系统每板一位，远端每板两位 |
-| 4 B | packetBytes，大端，为 2320、8848 或远端的 8272 |
-| 4 B | packetSlotCount（原名 boardCount），原系统 36/18，远端 24 |
-| packetSlotCount × packetBytes | 按包位置排列的原始 16 B 业务头 + 原始数据 |
-
-缺包的整个原始包位置输出零且对应位图为 0；整周期缺失输出完整记录但位图为 0。
-没有把压缩复数展开为浮点，也没有混用 GPU Stokes 输出格式。
-
-### 远端子站 remote96 扩展
-
-11～13 节点使用相同的 TLSTORE1 二进制结构，但在会话元数据中必须额外携带：
-
-```json
-{
-  "profile": "remote96",
-  "packets_per_board": 2,
-  "physical_board_count": 12,
-  "frequency_bins_per_port": 86,
-  "total_valid_frequencies": 1024,
-  "fft_per_packet": 12
-}
-```
-
-这些字段与 event_id 等会话字段合在同一 JSON 中，不是独立数据报。packet_bytes=8272、
-port_count=4。三类节点共用本 ZeroMQ 协议；原积分记录文件结构保留，旧版接收器不兼容。
-
-对本地口 p，全局频段号 g=(server_id−11)×4+p，块头 packetId=2g、boardBegin=36。
-周期记录固定 24 个包位置，slot=(boardId−36)×2+(rawPacketId−2g)。
-每板先存偶数包（FFT 0～11），再存奇数包（FFT 12～23）；完整位图为 0xFFFFFF。
-存储端按 slot 验证原始 boardId=36+slot/2、packetId=2g+slot%2，并分别统计缺失的半段包。
-不合并或修改两个原始包头。
-
-包内为 `[12 FFT][86 频点][8 通道]`，完整积分编号仍由 trace/integration 决定。
-全局频点=g×86+包内频点；g=11 时，仅本地频点 0～77 有效，78～85 是 **8** 个填充频点。
-填充位置原样保留，不作为缺包，不强行覆盖非零原始内容。
-
-### 落盘确认
-
-C++ 存储接收器检查长度、区间、映射、每个已接收包的周期/板卡/包号及每个缺包位置的零填充；字节 0 高 4 位不参与校验。Python 实现保留为协议参考。
-存储根目录固定为`/data`。`tltrigger`生成的事件编号为`YYYYMMDD-HHMMSS-ID`，对应落盘路径为`/data/YYYYMMDD-HHMMSS/`，随机码只用于协议中的事件唯一标识。本地板卡按包号段使用短目录，例如`p24-25/packet-24_boards-00-17.bin`；远端板卡按频率段使用短目录，例如`f0688-1023/frequency-0688-0773_boards-36-47.bin`。文件内容是上述积分记录连续排列。最后一个远端文件名只标注有效频率`0946-1023`，文件中的补齐频点仍按协议保留。
-事件目录使用`0755`，数据和JSON文件使用`0644`，因此所有本机用户均可遍历并读取最终记录。
-每个数据目录只保存`lane-0.json`和`lane-1.json`两个状态文件，合并记录会话元数据、`RECEIVING/STORED`状态及各输入流缺包数量，不计算或保存文件CRC。不支持旧版`.meta.json`和`.stored.json`双文件格式。
-只有 lane 所有文件内容和目录持久化完成后，才通过 ZeroMQ 回复长度前缀 JSON：
-
-```json
-{
-  "version": 1,
-  "status": "STORED",
-  "event_id": "event-000001",
-  "acquisition_id": "tianlai",
-  "server_id": 3,
-  "lane": 0
-}
-```
-
-节点收到单路匹配的 STORED（覆盖本机全部接收口）才转为 STORED；TCP RELEASE 不能伪造这一状态跃迁。
-会话失败重试从本节点事件开头发送，接收端按固定偏移写入，元数据不同则拒绝覆盖。
-同节点同 lane 不允许并发会话写文件。接收器重启允许重传；没有磁盘成功确认的数据
-仍保存在节点 RAM，除非显式取消或节点进程退出。
+目录权限为 `0755`，数据及 JSON 文件权限为 `0644`。文件不包含应用层 CRC；接收侧或存储介质的静默损坏不由该格式检测。
