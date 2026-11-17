@@ -127,7 +127,7 @@ def backend_reply(controller, data, peer, cache):
     """Validate one backend request and provide replay-safe bounded JSON."""
     try:
         message = parse_request(data)
-        request_id = message['request_id']
+        request_id = message['request_id'] if 'request_id' in message else uuid.uuid4().hex
         if not isinstance(request_id, str) or not ID.fullmatch(request_id):
             raise ValueError('invalid request_id')
     except (KeyError, ValueError, TypeError, UnicodeDecodeError):
@@ -140,21 +140,27 @@ def backend_reply(controller, data, peer, cache):
     request_lock = cache.request_locks[hash((peer[0], request_id)) % len(cache.request_locks)]
     with request_lock:
         with nullcontext() if read_only else cache.mutation_lock:
-            return _backend_reply(controller, data, peer, cache)
+            return _backend_reply(controller, data, peer, cache, request_id)
 
 
-def _backend_reply(controller, data, peer, cache):
+def _backend_reply(controller, data, peer, cache, generated_request_id=None):
     request_id = ''
     cacheable = True
     digest = hashlib.sha256(data).digest()
     try:
         message = parse_request(data)
-        request_id = message['request_id']
-        if not ID.fullmatch(request_id):
+        request_id = message['request_id'] if 'request_id' in message else (
+            generated_request_id or uuid.uuid4().hex)
+        if not isinstance(request_id, str) or not ID.fullmatch(request_id):
             raise ValueError('invalid request_id')
         cached = cache.get(peer, request_id, digest)
         if cached is not None:
             return cached
+        # Generate the event ID only after the replay lookup. A caller that
+        # supplies a request ID can retry the identical request safely while
+        # the replay entry is retained, even when event_id was omitted.
+        if message.get('command') == 'CAPTURE' and 'event_id' not in message:
+            message['event_id'] = 'event-' + uuid.uuid4().hex
         reply = controller.dispatch(message, peer)
     except Exception as error:
         if str(error) == 'REQUEST_ID_CONFLICT':

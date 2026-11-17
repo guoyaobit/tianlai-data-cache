@@ -67,9 +67,7 @@ tltrigger wait                 # 等待当前未完成事件
 ```json
 {
   "version": 1,
-  "request_id": "req-000001",
   "command": "CAPTURE",
-  "event_id": "event-000001",
   "channel_count": 288,
   "start": {
     "trace_period_id": 120,
@@ -82,22 +80,20 @@ tltrigger wait                 # 等待当前未完成事件
 | 字段 | 要求 | 说明 |
 |---|---|---|
 | `version` | 必填，`1` | 协议版本 |
-| `request_id` | 必填 | 请求与回复匹配编号 |
 | `command` | 必填，`CAPTURE` | 发起保存 |
-| `event_id` | 必填 | 全局唯一的事件编号，用于查询和去重 |
 | `channel_count` | 可选，`288` 或 `384` | 默认 `384`；自动选择对应服务器 |
 | `start` | 必填 | 起始 trace 与积分周期编号 |
 | `duration_ms` | 与 `period_count` 二选一 | 保存时长，正整数毫秒，须为整数个周期 |
 | `period_count` | 与 `duration_ms` 二选一 | 保存的正整数积分周期数 |
 
-`request_id` 和 `event_id` 使用 1～64 个 ASCII 字母、数字、下划线或短横线。默认每周期 **200 微秒**，每个 trace 为 **50000 周期**；实际数值以系统配置为准，控制器与缓存节点必须一致。单次最长 50 秒。上例的 3000 毫秒等于 15000 个周期，保存区间为 `[(120,45000), (121,10000))`，不含结束位置。
+触发请求无需填写 `request_id` 或 `event_id`；控制器会生成并在回复中返回。该简化格式需要控制器更新到支持自动生成编号的版本。默认每周期 **200 微秒**，每个 trace 为 **50000 周期**；实际数值以系统配置为准，控制器与缓存节点必须一致。单次最长 50 秒。上例的 3000 毫秒等于 15000 个周期，保存区间为 `[(120,45000), (121,10000))`，不含结束位置。
 
 直接接口只接受已稳定且仍在所有参与节点共同缓存范围内的数据，不等待未来的数据；后端可先发送 `QUERY_STATUS` 获取 `oldest_period` 与 `settled_end`，其中后者是排他边界。绝对积分周期计算为 `trace_period_id × 50000 + integration_period_id`（50000 为默认配置）。各数据源须使用同一个积分计数起点，系统不会自动校正源间偏移。
 
 查询288路缓存状态的请求如下，同样使用上面的 TCP 报文封装；仅当回复的 `status` 为 `READY` 且 `accept_trigger` 为 `true` 时才提交触发：
 
 ```json
-{"version":1,"request_id":"req-status-001","command":"QUERY_STATUS","channel_count":288}
+{"version":1,"command":"QUERY_STATUS","channel_count":288}
 ```
 
 直接 TCP 调用示例：
@@ -108,8 +104,7 @@ import socket
 import struct
 
 request = {
-    "version": 1, "request_id": "req-000001", "command": "CAPTURE",
-    "event_id": "event-000001", "channel_count": 288,
+    "version": 1, "command": "CAPTURE", "channel_count": 288,
     "start": {"trace_period_id": 120, "integration_period_id": 45000},
     "duration_ms": 3000,
 }
@@ -130,26 +125,26 @@ with socket.create_connection(("172.0.0.142", 18999), timeout=10) as sock:
     if not 1 <= size <= 1200:
         raise ValueError("invalid reply length")
     reply = json.loads(read_exact(sock, size))
-    if reply.get("request_id") != request["request_id"]:
-        raise ValueError("request_id mismatch")
     print(reply)
 ```
 
-每次新事件必须使用新的 `event_id`；每条不同的请求必须使用新的 `request_id`。连接超时不代表触发失败：先按事件编号查询，或从相同来源 IP 使用相同 `request_id` 和完全相同的报文重试，避免重复触发。
+连接超时不代表触发失败，不要直接重复发送触发。可先查询当前活动事件，但事件如果已经完成而回复中的事件编号也未收到，就无法通过活动事件查询可靠找回结果。如果需要安全重试同一请求，调用方应自行提供唯一的 `request_id` 和 `event_id`，并从同一来源 IP 使用相同编号及完全相同的报文重试。编号使用1～64位 ASCII 字母、数字、下划线或短横线，不同事件不得复用事件编号；控制器的请求重放缓存保留约5分钟。
 
 ### 1.3 查询和完成通知
 
 初次返回 `PREPARING` 表示控制器已经接受事件，**不表示写盘完成**。使用相同的 TCP 封装发送：
 
 ```json
-{"version":1,"request_id":"req-000002","command":"QUERY_EVENT","event_id":"event-000001"}
+{"version":1,"command":"QUERY_ACTIVE_EVENT"}
 ```
 
-查询结果中的 `COMPLETED` 表示所选节点数据已持久化，缓存也已释放；`PAUSED` 表示需要排查，不表示成功。确认事件完成后，再根据缺包统计判断数据是否完整。
+保存初次回复中的 `event_id` 后，也可用 `QUERY_EVENT` 和该编号查询，包括已完成事件。`QUERY_ACTIVE_EVENT` 仅查询未完成事件，若事件已经完成或不存在则返回 `NO_ACTIVE_EVENT`。查询结果中的 `COMPLETED` 表示所选节点数据已持久化，缓存也已释放；`PAUSED` 表示需要排查，不表示成功。确认事件完成后，再根据缺包统计判断数据是否完整。
 
 ### Completion Notification
 
 直接发送 `CAPTURE` 时，存储服务器写盘完成后主动连接**该触发 TCP 连接的来源 IP、端口 19001**，发送同样的长度前缀 JSON。后端应在触发前监听该端口；请求中不填写 `result_address` 或 `result_port`。以下通知为字段摘录，实际消息还包含地址、时间参数和参与节点等字段：
+
+存储服务器的管理网地址固定为 `172.0.0.142`。当前配置由系统路由选择完成通知的源地址；如后端按来源地址过滤，应确认实际源地址。
 
 ```json
 {

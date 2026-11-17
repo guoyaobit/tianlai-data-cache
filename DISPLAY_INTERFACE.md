@@ -12,9 +12,9 @@
 
 所有接口使用 TCP + JSON：每次连接发送一条请求、接收一条回复。消息格式为 **4字节无符号大端长度 + UTF-8 JSON**，JSON 长度为1～1200字节。
 
-请求包含 `version: 1`、`request_id` 和 `command`，回复中的 `request_id` 必须与请求一致。`request_id` 为1～64位 ASCII 字母、数字、下划线或短横线。每次新的查询使用新编号；超时重试同一操作时，使用原编号和完全相同的报文。
+控制器请求包含 `version: 1` 和 `command`，可省略 `request_id`，控制器会自动生成。若调用方填写了 `request_id`，回复中必须一致；新查询使用新编号。直接查询缓存节点仍需填写 `request_id` 和 `acquisition_id`。
 
-**超时不代表操作未执行**：触发或启停超时后，应先查询事件或服务状态。
+**超时不代表操作未执行**：触发或启停超时后，应先查询事件或服务状态。省略编号的请求无法安全去重；如需可靠重试，触发时应自行提供唯一的 `request_id` 和 `event_id`，从同一来源 IP 使用相同编号及完全相同的报文重试。
 
 界面显示 `tianlaistore1`～`tianlaistore14`；报文使用内部数字编号0～13。例如 `tianlaistore1` 对应 `server_id: 0`。转换规则：标签数字 = `server_id + 1`。下列 JSON 中的数字编号应在界面转换为标签显示。
 
@@ -25,7 +25,7 @@
 向控制器发送：
 
 ```json
-{"version":1,"request_id":"status-001","command":"QUERY_STATUS","channel_count":288}
+{"version":1,"command":"QUERY_STATUS","channel_count":288}
 ```
 
 `channel_count` 可为288或384，默认为384；288路使用 `tianlaistore1`～`tianlaistore11`，384路使用1～14。主要回复字段：
@@ -66,7 +66,7 @@
 向控制器发送：
 
 ```json
-{"version":1,"request_id":"storage-001","command":"QUERY_STORAGE"}
+{"version":1,"command":"QUERY_STORAGE"}
 ```
 
 外层 `status=READY` 只表示查询已处理，实际服务状态读取 `storage.state`：`STARTING` 启动中，`WAITING_FOR_DATA` 等待数据，`RECEIVING_AND_WRITING` 正在写盘，`NOTIFYING_BACKEND` 通知中，`NOTIFICATION_RETRY` 通知重试，`ERROR`、`STOPPING`、`OFFLINE` 表示异常或不可用。
@@ -80,9 +80,7 @@
 ```json
 {
   "version": 1,
-  "request_id": "capture-001",
   "command": "CAPTURE",
-  "event_id": "event-001",
   "channel_count": 288,
   "start": {"trace_period_id": 120, "integration_period_id": 45000},
   "duration_ms": 3000,
@@ -90,22 +88,22 @@
 }
 ```
 
-`event_id` 必须全局唯一；`duration_ms` 和 `period_count` 二选一，最长50秒。默认每周期200微秒，上例为15000周期，结束边界是 `(121,10000)`，不包含该周期。各数据源必须使用相同的积分计数起点。
+`duration_ms` 和 `period_count` 二选一，最长50秒；无需填写事件编号，控制器会在回复中返回。默认每周期200微秒，上例为15000周期，结束边界是 `(121,10000)`，不包含该周期。各数据源必须使用相同的积分计数起点。
 
-`notify: false` 表示显控通过查询等待，不接收主动回调。`PREPARING` 只表示已提交；发送以下请求查询进度，每次查询使用新的 `request_id`：
+`notify: false` 表示显控通过查询等待，不接收主动回调。`PREPARING` 只表示已提交；可查询当前未完成事件：
 
 ```json
-{"version":1,"request_id":"event-query-001","command":"QUERY_EVENT","event_id":"event-001"}
+{"version":1,"command":"QUERY_ACTIVE_EVENT"}
 ```
 
-`COMPLETED` 表示写盘及缓存释放完成；`PAUSED` 表示需要排查；`CANCELLED` 表示已取消。保存完成不等于零缺包，界面应显示 `missing_by_server`，并将编号转换为 `tianlaistore` 标签。
+保存触发回复中的 `event_id`，可用 `QUERY_EVENT` 和该编号查询已完成事件；`QUERY_ACTIVE_EVENT` 不返回已完成事件。`COMPLETED` 表示写盘及缓存释放完成；`PAUSED` 表示需要排查；`CANCELLED` 表示已取消。保存完成不等于零缺包，界面应显示 `missing_by_server`，并将编号转换为 `tianlaistore` 标签。
 
 ## 4. 缓存服务启停
 
 例如选择 `tianlaistore1`～`tianlaistore3` 启动，转换为内部编号后向控制器发送：
 
 ```json
-{"version":1,"request_id":"service-001","command":"CACHE_SERVICE","action":"START","server_ids":[0,1,2],"force":false}
+{"version":1,"command":"CACHE_SERVICE","action":"START","server_ids":[0,1,2],"force":false}
 ```
 
 `action` 支持 `START`、`STOP`、`RESTART`、`STATUS`；`server_ids` 为非空、不重复的内部编号数组。接口仅允许授权来源，默认包括显控节点 `172.0.0.61`。
