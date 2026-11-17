@@ -2,6 +2,8 @@
 Description=Tianlai cache node {{ tianlai_server_id }}
 After=network-online.target
 Wants=network-online.target
+Requires=run-tianlai.mount
+After=run-tianlai.mount
 
 [Service]
 Type=simple

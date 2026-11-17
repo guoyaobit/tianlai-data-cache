@@ -81,6 +81,12 @@ YamlConfig::YamlConfig(const std::string &recvFile, const std::string &serverFil
     if (!prefaultMemory)
         throw std::runtime_error(
             "prefaultMemory must be 1 so receive pages are ready before capture starts");
+    if (cfg["sharedMemoryDirectory"]) {
+        sharedMemoryDirectory = field(cfg, "sharedMemoryDirectory");
+        if (sharedMemoryDirectory.empty() || sharedMemoryDirectory[0] != '/' ||
+            sharedMemoryDirectory.find("..") != std::string::npos)
+            throw std::runtime_error("sharedMemoryDirectory must be an absolute directory");
+    }
     controlBindIp = ip(node, "controlBindIp");
     controlPeerIp = ip(node, "controlPeerIp");
     if (controlPeerIp == "0.0.0.0")

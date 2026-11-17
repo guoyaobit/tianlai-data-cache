@@ -1,0 +1,11 @@
+[Unit]
+Description=Tianlai persistent cache memory
+
+[Mount]
+What=tmpfs
+Where=/run/tianlai
+Type=tmpfs
+Options=size=90%,mode=0700,nosuid,nodev,noexec
+
+[Install]
+WantedBy=multi-user.target

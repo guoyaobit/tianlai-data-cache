@@ -5,34 +5,110 @@
 #include <cstring>
 #include <stdexcept>
 #include <thread>
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/statfs.h>
+#include <sys/statvfs.h>
+#include <linux/magic.h>
 #include <unistd.h>
 
 struct ReceiveRingBuffer::Allocation {
     size_t bytes;
     unsigned char *data;
-    Allocation(size_t size, bool prefault) : bytes(size) {
+    int fd = -1;
+    bool reused = false;
+    Allocation(size_t size, bool prefault, unsigned serverId, unsigned port,
+               const std::string &directory) : bytes(size) {
+        const bool shared = !directory.empty();
+        const size_t page = static_cast<size_t>(getpagesize());
+        if (shared) {
+            struct statfs filesystem{};
+            struct stat mountpoint{}, parent{};
+            if (statfs(directory.c_str(), &filesystem) != 0 ||
+                filesystem.f_type != TMPFS_MAGIC ||
+                stat(directory.c_str(), &mountpoint) != 0 ||
+                stat((directory + "/..").c_str(), &parent) != 0 ||
+                mountpoint.st_dev == parent.st_dev)
+                throw std::runtime_error("sharedMemoryDirectory must be a dedicated tmpfs mount");
+            const std::string path = directory + "/server-" + std::to_string(serverId) +
+                                     "-port-" + std::to_string(port) + ".bin";
+            fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+            if (fd < 0)
+                throw std::runtime_error("cannot open shared cache: " + path);
+            if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+                close(fd);
+                throw std::runtime_error("shared cache already in use: " + path);
+            }
+            struct stat info{};
+            if (fstat(fd, &info) != 0) {
+                close(fd);
+                throw std::runtime_error("cannot stat shared cache: " + path);
+            }
+            const off_t expected = static_cast<off_t>(page + bytes);
+            if (info.st_size != 0 && info.st_size != expected) {
+                close(fd);
+                throw std::runtime_error("shared cache size changed; release old cache: " + path);
+            }
+            const uint64_t marker[2] = {0x544c434143484531ULL, static_cast<uint64_t>(bytes)};
+            uint64_t stored[2]{};
+            reused = info.st_size == expected &&
+                     pread(fd, stored, sizeof(stored), 0) == sizeof(stored) &&
+                     stored[0] == marker[0] && stored[1] == marker[1];
+            if (!reused) {
+                struct statvfs capacity{};
+                const uint64_t allocated = static_cast<uint64_t>(info.st_blocks) * 512;
+                const uint64_t additional = bytes > allocated ? bytes - allocated : 0;
+                if (statvfs(directory.c_str(), &capacity) != 0 ||
+                    static_cast<uint64_t>(capacity.f_bavail) * capacity.f_frsize < additional) {
+                    close(fd);
+                    throw std::runtime_error("insufficient tmpfs capacity for shared cache: " + path);
+                }
+            }
+            if (info.st_size == 0 && ftruncate(fd, expected) != 0) {
+                close(fd);
+                throw std::runtime_error("cannot size shared cache: " + path);
+            }
+        }
         data = static_cast<unsigned char *>(
-            mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
-        if (data == MAP_FAILED)
+            mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                 shared ? MAP_SHARED : MAP_PRIVATE | MAP_ANONYMOUS, fd,
+                 shared ? static_cast<off_t>(page) : 0));
+        if (data == MAP_FAILED) {
+            if (fd >= 0) close(fd);
             throw std::runtime_error("receive buffer mmap failed");
+        }
         madvise(data, bytes, MADV_HUGEPAGE);
         madvise(data, bytes, MADV_DONTDUMP);
         if (prefault) {
-            // Anonymous mappings are already logically zero. Ask the kernel to
-            // populate writable pages in bulk; older kernels fall back to one
-            // byte per page. Neither path rewrites the complete payload.
+            // Populate page tables on both first use and reattach, before RX.
 #ifdef MADV_POPULATE_WRITE
-            if (madvise(data, bytes, MADV_POPULATE_WRITE) == 0)
-                return;
+            if (madvise(data, bytes, MADV_POPULATE_WRITE) != 0)
 #endif
-            const size_t systemPage = static_cast<size_t>(getpagesize());
-            volatile unsigned char *pages = data;
-            for (size_t offset = 0; offset < bytes; offset += systemPage)
-                pages[offset] = 0;
+            {
+                volatile unsigned char *pages = data;
+                for (size_t offset = 0; offset < bytes; offset += page)
+                    pages[offset] = pages[offset];
+            }
         }
+        if (shared && !reused) {
+            const uint64_t marker[2] = {0x544c434143484531ULL, static_cast<uint64_t>(bytes)};
+            if (pwrite(fd, marker, sizeof(marker), 0) != sizeof(marker)) {
+                munmap(data, bytes);
+                close(fd);
+                throw std::runtime_error("cannot mark shared cache ready");
+            }
+        }
+        if (shared)
+            LOG("RX" + std::to_string(port) +
+                    (reused ? " shared memory reused" : " shared memory initialized"), INFO);
     }
-    ~Allocation() { munmap(data, bytes); }
+    ~Allocation() {
+        munmap(data, bytes);
+        if (fd >= 0) close(fd);
+    }
 };
 
 struct ReceiveRingBuffer::BoardBuffer {
@@ -102,7 +178,8 @@ struct ReceiveRingBuffer::Buffer {
 };
 ReceiveRingBuffer::ReceiveRingBuffer(unsigned index, size_t h, size_t t, size_t maxEvent,
                                      unsigned b, unsigned ppb, unsigned pb, unsigned r, unsigned ms,
-                                     unsigned warnPercent, bool prefault)
+                                     unsigned warnPercent, bool prefault,
+                                     unsigned serverId, const std::string &sharedMemoryDirectory)
     : portIndex(index), half(h), transitionCapacity(t), eventLimit(maxEvent), packetSlots(b),
       packetsPerBoard(ppb), physicalBoards(ppb ? b / ppb : 0), packetBytes(pb), reorder(r),
       settleMs(ms), transitionWarnPercent(warnPercent),
@@ -113,7 +190,8 @@ ReceiveRingBuffer::ReceiveRingBuffer(unsigned index, size_t h, size_t t, size_t 
         throw std::runtime_error("invalid receive pool dimensions");
     const size_t bankBytes = h * frameBytes;
     const size_t transitionBytes = t * frameBytes;
-    allocation.reset(new Allocation(2 * bankBytes + transitionBytes, prefault));
+    allocation.reset(new Allocation(2 * bankBytes + transitionBytes, prefault,
+                                    serverId, index, sharedMemoryDirectory));
     bank[0].reset(new Buffer(allocation->data, h, frameBytes, packetSlots,
                              packetsPerBoard, packetBytes));
     bank[1].reset(new Buffer(allocation->data + bankBytes, h, frameBytes, packetSlots,

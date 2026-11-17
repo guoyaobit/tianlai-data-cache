@@ -12,6 +12,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 static void Prepare(CacheRuntime &para);
 static void Finish(CacheRuntime &para);
@@ -216,6 +218,32 @@ static uint64_t availableMemory() {
     throw std::runtime_error("cannot read MemAvailable");
 }
 
+// Resident shared slabs count against MemAvailable but need no new allocation.
+static uint64_t reusableMemory(const YamlConfig &config) {
+    if (config.sharedMemoryDirectory.empty())
+        return 0;
+    uint64_t reusable = 0;
+    const size_t page = static_cast<size_t>(getpagesize());
+    for (unsigned port = 0; port < config.receivePorts.size(); ++port) {
+        const uint64_t bytes = (2 * config.halfPeriods() + config.transitionPeriods()) *
+            config.receivePorts[port].packetSlots() *
+            uint64_t(config.inputDataBytes + INPUT_HEADER_BYTES);
+        const std::string path = config.sharedMemoryDirectory + "/server-" +
+            std::to_string(config.serverId) + "-port-" + std::to_string(port) + ".bin";
+        const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (fd < 0)
+            continue;
+        struct stat info{};
+        uint64_t marker[2]{};
+        if (fstat(fd, &info) == 0 && info.st_size == static_cast<off_t>(page + bytes) &&
+            pread(fd, marker, sizeof(marker), 0) == sizeof(marker) &&
+            marker[0] == 0x544c434143484531ULL && marker[1] == bytes)
+            reusable += bytes;
+        close(fd);
+    }
+    return reusable;
+}
+
 static int cpuNumaNode(int cpu) {
     if (cpu < 0)
         return -1;
@@ -330,14 +358,15 @@ static std::unique_ptr<ReceiveRingBuffer> allocatePortBuffer(
         config.maxEventPeriods(), port.packetSlots(), port.packetsPerBoard,
         config.inputDataBytes + INPUT_HEADER_BYTES, config.reorderPeriods,
         config.settleMilliseconds, config.transitionWarnPercent,
-        config.prefaultMemory));
+        config.prefaultMemory, config.serverId, config.sharedMemoryDirectory));
 }
 
 // Check available memory and create double buffers plus a transition area for each receive port.
 static void Prepare(CacheRuntime &para) {
     const auto &c = *para.config;
     const auto allocationStarted = std::chrono::steady_clock::now();
-    if (c.allocationBytes() + c.reserveMemoryBytes > availableMemory())
+    if (c.allocationBytes() + c.reserveMemoryBytes >
+        availableMemory() + reusableMemory(c))
         throw std::runtime_error(
             "insufficient available RAM for A/B/transition and system reserve");
     LOG("Allocating " + std::to_string(c.allocationBytes()) + " bytes, no CUDA dependency.", START);

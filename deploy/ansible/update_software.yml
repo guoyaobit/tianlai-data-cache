@@ -165,6 +165,27 @@
         mode: '0644'
       vars:
         tianlai_receive_devices: "{{ tianlai_service_receive_devices }}"
+    - name: Create cache memory mountpoint during software update
+      ansible.builtin.file:
+        path: /run/tianlai
+        state: directory
+        mode: '0700'
+    - name: Install cache memory mount unit during software update
+      ansible.builtin.template:
+        src: templates/run-tianlai.mount.j2
+        dest: /etc/systemd/system/run-tianlai.mount
+        mode: '0644'
+    - name: Start cache memory mount during software update
+      ansible.builtin.systemd:
+        name: run-tianlai.mount
+        daemon_reload: true
+        enabled: true
+        state: started
+    - name: Install cache memory release helper during software update
+      ansible.builtin.copy:
+        src: files/release_cache_memory.sh
+        dest: /usr/local/sbin/tianlai-release-memory
+        mode: '0755'
     - name: Remove obsolete cache memory override
       ansible.builtin.file:
         path: /etc/systemd/system/tianlai-cache.service.d/10-memory.conf
@@ -306,6 +327,11 @@
         path: "{{ tianlai_root }}/config/recv.yaml"
         regexp: '^chunkPeriods:'
         line: 'chunkPeriods: 128  # Integration periods per storage block (1-128).'
+    - name: Enable reusable cache memory
+      ansible.builtin.lineinfile:
+        path: "{{ tianlai_root }}/config/recv.yaml"
+        regexp: '^sharedMemoryDirectory:'
+        line: 'sharedMemoryDirectory: /run/tianlai  # Reuse payload pages after process restart.'
     - name: Keep cache disabled and stopped after update
       ansible.builtin.systemd:
         name: tianlai-cache.service

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 struct RcvFrameHeader {
@@ -49,7 +50,8 @@ class ReceiveRingBuffer {
                       size_t maxEventPeriods, unsigned packetSlots, unsigned packetsPerBoard,
                       unsigned packetBytes,
                       unsigned reorderPeriods, unsigned settleMilliseconds,
-                      unsigned transitionWarnPercent, bool prefault);
+                      unsigned transitionWarnPercent, bool prefault,
+                      unsigned serverId, const std::string &sharedMemoryDirectory);
     ~ReceiveRingBuffer();
     bool receive(uint64_t period, unsigned packetSlot, unsigned ifTrace,
                  const unsigned char *packet);

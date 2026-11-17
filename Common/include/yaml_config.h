@@ -52,6 +52,7 @@ class YamlConfig {
     uint64_t transitionBytes = 32ULL << 30, reserveMemoryBytes = 48ULL << 30;
     bool prefaultMemory = true, debug = false;
     std::string acquisitionId = "tianlai", controlBindIp, controlPeerIp, logFilePath;
+    std::string sharedMemoryDirectory;
     std::vector<ReceivePortConfig> receivePorts;
     SendLinkConfig sendLink;
 };

@@ -264,6 +264,27 @@
         daemon_reload: true
         state: stopped
       failed_when: false
+    - name: Create cache memory mountpoint
+      ansible.builtin.file:
+        path: /run/tianlai
+        state: directory
+        mode: '0700'
+    - name: Install cache memory mount unit
+      ansible.builtin.template:
+        src: templates/run-tianlai.mount.j2
+        dest: /etc/systemd/system/run-tianlai.mount
+        mode: '0644'
+    - name: Keep cache memory mount active
+      ansible.builtin.systemd:
+        name: run-tianlai.mount
+        daemon_reload: true
+        enabled: true
+        state: started
+    - name: Install cache memory release helper
+      ansible.builtin.copy:
+        src: files/release_cache_memory.sh
+        dest: /usr/local/sbin/tianlai-release-memory
+        mode: '0755'
     - name: Require Debian-family Linux
       ansible.builtin.assert:
         that: ansible_facts.os_family == 'Debian'
