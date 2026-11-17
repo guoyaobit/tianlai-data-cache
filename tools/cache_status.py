@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Show cache-node status or the common settled integration-period range."""
+"""Show cache/storage status and manage cache services."""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -185,6 +185,7 @@ def remote_storage_snapshot(host, port, acquisition, timeout):
         return dict(service='tianlai-storage', state='OFFLINE', error=str(error),
                     listeners_ready=0, listener_count=0, active_transfers=0,
                     event_id='', event_expected_lanes=0, event_completed_lanes=0,
+                    event_expected_bytes=0,
                     event_aborted_lanes=0, event_written_bytes=0,
                     completed_lanes_total=0, aborted_lanes_total=0,
                     written_bytes_total=0, write_rate_bytes_per_second=0)
@@ -235,7 +236,7 @@ def format_bytes(value):
 
 
 def print_table(results):
-    print(f"{'NODE':<5} {'HOST':<16} {'STATE':<22} {'UPTIME':>8} {'RX_PORTS':<9} "
+    print(f"{'NODE':<16} {'STATE':<22} {'UPTIME':>8} {'RX_PORTS':<9} "
           f"{'EVENT':<13} {'LOST':>10} {'NO_DATA_PORTS':<14} {'LOSS_PORTS'}")
     for item in results:
         state = item.get('runtime_state', 'UNKNOWN')
@@ -249,7 +250,7 @@ def print_table(results):
         loss_ports = ','.join(f'{port}:{count}' for port, count in
                               sorted(losses.items(), key=lambda entry: int(entry[0]))) or '-'
         lost = item.get('lost_packets', '-') if not unavailable else '-'
-        print(f"{item['server_id']:<5} {item.get('host', '-'):<16} {state:<22} "
+        print(f"{'tianlaistore' + str(item['server_id'] + 1):<16} {state:<22} "
               f"{uptime:>8} {ports:<9} "
               f"{item.get('event_state', '-'):<13} {str(lost):>10} "
               f"{inactive:<14} {loss_ports}")
@@ -270,7 +271,7 @@ def common_period_range(results):
 
 
 def print_periods(results, integration_per_trace):
-    print(f"{'NODE':<5} {'HOST':<16} {'STATE':<22} {'OLDEST':>12} "
+    print(f"{'NODE':<16} {'STATE':<22} {'OLDEST':>12} "
           f"{'SETTLED_END':>12} {'LATEST':>12} {'TRACE':>8} {'INTEGRATION':>12}")
     online = []
     for item in results:
@@ -287,7 +288,7 @@ def print_periods(results, integration_per_trace):
             values = (str(oldest), str(end), str(latest), str(trace), str(integration))
         else:
             values = ('-', '-', '-', '-', '-')
-        print(f"{item['server_id']:<5} {item.get('host', '-'):<16} {state:<22} "
+        print(f"{'tianlaistore' + str(item['server_id'] + 1):<16} {state:<22} "
               f"{values[0]:>12} {values[1]:>12} {values[2]:>12} "
               f"{values[3]:>8} {values[4]:>12}")
 
@@ -328,6 +329,7 @@ def storage_snapshot(path):
         return dict(service='tianlai-storage', state='OFFLINE', error=str(error),
                     listeners_ready=0, listener_count=0, active_transfers=0,
                     event_id='', event_expected_lanes=0, event_completed_lanes=0,
+                    event_expected_bytes=0,
                     event_aborted_lanes=0, event_written_bytes=0,
                     completed_lanes_total=0, aborted_lanes_total=0,
                     written_bytes_total=0, write_rate_bytes_per_second=0)
@@ -340,14 +342,21 @@ def print_storage(status):
     rate = format_bytes(status.get('write_rate_bytes_per_second', 0)) + '/s'
     event = status.get('event_id') or '-'
     event_lanes = f"{status.get('event_completed_lanes', 0)}/{status.get('event_expected_lanes', 0)}"
+    written = status.get('event_written_bytes', 0)
+    expected = status.get('event_expected_bytes', 0)
     print('STORAGE')
     print(f"  state={state} age={state_age} listeners={listeners} "
           f"active_lanes={status.get('active_transfers', 0)} rate={rate}")
-    print(f"  event={event} lanes={event_lanes} aborted={status.get('event_aborted_lanes', 0)} "
-          f"written={format_bytes(status.get('event_written_bytes', 0))}")
-    print(f"  totals completed={status.get('completed_lanes_total', 0)} "
-          f"aborted={status.get('aborted_lanes_total', 0)} "
-          f"written={format_bytes(status.get('written_bytes_total', 0))}")
+    if event != '-':
+        label = ('last_event' if not status.get('active_transfers', 0) and
+                 status.get('event_expected_lanes', 0) and
+                 status.get('event_completed_lanes', 0) ==
+                 status.get('event_expected_lanes', 0) else 'event')
+        progress = (f" progress~={min(100.0, written * 100.0 / expected):.1f}%"
+                    if expected else '')
+        total = f"/{format_bytes(expected)}" if expected else ''
+        print(f"  {label}={event}{progress} written={format_bytes(written)}{total} "
+              f"lanes={event_lanes} aborted={status.get('event_aborted_lanes', 0)}")
     notification = status.get('notification_state')
     notification_error = status.get('notification_error')
     if (notification and notification != 'IDLE') or notification_error:
@@ -356,7 +365,6 @@ def print_storage(status):
     error = status.get('last_error') or status.get('error')
     if error:
         print(f"  last_error={error}")
-    print('CACHE NODES')
 
 
 def local_storage_snapshot(path):
@@ -369,18 +377,31 @@ def local_storage_snapshot(path):
     return storage_snapshot(status_path)
 
 
+def read_storage(arguments):
+    status = remote_storage_snapshot(arguments.storage_host, arguments.storage_port,
+                                     arguments.acquisition, arguments.timeout)
+    if status.get('state') == 'OFFLINE':
+        local = local_storage_snapshot(arguments.storage_status)
+        if local is not None:
+            return local
+    return status
+
+
 def confirm_destructive(action, nodes, assume_yes):
     if assume_yes:
         return
     labels = ','.join(str(node['server_id'] + 1) for node in nodes)
     if not sys.stdin.isatty():
         raise RuntimeError('use --yes for non-interactive stop or restart')
-    answer = input(f'{action} cache servers {labels}; in-memory data will be lost. Continue? [y/N] ')
+    print(f'{action} cache servers {labels}; in-memory data will be lost. Continue? [y/N] ',
+          end='', file=sys.stderr, flush=True)
+    answer = input()
     if answer.strip().lower() not in ('y', 'yes'):
         raise RuntimeError('cancelled')
 
 
-def manage_services(action, nodes, host, port, acquisition, timeout, assume_yes, force):
+def manage_services(action, nodes, host, port, acquisition, timeout, assume_yes, force,
+                    as_json=False):
     """Ask the central controller to manage selected node services in parallel."""
     if action in ('stop', 'restart'):
         confirm_destructive(action, nodes, assume_yes)
@@ -418,35 +439,47 @@ def manage_services(action, nodes, host, port, acquisition, timeout, assume_yes,
     if reply.get('errors_omitted'):
         print('WARNING: some error details were omitted; inspect affected nodes locally',
               file=sys.stderr)
+    if as_json:
+        print(json.dumps(reply, indent=2, ensure_ascii=False))
     for server_id, result in sorted(node_results.items(), key=lambda item: int(item[0])):
         label = int(server_id) + 1
         status = result.get('status', 'ERROR')
         state = result.get('state', 'unknown')
         error = result.get('error', '')
-        print(f'tianlaistore{label}: {status} state={state}' +
-              (f' error={error}' if error else ''))
-        failed = failed or status != 'OK'
+        if not as_json:
+            print(f'tianlaistore{label}: {status} state={state}' +
+                  (f' error={error}' if error else ''))
+        failed = failed or status not in ('OK', 'ACCEPTED')
     return 1 if failed else 0
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog='Examples: tlcache | tlcache storage | tlcache --watch 2 | '
+               'tlcache start 1-3 | tlcache stop 1-3 --yes')
     parser.add_argument('command', nargs='?',
-                        choices=('status', 'period', 'start', 'stop', 'restart'), default='status')
+                        choices=('status', 'storage', 'period', 'start', 'stop', 'restart'),
+                        default='status')
     parser.add_argument('targets', nargs='?', help='all or labels such as 1,2,5-7')
-    parser.add_argument('--nodes', default='/opt/tianlai-store/config/nodes.json')
-    parser.add_argument('--storage-status', default='/run/tianlai-storage-status.json')
-    parser.add_argument('--storage-host', default=DEFAULT_STORAGE_HOST)
-    parser.add_argument('--storage-port', type=int, default=DEFAULT_STORAGE_CONTROL_PORT)
-    parser.add_argument('--acquisition', default='tianlai')
-    parser.add_argument('--integration-per-trace', type=int, default=50000)
-    parser.add_argument('--timeout', type=float, default=1.0)
+    parser.add_argument('--nodes', default='/opt/tianlai-store/config/nodes.json',
+                        help=argparse.SUPPRESS)
+    parser.add_argument('--storage-status', default='/run/tianlai-storage-status.json',
+                        help=argparse.SUPPRESS)
+    parser.add_argument('--storage-host', default=DEFAULT_STORAGE_HOST,
+                        help=argparse.SUPPRESS)
+    parser.add_argument('--storage-port', type=int, default=DEFAULT_STORAGE_CONTROL_PORT,
+                        help=argparse.SUPPRESS)
+    parser.add_argument('--acquisition', default='tianlai', help=argparse.SUPPRESS)
+    parser.add_argument('--integration-per-trace', type=int, default=50000,
+                        help=argparse.SUPPRESS)
+    parser.add_argument('--timeout', type=float, default=1.0, help=argparse.SUPPRESS)
     parser.add_argument('--yes', action='store_true', help='skip the stop/restart confirmation')
     parser.add_argument('--force', action='store_true',
                         help='allow stop/restart while a selected node reports an active event')
     parser.add_argument('--watch', type=float, default=0,
                         help='refresh interval in seconds; zero prints once')
-    parser.add_argument('--json', action='store_true')
+    parser.add_argument('--json', action='store_true', help='print JSON for display software')
     arguments = parser.parse_args()
     if not 1 <= arguments.integration_per_trace <= (1 << 23):
         raise ValueError('invalid integration periods per trace')
@@ -457,7 +490,26 @@ def main():
         nodes = select_nodes(load_nodes(arguments.nodes, include_disabled=True), targets)
         return manage_services(arguments.command, nodes, arguments.storage_host,
                                arguments.storage_port, arguments.acquisition,
-                               arguments.timeout, arguments.yes, arguments.force)
+                               arguments.timeout, arguments.yes, arguments.force,
+                               arguments.json)
+    if arguments.command == 'storage':
+        if targets is not None:
+            raise ValueError('storage does not accept cache-node targets')
+        try:
+            while True:
+                storage = read_storage(arguments)
+                if arguments.watch and sys.stdout.isatty():
+                    print('\033[2J\033[H', end='')
+                if arguments.json:
+                    print(json.dumps(storage, indent=2, ensure_ascii=False))
+                else:
+                    print_storage(storage)
+                if not arguments.watch:
+                    return 1 if storage.get('state') in (
+                        'OFFLINE', 'ERROR', 'NOTIFICATION_RETRY') else 0
+                time.sleep(max(arguments.watch, 0.2))
+        except KeyboardInterrupt:
+            return 0
     nodes = select_nodes(load_nodes(arguments.nodes), targets)
     try:
         while True:
@@ -487,6 +539,7 @@ def main():
                 period_ready = print_periods(results, arguments.integration_per_trace)
             else:
                 print_storage(storage)
+                print('CACHE NODES')
                 print_table(results)
                 period_ready = True
             if not arguments.watch:

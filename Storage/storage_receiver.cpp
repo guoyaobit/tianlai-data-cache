@@ -145,6 +145,7 @@ class StorageRuntimeStatus {
     unsigned listeners_ready = 0, active_transfers = 0;
     uint64_t completed_transfers = 0, aborted_transfers = 0;
     unsigned event_expected_lanes = 0;
+    uint64_t event_expected_bytes = 0;
     uint64_t event_completed_lanes = 0, event_aborted_lanes = 0;
     std::atomic<uint64_t> written_bytes_total{0}, event_written_bytes{0};
     uint64_t sampled_written_bytes = 0, write_rate_bytes_per_second = 0;
@@ -199,6 +200,7 @@ class StorageRuntimeStatus {
                                {"active_transfers", active_transfers},
                                {"event_id", event_id},
                                {"event_expected_lanes", event_expected_lanes},
+                               {"event_expected_bytes", event_expected_bytes},
                                {"event_completed_lanes", event_completed_lanes},
                                {"event_aborted_lanes", event_aborted_lanes},
                                {"event_written_bytes",
@@ -245,11 +247,13 @@ class StorageRuntimeStatus {
         if (listeners_ready < listener_count) ++listeners_ready;
         publish();
     }
-    void transferStarted(const std::string &transfer_event, unsigned expected_lanes) {
+    void transferStarted(const std::string &transfer_event, unsigned expected_lanes,
+                         uint64_t expected_bytes) {
         std::lock_guard<std::mutex> lock(mutex);
         if (event_id != transfer_event) {
             event_id = transfer_event;
             event_expected_lanes = expected_lanes;
+            event_expected_bytes = expected_bytes;
             event_completed_lanes = 0;
             event_aborted_lanes = 0;
             event_written_bytes.store(0, std::memory_order_relaxed);
@@ -515,8 +519,19 @@ class EventWriter {
         }
         last_data_sync = std::chrono::steady_clock::now();
         if (runtime) {
+            uint64_t expected_bytes = 0;
+            for (unsigned source = 0; source < CACHE_NODE_COUNT; ++source) {
+                if (!(server_mask & (uint64_t(1) << source))) continue;
+                const uint64_t source_ports = source < 3 ? 8 : 4;
+                const uint64_t source_slots = source < 3 ? 36 : source < 11 ? 18 : 24;
+                const uint64_t source_packet_bytes =
+                    source < 3 ? 2320 : source < 11 ? 8848 : 8272;
+                expected_bytes += count * source_ports *
+                    (FRAME_HEADER + source_slots * source_packet_bytes);
+            }
             runtime->transferStarted(
-                event, static_cast<unsigned>(__builtin_popcountll(server_mask)) * LANE_COUNT);
+                event, static_cast<unsigned>(__builtin_popcountll(server_mask)) * LANE_COUNT,
+                expected_bytes);
             runtime_active = true;
         }
         return {};

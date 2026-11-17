@@ -264,6 +264,7 @@ class Controller:
             return dict(service='tianlai-storage', state='OFFLINE', error=str(error),
                         listeners_ready=0, listener_count=0, active_transfers=0,
                         event_id='', event_expected_lanes=0, event_completed_lanes=0,
+                        event_expected_bytes=0,
                         event_aborted_lanes=0, event_written_bytes=0,
                         completed_lanes_total=0, aborted_lanes_total=0,
                         written_bytes_total=0, write_rate_bytes_per_second=0)

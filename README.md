@@ -54,7 +54,7 @@ make -j4 simulation                  # 不使用 ixcap，构建全部模拟程�
   `debug: true` 启用详细诊断日志，省略或设为 `false` 时保持 INFO 级别。日志由 spdlog
   输出，带毫秒时间和线程号；指定文件时同时输出到 stderr，文件按 50 MiB 轮转，保留最多
   5 个备份。WARN 及以上立即刷新，其他日志按约 3 秒周期刷新；日志并非事件持久化凭据。
-- 缓存程序以`Runtime state:`日志和`QUERY_STATUS.runtime_state`公开当前阶段；存储程序通过142控制器的只读`QUERY_STORAGE`公开监听、接收写盘及后端通知状态。部署后可在任意缓存、存储或显控节点运行`tlcache --watch 2`，查看活跃接收口和无数据端口；`tlcache period`查询积分周期。任意上述节点均可用`tlcache start all`、`tlcache stop 1-3`或`tlcache restart 2,5-7`并行管理缓存服务，不再依赖运行时Ansible或sudo密码。
+- 缓存程序以`Runtime state:`日志和`QUERY_STATUS.runtime_state`公开当前阶段；存储程序通过142控制器的只读`QUERY_STORAGE`公开监听、接收写盘及后端通知状态。部署后可在任意缓存、存储或显控节点运行`tlcache --watch 2`，查看当前事件的估算写盘进度、活跃接收口和无数据端口；`tlcache period`查询积分周期。任意上述节点均可用`tlcache start all`、`tlcache stop 1-3`或`tlcache restart 2,5-7`并行管理缓存服务，不再依赖运行时Ansible或sudo密码。`tlcache stop` 返回 `ACCEPTED state=stopping` 表示停止请求已提交；再次运行 `tlcache` 确认节点已停止。
 - 显控节点为`172.0.0.61`，使用`ubuntu`账户，并作为inventory中的`display`角色由Ansible统一管理。全量部署和软件更新会同时更新其`tlcache`、`tltrigger`及节点清单，不修改显控节点网络配置。
 
 节点 YAML 的 `controlBindIp` 使用 `172.0.0.128～141`（server 0～13 对应 tianlaistore1～14），控制器/存储服务器管理地址为 `172.0.0.142`。状态查询和触发控制统一走该172管理网；消色散后端IP不固定，完成回调使用触发连接的来源IP；存储数据网地址为 `192.168.210.250`。当前配置统一使用 YAML。
@@ -158,7 +158,7 @@ ZeroMQ 数据通道不使用 UDP 分片参数；旧配置中的 udpFragmentBytes
 
 程序不主动限速，因此不能把网口线速当作已验证的持续落盘能力。默认线程结构为1个主线程、28个lane线程、2个ZeroMQ I/O线程、1个完成通知线程和1个休眠为主的状态心跳线程，应用可见合计约33个，不再动态增加28个写盘线程；libzmq可能另有内部管理线程。100G网卡RSS、中断亲和性、NUMA、交换机拥塞和磁盘持续写入仍须实机验收；若2个I/O线程成为瓶颈，可实测后提高`ioThreads`。
 
-`tlcache`中的存储状态每秒刷新：`event`一行表示当前或最近事件，`totals`表示存储进程启动后的累计值，`rate`为最近采样周期的写入速度。后端通知失败时状态为`NOTIFICATION_RETRY`并返回非零退出码；通知成功后恢复`WAITING_FOR_DATA`。
+`tlcache`显示存储服务和缓存节点状态；`tlcache storage`只查存储服务，`tlcache --json`供显控程序读取。写盘时的`progress~=`为估算进度，`rate`为最近采样周期的写入速度；最终完成以事件状态`COMPLETED`为准。后端通知失败时状态为`NOTIFICATION_RETRY`并返回非零退出码。
 
 ## 缓存进程异常退出与恢复
 

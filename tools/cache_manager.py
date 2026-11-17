@@ -32,13 +32,21 @@ def handle(data):
         raise ValueError('invalid cache service action')
     command = ACTIONS[action]
     if command != 'status':
+        # A large shared mapping and the NIC rebind run during service stop.
+        # Submit STOP without waiting; callers query STATUS for completion.
+        systemctl = ['/usr/bin/systemctl']
+        if command == 'stop':
+            systemctl.append('--no-block')
         result = subprocess.run(
-            ['/usr/bin/systemctl', command, SERVICE],
+            systemctl + [command, SERVICE],
             check=False, capture_output=True, text=True, timeout=75)
         if result.returncode:
             error = (result.stderr or result.stdout or 'systemctl failed').strip()[:300]
             return dict(version=1, request_id=request_id, status='ERROR',
                         service_state=service_state(), error=error)
+        if command == 'stop':
+            return dict(version=1, request_id=request_id, status='ACCEPTED',
+                        service_state='stopping')
     state = service_state()
     expected = (state == 'active' if command in ('start', 'restart')
                 else state in ('inactive', 'failed'))
