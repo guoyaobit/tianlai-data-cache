@@ -1,6 +1,6 @@
 # 原始数据缓存：服务器 0～13
 
-文档入口：[部署与联调操作手册](DEPLOYMENT_GUIDE.md) · [Ansible 部署](deploy/ansible/README.md) · [触发操作](DEDISPERSION_BACKEND_GUIDE.md) · [触发与存储格式](PROTOCOL.md) · [代码结构](CODE_STRUCTURE.md)。
+文档入口：[用户对接文档](PROTOCOL.md) · [显控开发对接](DISPLAY_INTERFACE.md) · [部署与联调操作手册](DEPLOYMENT_GUIDE.md) · [Ansible 部署](deploy/ansible/README.md) · [代码结构](CODE_STRUCTURE.md)。
 首次部署请先阅读操作手册；本文提供架构和配置背景。所有 IP、端口和路径示例均须按现场实际情况修改。
 
 前 11 台按 `tianlai-A288B288-20260917` 的输入包格式实现，新增 11～13 台接收远端子站数据。
@@ -110,13 +110,13 @@ sudo ./tianlai-store-f0-2 server_00.yaml receive_config.yaml
 
 ## 管理网触发和调度
 
-控制通道使用管理网 TCP + JSON。触发操作见[后端使用指南](DEDISPERSION_BACKEND_GUIDE.md)，字段、状态与完成通知见[触发与存储格式](PROTOCOL.md)。
+控制通道使用管理网 TCP + JSON。触发操作、字段、状态和完成通知见[用户对接文档](PROTOCOL.md)。
 
 控制器等配套工具使用 Python 3.10+：
 
 - `tools/controller.py`：外部TCP/JSON触发入口；288路调度节点0～10，384路调度节点0～13。
 - `tools/trigger.py`：简化触发客户端，自动选择最近的共同缓存区，也兼容完整JSON请求。
-- [DEDISPERSION_BACKEND_GUIDE.md](DEDISPERSION_BACKEND_GUIDE.md)：提供给消色散后端用户的精简触发、完成查询和通知确认说明。
+- [PROTOCOL.md](PROTOCOL.md)：独立交付给消色散后端和数据读取方的对接文档。
 - `Storage/tianlai-storage`：生产部署使用的 C++ ZeroMQ 接收与落盘服务。
 - `Storage/storage.yaml`：C++ 落盘服务的完整示例配置；Ansible 会按现场清单生成正式配置。
 

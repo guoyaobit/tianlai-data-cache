@@ -175,7 +175,7 @@ tltrigger 20261112-012345-abc123
 
 命令中断后执行`tltrigger wait`会自动找到当前未完成事件并继续等待，无需填写事件编号；当前无活动事件时返回`NO_ACTIVE_EVENT`。
 
-`tltrigger`由Ansible安装到控制器/存储节点`172.0.0.142`和显控节点`172.0.0.61`的`/usr/local/bin`。运行全量部署或软件更新后即可直接使用，不需要再执行独立分发脚本。消色散后端使用说明见[Dedispersion Backend Trigger Guide](DEDISPERSION_BACKEND_GUIDE.md)。
+`tltrigger`由Ansible安装到控制器/存储节点`172.0.0.142`和显控节点`172.0.0.61`的`/usr/local/bin`。运行全量部署或软件更新后即可直接使用，不需要再执行独立分发脚本。消色散后端使用说明见[用户对接文档](PROTOCOL.md)。
 
 常见状态：`PREPARING`正在保护、`PREPARED`表示全体已保护、`STORING`正在双lane回传、`STORED`表示全体已持久化、`RELEASING`正在统一释放、`COMPLETED`表示全部完成。检查`missing_by_server`以及每台节点的`lane-0.json`和`lane-1.json`。
 
