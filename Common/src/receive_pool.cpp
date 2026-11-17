@@ -139,7 +139,7 @@ PoolStatus ReceiveRingBuffer::statusUnlocked() const {
     const auto now = std::chrono::steady_clock::now();
     s.oldest = oldest;
     s.latest = latest;
-    s.settledEnd = settledEndUnlocked();
+    s.settledEnd = settledEndUnlocked(now);
     s.ready = haveData && !frozen && mode == NORMAL && latest + 1 - oldest >= 2 * half;
     s.received = received;
     s.duplicate = duplicate;
@@ -189,21 +189,19 @@ void ReceiveRingBuffer::addPacketLoss(uint64_t firstPeriod, uint64_t lastPeriod,
     lossPeriods += affected;
     lastLossPeriod = lastPeriod;
 }
-void ReceiveRingBuffer::logPacketLoss(std::chrono::steady_clock::time_point now) {
+ReceiveRingBuffer::LossWarning
+ReceiveRingBuffer::takePacketLossWarning(std::chrono::steady_clock::time_point now) {
     if (!pendingMissingPeriods)
-        return;
+        return {};
     constexpr auto interval = std::chrono::seconds(1);
     if (lastLossWarning.time_since_epoch().count() && now - lastLossWarning < interval)
-        return;
-    LOG("Receive port " + std::to_string(portIndex) +
-            " packet loss: missing_packets=" + std::to_string(pendingMissingPackets) +
-            " affected_periods=" + std::to_string(pendingMissingPeriods) +
-            " period_range=" + std::to_string(pendingFirstMissingPeriod) + ".." +
-            std::to_string(pendingLastMissingPeriod),
-        WARN);
+        return {};
+    const LossWarning warning{pendingMissingPackets, pendingMissingPeriods,
+                              pendingFirstMissingPeriod, pendingLastMissingPeriod};
     pendingMissingPackets = 0;
     pendingMissingPeriods = 0;
     lastLossWarning = now;
+    return warning;
 }
 // Check only periods beyond the reorder window. A large sequence jump is
 // counted as a range instead of scanning every absent period.
@@ -226,13 +224,12 @@ void ReceiveRingBuffer::detectPacketLoss(std::chrono::steady_clock::time_point n
         addPacketLoss(nextLossCheck, settledEnd - 1, affected * packetSlots, affected);
         nextLossCheck = settledEnd;
     }
-    logPacketLoss(now);
 }
 // Write one packet to a rolling bank, deduplicate by period and packet position,
 // and count late arrivals and conflicts.
 bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrace,
                                 const unsigned char *packet) {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::unique_lock<std::mutex> lock(mutex);
     if (packetSlot >= packetSlots || p == UINT64_MAX)
         throw std::runtime_error("invalid receive index");
     // Sequence-based finalization handles the normal high-rate path without a
@@ -267,6 +264,13 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
         oldest = std::max(oldest, latest + 1 - retention);
     if (sampleClock)
         lastReceive = now;
+
+    // Settle old periods before the new period can overwrite a modulo slot.
+    LossWarning warning;
+    if (latest > previousLatest) {
+        detectPacketLoss(now, previousLatest);
+        warning = takePacketLossWarning(now);
+    }
 
     // A frozen event contains at most one period for each modulo slot. Keep
     // that exact slot immutable and write the live period to the other bank.
@@ -318,10 +322,13 @@ bool ReceiveRingBuffer::receive(uint64_t p, unsigned packetSlot, unsigned ifTrac
     std::memcpy(dst->packet(p, packetSlot), packet, packetBytes);
     h.boardMask |= bit;
     ++received;
-    // Only the first packet that advances the period can finalize older
-    // periods. Avoid repeating the same scan for every board packet.
-    if (latest > previousLatest)
-        detectPacketLoss(now, previousLatest);
+    lock.unlock();
+    if (warning.periods)
+        LOG("Receive port " + std::to_string(portIndex) +
+                " packet loss: missing_packets=" + std::to_string(warning.missing) +
+                " affected_periods=" + std::to_string(warning.periods) +
+                " period_range=" + std::to_string(warning.first) + ".." +
+                std::to_string(warning.last), WARN);
     return true;
 }
 // Protect an event in place. Switching mode is constant-time; ownership is

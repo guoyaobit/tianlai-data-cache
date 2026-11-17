@@ -40,14 +40,14 @@ static void receivePacket(CacheRuntime *para, unsigned p, const unsigned char *d
     const auto &cfg = *para->config;
     const auto &port = cfg.receivePorts[p];
     if (bytes != INPUT_HEADER_BYTES + cfg.inputDataBytes) {
-        ++para->ignoredPackets;
+        para->receiveBuffers[p]->noteIgnoredPacket();
         return;
     }
     InputHeader h = decodeInput(data);
     if (h.packetId < port.packetId ||
         h.packetId >= port.packetId + port.packetsPerBoard || h.board < port.boardBegin ||
         h.board >= port.boardBegin + port.boardNum || h.integration >= cfg.integrationPerTrace) {
-        ++para->ignoredPackets;
+        para->receiveBuffers[p]->noteIgnoredPacket();
         return;
     }
     const unsigned slot =
@@ -153,7 +153,7 @@ void InitRecvAntennaThread(CacheRuntime *para, unsigned p) {
                         logFirstUdpPacket(p, data, bytes, frameBytes, firstUdpLogged);
                         receivePacket(para, p, data, bytes, firstPacketLogged);
                     } else {
-                        ++para->ignoredPackets;
+                        para->receiveBuffers[p]->noteIgnoredPacket();
                         if (!firstUnparsedFrameLogged) {
                             firstUnparsedFrameLogged = true;
                             LOG("RX" + std::to_string(p) +

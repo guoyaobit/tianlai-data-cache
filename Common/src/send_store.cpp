@@ -8,6 +8,7 @@
 #include <sched.h>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 static void pinSendThread(const CacheRuntime &para, unsigned lane) {
     const int cpu = para.config->sendLink.cpuIds[lane];
@@ -25,7 +26,7 @@ static void sendJson(StoreConnection &socket, const std::string &json) {
     message.insert(message.end(), json.begin(), json.end());
     // A retry after a lost final reply may be completed by the receiver here,
     // without retransmitting data that is already durably stored.
-    socket.sendMessage(message, false, true);
+    socket.sendMessage(std::move(message), false, true);
 }
 
 static void set32(std::vector<unsigned char> &buffer, size_t offset, uint32_t value) {
@@ -78,13 +79,12 @@ static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event) 
         validateStored();
         return;
     }
-    // Reuse one block across ports and chunks. The first 40 bytes are the wire header.
-    std::vector<unsigned char> message;
+    // Move each block into ZeroMQ; its release callback owns the buffer after send.
     for (unsigned p = lane; p < c.receivePorts.size(); p += 2) {
         const auto &port = c.receivePorts[p];
         for (uint64_t start = event.start; start < event.start + event.count;) {
             uint64_t count = std::min<uint64_t>(c.chunkPeriods, event.start + event.count - start);
-            message.clear();
+            std::vector<unsigned char> message = socket.acquireBuffer();
             message.reserve(40 + count * (24ULL + port.packetSlots() *
                                                       (c.inputDataBytes + INPUT_HEADER_BYTES)));
             put32(message, 1);
@@ -99,7 +99,7 @@ static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event) 
                 para.receiveBuffers[p]->appendEventFrame(start + i, message);
             const size_t bodyBytes = message.size() - 40;
             set32(message, 32, static_cast<uint32_t>(bodyBytes));
-            socket.sendMessage(message);
+            socket.sendMessage(std::move(message));
             {
                 std::lock_guard<std::mutex> lock(para.eventMutex);
                 para.event.sentBytes += bodyBytes;
@@ -112,7 +112,7 @@ static void sendLane(CacheRuntime &para, unsigned lane, const EventInfo &event) 
     std::vector<unsigned char> end;
     put32(end, 2);
     end.resize(40, 0);
-    socket.sendMessage(end, true);
+    socket.sendMessage(std::move(end), true);
     validateStored();
 }
 // Send frozen data from the event thread; retain the buffer and record SEND_FAILED on failure.

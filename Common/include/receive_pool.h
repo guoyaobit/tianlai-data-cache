@@ -2,6 +2,7 @@
 #define STORE_RECEIVE_RING_BUFFER_H_
 #include "protocol.h"
 #include <chrono>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -57,6 +58,8 @@ class ReceiveRingBuffer {
     void finishFreeze();
     void release();
     uint64_t missingPackets() const;
+    void noteIgnoredPacket() { ignoredPackets.fetch_add(1, std::memory_order_relaxed); }
+    uint64_t ignoredPacketCount() const { return ignoredPackets.load(std::memory_order_relaxed); }
     void appendEventFrame(uint64_t period, std::vector<unsigned char> &out) const;
     bool isFrozen() const;
     unsigned packetSlotCount() const { return packetSlots; }
@@ -79,7 +82,10 @@ class ReceiveRingBuffer {
                           uint64_t previousLatest);
     void addPacketLoss(uint64_t firstPeriod, uint64_t lastPeriod,
                        uint64_t missingPackets, uint64_t affectedPeriods);
-    void logPacketLoss(std::chrono::steady_clock::time_point now);
+    struct LossWarning {
+        uint64_t missing = 0, periods = 0, first = 0, last = 0;
+    };
+    LossWarning takePacketLossWarning(std::chrono::steady_clock::time_point now);
     const Buffer *eventBuffer(uint64_t period) const;
     const unsigned portIndex;
     const size_t half, transitionCapacity, eventLimit;
@@ -115,6 +121,7 @@ class ReceiveRingBuffer {
     uint64_t pendingFirstMissingPeriod = 0;
     uint64_t pendingLastMissingPeriod = 0;
     uint64_t lostPackets = 0;
+    std::atomic<uint64_t> ignoredPackets{0};
     uint64_t lossPeriods = 0;
     uint64_t lastLossPeriod = 0;
     bool transitionWarningLogged = false;

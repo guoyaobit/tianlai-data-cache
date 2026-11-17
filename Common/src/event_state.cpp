@@ -153,6 +153,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
             uint64_t lossPeriods = 0;
             uint64_t lastLossPeriod = 0;
             uint64_t latePackets = 0;
+            uint64_t ignoredPackets = 0;
             uint64_t lastPacketAgeMilliseconds = 0;
             unsigned receivingPorts = 0;
             std::string lostByPort = "{";
@@ -174,6 +175,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                 lossPeriods += s.lossPeriods;
                 lastLossPeriod = std::max(lastLossPeriod, s.lastLossPeriod);
                 latePackets += s.late;
+                ignoredPackets += para.receiveBuffers[index]->ignoredPacketCount();
                 if (s.hasData)
                     lastPacketAgeMilliseconds =
                         std::max(lastPacketAgeMilliseconds, s.lastPacketAgeMilliseconds);
@@ -234,7 +236,7 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                          ",\"last_loss_period\":" + std::to_string(lastLossPeriod) +
                          ",\"late_packets\":" + std::to_string(latePackets) +
                          ",\"lost_by_port\":" + lostByPort +
-                         ",\"ignored_packets\":" + std::to_string(para.ignoredPackets.load()) +
+                         ",\"ignored_packets\":" + std::to_string(ignoredPackets) +
                          ",\"transition_used_periods\":" +
                          std::to_string(transitionUsed) +
                          ",\"transition_capacity_periods\":" +
@@ -269,6 +271,8 @@ std::string ProcessControl(CacheRuntime &para, const std::string &request) {
                          ",\"last_loss_period\":" + std::to_string(s.lastLossPeriod) +
                          ",\"duplicate_packets\":" + std::to_string(s.duplicate) +
                          ",\"late_packets\":" + std::to_string(s.late) +
+                         ",\"ignored_packets\":" +
+                         std::to_string(para.receiveBuffers[p]->ignoredPacketCount()) +
                          ",\"conflicting_packets\":" + std::to_string(s.conflicting) +
                          ",\"transition_capacity_periods\":" +
                          std::to_string(s.transitionCapacity) +

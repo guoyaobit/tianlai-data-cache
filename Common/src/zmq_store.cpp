@@ -5,8 +5,16 @@
 #include <cerrno>
 #include <cstring>
 #include <ifaddrs.h>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <utility>
 #include <zmq.h>
+
+struct SendBufferPool {
+    std::mutex mutex;
+    std::vector<std::vector<unsigned char>> buffers;
+};
 
 namespace {
 constexpr size_t MAX_MESSAGE = 32 * 1024 * 1024;
@@ -77,13 +85,35 @@ struct Message {
         if (zmq_msg_init(&value) != 0)
             throw zmqError("ZeroMQ message init failed");
     }
+    struct OwnedBuffer {
+        std::vector<unsigned char> bytes;
+        std::shared_ptr<SendBufferPool> pool;
+    };
+    Message(std::vector<unsigned char> &&bytes, std::shared_ptr<SendBufferPool> pool) {
+        std::unique_ptr<OwnedBuffer> owned(new OwnedBuffer{std::move(bytes), std::move(pool)});
+        if (zmq_msg_init_data(&value, owned->bytes.data(), owned->bytes.size(),
+                              [](void *, void *hint) {
+                                  std::unique_ptr<OwnedBuffer> released(
+                                      static_cast<OwnedBuffer *>(hint));
+                                  try {
+                                      std::lock_guard<std::mutex> lock(released->pool->mutex);
+                                      if (released->pool->buffers.size() < 2)
+                                          released->pool->buffers.emplace_back(
+                                              std::move(released->bytes));
+                                  } catch (...) {
+                                      // Never let an exception escape a ZeroMQ callback.
+                                  }
+                              }, owned.get()) != 0)
+            throw zmqError("ZeroMQ message init failed");
+        owned.release();
+    }
     ~Message() { zmq_msg_close(&value); }
 };
 } // namespace
 
 // Validate the source interface and address, then create a bounded, timeout-enabled ZeroMQ request connection.
 StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane)
-    : para(p), laneIndex(lane) {
+    : para(p), laneIndex(lane), bufferPool(std::make_shared<SendBufferPool>()) {
     const auto &config = para.config->sendLink;
     validateSource(config);
     remoteEndpoint = config.destinationIp + ":" +
@@ -134,6 +164,20 @@ StoreConnection::StoreConnection(CacheRuntime &p, unsigned lane)
     }
 }
 
+std::vector<unsigned char> StoreConnection::acquireBuffer() {
+    std::lock_guard<std::mutex> lock(bufferPool->mutex);
+    if (bufferPool->buffers.empty())
+        return {};
+    auto largest = std::max_element(bufferPool->buffers.begin(), bufferPool->buffers.end(),
+        [](const std::vector<unsigned char> &a, const std::vector<unsigned char> &b) {
+            return a.capacity() < b.capacity();
+        });
+    std::vector<unsigned char> buffer = std::move(*largest);
+    bufferPool->buffers.erase(largest);
+    buffer.clear();
+    return buffer;
+}
+
 StoreConnection::~StoreConnection() {
     if (socket)
         zmq_close(socket);
@@ -142,16 +186,18 @@ StoreConnection::~StoreConnection() {
 }
 
 // Send one complete message and wait for its reply; parse the STORED result separately for the final message.
-void StoreConnection::sendMessage(const std::vector<unsigned char> &message, bool final,
+void StoreConnection::sendMessage(std::vector<unsigned char> message, bool final,
                                   bool allowStored) {
     if (message.empty() || message.size() > MAX_MESSAGE)
         throw std::runtime_error("ZeroMQ message size invalid");
+    const size_t messageSize = message.size();
+    Message outbound(std::move(message), bufferPool);
     auto deadline = std::chrono::steady_clock::now() +
                     std::chrono::seconds(para.config->socketTimeoutSeconds);
     while (para.flags->ifControl) {
-        const int sent = zmq_send(socket, message.data(), message.size(), ZMQ_DONTWAIT);
+        const int sent = zmq_msg_send(&outbound.value, socket, ZMQ_DONTWAIT);
         if (sent >= 0) {
-            if (static_cast<size_t>(sent) != message.size())
+            if (static_cast<size_t>(sent) != messageSize)
                 throw std::runtime_error("ZeroMQ message send was incomplete");
             if (!connectionReadyLogged) {
                 connectionReadyLogged = true;

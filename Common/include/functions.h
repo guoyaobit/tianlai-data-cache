@@ -98,7 +98,6 @@ struct CacheRuntime {
     std::deque<std::string> historyOrder;
     std::atomic<unsigned> initializedPorts{0};
     std::atomic<bool> hasAcceptedData{false};
-    std::atomic<uint64_t> ignoredPackets{0};
     std::atomic<bool> failed{false};
     std::atomic<RuntimeState> runtimeState{RuntimeState::Starting};
     std::atomic<uint64_t> runtimeStateChangedMs{0};
