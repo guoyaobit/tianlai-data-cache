@@ -78,3 +78,28 @@ tlcache restart 2 --yes --json
 编号 1～14 对应机柜标签 `tianlaistore1`～`tianlaistore14`；也支持 `all` 和 `2,5-7`。显控界面在停止或重启前应提示用户：内存中的缓存数据将丢失。`--yes` 表示界面已完成确认。
 
 回复顶层 `status:OK` 不保证每台都成功，要逐项检查 `nodes` 中的 `status`、`state` 和 `error`。停止返回 `ACCEPTED`、`stopping` 表示已提交；继续运行 `tlcache --json` 确认节点变为 `STOPPED`。未完成事件会阻止停止或重启；只有用户明确要求丢弃事件时才增加 `--force`。
+
+## 5. 直接使用 TCP 报文
+
+如果显控程序不调用命令行工具，可以连接控制器 `172.0.0.142:18999`。**每个 TCP 连接发送一条请求、接收一条回复，然后关闭。**请求和回复使用相同封装：
+
+| 顺序 | 长度 | 内容 |
+|---|---:|---|
+| 1 | 4 字节 | 后续 JSON 的字节数，`uint32` 大端序 |
+| 2 | 1～1200 字节 | UTF-8 编码的 JSON 对象 |
+
+长度是 UTF-8 **字节数**，不是字符数。例如查询存储状态的 JSON 正文是：
+
+```json
+{"version":1,"command":"QUERY_STORAGE"}
+```
+
+发送时先写入该正文长度的 4 字节大端整数，再写入正文；接收时先读满 4 字节，根据长度读满回复 JSON。TCP 的一次 `recv` 不保证读到完整报文。
+
+直接触发 3 秒 288 路数据的正文：
+
+```json
+{"version":1,"command":"CAPTURE","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"duration_ms":3000,"notify":false}
+```
+
+控制器会在回复中返回 `request_id` 和 `event_id`；保存 `event_id`，随后发送 `{"version":1,"command":"QUERY_EVENT","event_id":"收到的事件编号"}` 查询结果。触发回复的 `PREPARING` 不表示写盘完成。若需要安全重试超时请求，首次请求就填写唯一的 `request_id` 和 `event_id`，并从同一来源 IP 重发完全相同的报文。字段和存储格式详见 [PROTOCOL.md](PROTOCOL.md)。
