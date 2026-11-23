@@ -10,7 +10,7 @@
 | 仅提交触发 | `tltrigger capture 3 --288 --json` |
 | 启停节点 | `tlcache start 1-3 --json`、`tlcache stop 1-3 --yes --json` |
 
-以上 `3` 是保存 3 秒；`--288` 选择 288 路，省略时选择 384 路。时长范围为 1～50 秒。
+以上 `3` 是保存 3 秒；`--288` 选择 288 路，省略时选择 384 路。时长范围为 0.1～50 秒，步长 0.1 秒，例如 `tltrigger 0.1 --288 --json`。
 
 ## 1. 查看缓存和存储状态
 
@@ -247,7 +247,7 @@ print(json.dumps(reply, ensure_ascii=False, indent=2))
 | `event_id` | 可选；省略时控制器生成；安全重试时应由调用方提供唯一编号 |
 | `channel_count` | 可选，288 或 384，默认 384 |
 | `start.trace_period_id`、`start.integration_period_id` | 必填，起始 trace 和 trace 内积分周期 |
-| `duration_ms`、`period_count` | 二选一，分别为毫秒数或积分周期数，最长 50 秒 |
+| `duration_ms`、`period_count` | 二选一，时长 0.1～50 秒，步长 0.1 秒，且须为整数个积分周期 |
 | `notify` | 可选布尔值；`false` 用查询等待；直接 TCP 请求默认主动通知触发连接来源 IP 的 19001 端口 |
 | `server_ids` | 可选的内部节点编号列表；正常按路数自动选择 |
 

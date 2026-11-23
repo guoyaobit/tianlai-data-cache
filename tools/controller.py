@@ -402,12 +402,13 @@ class Controller:
             raise ValueError('provide exactly one of period_count or duration_ms')
         if 'duration_ms' in message:
             duration = message['duration_ms']
-            if type(duration) is not int or duration <= 0 or duration * 1000 % self.period_microseconds:
-                raise ValueError('duration_ms must be a positive whole number of periods')
+            if type(duration) is not int or duration < 100 or duration % 100 or duration * 1000 % self.period_microseconds:
+                raise ValueError('duration_ms must be a multiple of 100 ms and whole integration periods')
             count = duration * 1000 // self.period_microseconds
         else:
             count = message['period_count']
         if (type(count) is not int or count < 1 or
+                (count * self.period_microseconds) % 100000 or
                 count * self.period_microseconds > MAX_CAPTURE_MICROSECONDS or
                 trace * self.integration_per_trace + integration + count > (1 << 20) * self.integration_per_trace):
             raise ValueError('invalid trigger range')
