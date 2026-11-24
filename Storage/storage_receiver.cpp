@@ -146,6 +146,7 @@ class StorageRuntimeStatus {
     uint64_t completed_transfers = 0, aborted_transfers = 0;
     unsigned event_expected_lanes = 0;
     uint64_t event_expected_bytes = 0;
+    std::map<unsigned, uint64_t> event_lane_bytes;
     uint64_t event_completed_lanes = 0, event_aborted_lanes = 0;
     std::atomic<uint64_t> written_bytes_total{0}, event_written_bytes{0};
     uint64_t sampled_written_bytes = 0, write_rate_bytes_per_second = 0;
@@ -248,15 +249,22 @@ class StorageRuntimeStatus {
         publish();
     }
     void transferStarted(const std::string &transfer_event, unsigned expected_lanes,
-                         uint64_t expected_bytes) {
+                         unsigned lane_key, uint64_t lane_bytes) {
         std::lock_guard<std::mutex> lock(mutex);
         if (event_id != transfer_event) {
             event_id = transfer_event;
             event_expected_lanes = expected_lanes;
-            event_expected_bytes = expected_bytes;
+            event_expected_bytes = 0;
+            event_lane_bytes.clear();
             event_completed_lanes = 0;
             event_aborted_lanes = 0;
             event_written_bytes.store(0, std::memory_order_relaxed);
+        }
+        event_lane_bytes[lane_key] = lane_bytes;
+        if (event_lane_bytes.size() == event_expected_lanes) {
+            event_expected_bytes = 0;
+            for (const auto &entry : event_lane_bytes)
+                event_expected_bytes += entry.second;
         }
         ++active_transfers;
         publish();
@@ -519,19 +527,9 @@ class EventWriter {
         }
         last_data_sync = std::chrono::steady_clock::now();
         if (runtime) {
-            uint64_t expected_bytes = 0;
-            for (unsigned source = 0; source < CACHE_NODE_COUNT; ++source) {
-                if (!(server_mask & (uint64_t(1) << source))) continue;
-                const uint64_t source_ports = source < 3 ? 8 : 4;
-                const uint64_t source_slots = source < 3 ? 36 : source < 11 ? 18 : 24;
-                const uint64_t source_packet_bytes =
-                    source < 3 ? 2320 : source < 11 ? 8848 : 8272;
-                expected_bytes += count * source_ports *
-                    (FRAME_HEADER + source_slots * source_packet_bytes);
-            }
             runtime->transferStarted(
                 event, static_cast<unsigned>(__builtin_popcountll(server_mask)) * LANE_COUNT,
-                expected_bytes);
+                server * LANE_COUNT + lane, count * (ports / LANE_COUNT) * stride);
             runtime_active = true;
         }
         return {};
@@ -686,9 +684,12 @@ static std::optional<json> build_completion_notice(
     require(!participating_servers.empty(), "no configured server participates in this channel mode");
     require(!(server_mask & ~configured_mask), "event selects an unconfigured server");
     json missing = json::object();
+    json ranges = json::object();
+    bool ranges_differ = false;
     for (unsigned server : participating_servers) {
         const auto directory = event_directory / data_directory_name(server);
         uint64_t absent = 0;
+        uint64_t server_start = 0, server_count = 0;
         for (unsigned lane = 0; lane < LANE_COUNT; ++lane) {
             const auto state = read_lane_state(directory, lane);
             if (!state || state->value("status", "") != "STORED") return std::nullopt;
@@ -699,9 +700,21 @@ static std::optional<json> build_completion_notice(
             const uint64_t state_mask = state->contains("server_mask") ?
                 integer(*state, "server_mask") : server_mask;
             require(state_mask == server_mask, "node event server selection mismatch");
+            const auto lane_start = integer(*state, "start_period");
+            const auto lane_count = integer(*state, "period_count");
+            if (lane == 0) {
+                server_start = lane_start;
+                server_count = lane_count;
+                ranges[std::to_string(server)] = json::array({server_start, server_count});
+                ranges_differ = ranges_differ || server_start != integer(first, "start_period") ||
+                                server_count != integer(first, "period_count");
+            } else {
+                require(lane_start == server_start && lane_count == server_count,
+                        "node lane period range mismatch");
+            }
             if (server != first_server || lane != 0) {
-                for (const char *field : {"format", "acquisition_id", "event_id", "start_period",
-                                          "period_count", "integration_per_trace", "period_microseconds",
+                for (const char *field : {"format", "acquisition_id", "event_id",
+                                          "integration_per_trace", "period_microseconds",
                                           "channel_count", "result_address", "result_port"})
                     require(state->at(field) == first.at(field), "node event metadata mismatch");
             }
@@ -735,6 +748,12 @@ static std::optional<json> build_completion_notice(
                    {"result_port", first.at("result_port")},
                    {"partial_node_set", participating_servers.size() != complete_node_count},
                    {"participating_server_ids", participating_servers}};
+    if (ranges_differ) {
+        notice.erase("start");
+        notice.erase("end_exclusive");
+        notice.erase("period_count");
+        notice["server_ranges"] = ranges;
+    }
     const auto path = event_directory / "event.json";
     if (fs::exists(path)) {
         auto state = read_json_file(path);

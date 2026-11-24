@@ -68,7 +68,7 @@ tltrigger wait                 # 等待当前未完成事件
 {
   "version": 1,
   "command": "CAPTURE",
-  "channel_count": 288,
+  "server_ids": [0,1,2,3,4,5,6,7,8,9,10],
   "start": {
     "trace_period_id": 120,
     "integration_period_id": 45000
@@ -81,7 +81,7 @@ tltrigger wait                 # 等待当前未完成事件
 |---|---|---|
 | `version` | 必填，`1` | 协议版本 |
 | `command` | 必填，`CAPTURE` | 发起保存 |
-| `channel_count` | 可选，`288` 或 `384` | 默认 `384`；自动选择对应服务器 |
+| `server_ids` | 可选 | 内部服务器编号列表；省略时选择所有启用节点 |
 | `start` | 必填 | 起始 trace 与积分周期编号 |
 | `duration_ms` | 与 `period_count` 二选一 | 100～50000 毫秒，100 毫秒的整数倍，且须为整数个积分周期 |
 | `period_count` | 与 `duration_ms` 二选一 | 正整数积分周期数，对应时长须为 0.1～50 秒、0.1 秒的整数倍 |
@@ -93,7 +93,7 @@ tltrigger wait                 # 等待当前未完成事件
 查询288路缓存状态的请求如下，同样使用上面的 TCP 报文封装；仅当回复的 `status` 为 `READY` 且 `accept_trigger` 为 `true` 时才提交触发：
 
 ```json
-{"version":1,"command":"QUERY_STATUS","channel_count":288}
+{"version":1,"command":"QUERY_STATUS","server_ids":[0,1,2,3,4,5,6,7,8,9,10]}
 ```
 
 直接 TCP 调用示例：
@@ -104,7 +104,7 @@ import socket
 import struct
 
 request = {
-    "version": 1, "command": "CAPTURE", "channel_count": 288,
+    "version": 1, "command": "CAPTURE", "server_ids": list(range(11)),
     "start": {"trace_period_id": 120, "integration_period_id": 45000},
     "duration_ms": 3000,
 }
@@ -129,6 +129,67 @@ with socket.create_connection(("172.0.0.142", 18999), timeout=10) as sock:
 ```
 
 连接超时不代表触发失败，不要直接重复发送触发。可先查询当前活动事件，但事件如果已经完成而回复中的事件编号也未收到，就无法通过活动事件查询可靠找回结果。如果需要安全重试同一请求，调用方应自行提供唯一的 `request_id` 和 `event_id`，并从同一来源 IP 使用相同编号及完全相同的报文重试。编号使用1～64位 ASCII 字母、数字、下划线或短横线，不同事件不得复用事件编号；控制器的请求重放缓存保留约5分钟。
+
+### 按缓存服务器设置时间范围
+
+后端提供触发时刻对应的绝对积分周期 `reference_period`。每个服务器单独设置相对该周期的起点偏移 `offset_seconds` 和保存时长 `duration_seconds`，均使用秒，可以为小数。对象键为内部编号：`0` 对应 `tianlaistore1`，`1` 对应 `tianlaistore2`。
+
+使用此功能前，需要更新控制器、存储程序和 `trigger.py`。旧版不支持逐服务器时间范围；更新前产生的活动事件应先处理完毕。
+
+```json
+{
+  "version": 1,
+  "command": "CAPTURE",
+  "reference_period": 7010000,
+  "node_ranges": {
+    "0": {"offset_seconds": -2.0, "duration_seconds": 0.5},
+    "1": {"offset_seconds": -1.0, "duration_seconds": 0.2}
+  },
+  "notify": false
+}
+```
+
+示例只触发两台服务器：第一台保存触发前 2.0～1.5 秒，第二台保存触发前 1.0～0.8 秒。省略 `server_ids` 时，从 `node_ranges` 的键选择服务器；若填写，必须与键完全一致。不能与统一范围的 `start`、`duration_ms` 或 `period_count` 混用。
+
+触发请求无需填写路数：只选择内部编号 0～10 时按 288 路模式汇总，包含 11～13 时按 384 路模式汇总。完成结果中的 `channel_count` 和 `partial_node_set` 反映该自动选择的模式。只选择前 11 台时，结果按 288 路模式判断完整性。
+
+时长为 0.1～50 秒、步长 0.1 秒；偏移和时长均须对齐积分周期，结束位置不能晚于基准周期。所有区间必须仍在各自节点已稳定的缓存内。控制器接收后异步检查，失败时事件为 `PAUSED`，需查看 `error`；不要将 `PREPARING` 视为已完成。
+
+事件回复中的 `node_ranges` 为各节点的 `[起始绝对周期, 周期数]`。如回复超出报文长度上限，控制器会省略它并标记 `node_ranges_omitted: true`。存储完成时，不同节点范围会在事件结果的 `server_ranges` 中以同样格式记录；如所有节点范围一致，仍使用原有的 `start`、`end_exclusive` 和 `period_count` 字段。
+
+也可将上述完整 JSON 保存为文件，执行 `python3 trigger.py 请求.json`；该方式默认关闭主动通知并等待事件结束。直接 TCP 请求如需主动通知，可省略 `notify` 或设为 `true`，后端须监听触发来源地址的 19001 端口。
+
+### 单独触发一台缓存服务器
+
+以下保存 `tianlaistore2` 对应频段的数据：以触发基准周期为参照，从触发前 2.0 秒开始保存 0.5 秒。JSON 的键 `"1"` 是内部编号，等于服务器标签编号减 1。
+
+```json
+{
+  "version": 1,
+  "command": "CAPTURE",
+  "reference_period": 7010000,
+  "node_ranges": {
+    "1": {"offset_seconds": -2.0, "duration_seconds": 0.5}
+  },
+  "notify": false
+}
+```
+
+将内容保存为 `store2.json`，在 `trigger.py` 所在目录执行：
+
+```bash
+python3 trigger.py store2.json
+```
+
+该命令提交后等待完成。也可通过 TCP 直接发送相同 JSON 并用返回的事件编号查询状态。要触发其他服务器，将键改为对应内部编号即可；一次请求可列出多台服务器，每台使用自己的偏移和时长。本示例只涉及一台服务器，不代表整个观测频段已经保存。
+
+提交前可通过控制器 TCP 查询该节点的稳定范围：
+
+```json
+{"version":1,"command":"QUERY_STATUS","server_ids":[1]}
+```
+
+`oldest_period` 包含在范围内，`settled_end` 不包含在范围内。以默认 200 微秒积分周期为例，上述触发区间是 `[7000000,7002500)`；完整区间必须处于该节点的稳定范围。
 
 ### 1.3 查询和完成通知
 

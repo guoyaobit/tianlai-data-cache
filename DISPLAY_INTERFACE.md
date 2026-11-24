@@ -81,6 +81,8 @@ tltrigger event EVENT_ID --json
 
 需要指定历史起点时，可用 `tltrigger 3 --288 --period 7010000 --json`，其中 `--period` 后是绝对积分周期。
 
+需要为不同频段分别设置范围时，使用第 5 节 TCP `CAPTURE` 报文中的 `reference_period` 和 `node_ranges`。各节点范围必须已在缓存中；完成后按节点查看各自保存范围。
+
 ## 4. 启停缓存节点
 
 ```bash
@@ -157,7 +159,7 @@ print(json.dumps(reply, ensure_ascii=False, indent=2))
 
 | 操作 | JSON 正文 |
 |---|---|
-| 查询可触发范围 | `{"version":1,"command":"QUERY_STATUS","channel_count":288}` |
+| 查询可触发范围 | `{"version":1,"command":"QUERY_STATUS","server_ids":[0,1,2,3,4,5,6,7,8,9,10]}` |
 | 查询当前事件 | `{"version":1,"command":"QUERY_ACTIVE_EVENT"}` |
 | 启动前三台 | `{"version":1,"command":"CACHE_SERVICE","action":"START","server_ids":[0,1,2]}` |
 
@@ -166,10 +168,38 @@ print(json.dumps(reply, ensure_ascii=False, indent=2))
 直接触发 3 秒 288 路数据的正文：
 
 ```json
-{"version":1,"command":"CAPTURE","channel_count":288,"start":{"trace_period_id":120,"integration_period_id":45000},"duration_ms":3000,"notify":false}
+{"version":1,"command":"CAPTURE","server_ids":[0,1,2,3,4,5,6,7,8,9,10],"start":{"trace_period_id":120,"integration_period_id":45000},"duration_ms":3000,"notify":false}
 ```
 
 控制器会在回复中返回 `request_id` 和 `event_id`；保存 `event_id`，随后发送 `{"version":1,"command":"QUERY_EVENT","event_id":"收到的事件编号"}` 查询结果。触发回复的 `PREPARING` 不表示写盘完成。若需要安全重试超时请求，首次请求就填写唯一的 `request_id` 和 `event_id`，并从同一来源 IP 重发完全相同的报文。字段和存储格式详见 [PROTOCOL.md](PROTOCOL.md)。
+
+按缓存服务器指定不同时间范围：
+
+```json
+{"version":1,"command":"CAPTURE","reference_period":7010000,"node_ranges":{"0":{"offset_seconds":-2.0,"duration_seconds":0.5},"1":{"offset_seconds":-1.0,"duration_seconds":0.2}},"notify":false}
+```
+
+`reference_period` 是后端提供的触发时刻绝对积分周期。`node_ranges` 的键 `0`、`1` 对应 `tianlaistore1`、`tianlaistore2`；起点为基准周期加 `offset_seconds`，`duration_seconds` 是保存时长。结束位置不能晚于基准周期。时长为 0.1～50 秒且以 0.1 秒递增；偏移和时长须对齐积分周期。
+
+触发请求不填写路数：只选 1～11 号服务器按 288 路模式汇总，包含 12～14 号时按 384 路模式汇总。
+
+只触发 `tianlaistore2` 时，在 `node_ranges` 中只保留键 `"1"`：
+
+```json
+{"version":1,"command":"CAPTURE","reference_period":7010000,"node_ranges":{"1":{"offset_seconds":-2.0,"duration_seconds":0.5}},"notify":false}
+```
+
+以默认 200 微秒积分周期计算，该节点保存绝对周期 `[7000000,7002500)`。界面应在提交前用 `{"version":1,"command":"QUERY_STATUS","server_ids":[1]}` 查询该节点稳定范围，确保保存区间完整落在 `[oldest_period,settled_end)` 内；提交后用返回的 `event_id` 查询完成状态。编号规则对所有节点相同：`tianlaistoreN` 使用内部编号 `N-1`。
+
+单台节点运行状态及服务启停也可直接使用：
+
+```bash
+tlcache status 2 --json
+tlcache start 2 --json
+tlcache stop 2 --yes --json
+```
+
+这些命令里的 `2` 使用机柜标签编号，而 TCP JSON 使用内部编号 `1`。`tlcache status 2 --json` 仍包含存储服务状态，`cache_nodes` 中只有所选节点。
 
 
 ## 6. JSON 字段速查
@@ -228,7 +258,7 @@ print(json.dumps(reply, ensure_ascii=False, indent=2))
 
 ### 6.4 `tltrigger status --json` 和 `QUERY_STATUS`
 
-请求包括公共字段及可选 `channel_count`（288 或 384，默认 384）。控制器也支持可选 `server_ids` 指定内部节点编号列表；正常显控按路数自动选择节点。
+请求包括公共字段及可选 `server_ids` 内部节点编号列表；省略时查询所有启用节点。
 
 | 回复字段 | 含义 |
 |---|---|
@@ -245,11 +275,12 @@ print(json.dumps(reply, ensure_ascii=False, indent=2))
 | 字段 | 要求和含义 |
 |---|---|
 | `event_id` | 可选；省略时控制器生成；安全重试时应由调用方提供唯一编号 |
-| `channel_count` | 可选，288 或 384，默认 384 |
+| `server_ids` | 可选的内部节点编号列表；省略时选择所有启用节点，逐节点模式默认采用 `node_ranges` 的键 |
 | `start.trace_period_id`、`start.integration_period_id` | 必填，起始 trace 和 trace 内积分周期 |
 | `duration_ms`、`period_count` | 二选一，时长 0.1～50 秒，步长 0.1 秒，且须为整数个积分周期 |
 | `notify` | 可选布尔值；`false` 用查询等待；直接 TCP 请求默认主动通知触发连接来源 IP 的 19001 端口 |
-| `server_ids` | 可选的内部节点编号列表；正常按路数自动选择 |
+| `reference_period`、`node_ranges` | 可选的逐节点模式：基准绝对周期及节点参数对象；与统一范围字段互斥 |
+| `node_ranges[编号].offset_seconds`、`duration_seconds` | 相对基准周期的起点偏移和保存时长，单位秒 |
 
 `QUERY_EVENT` 请求必须填写 `event_id`；`QUERY_ACTIVE_EVENT` 不需要事件编号。事件回复可能包含：
 
@@ -263,6 +294,7 @@ print(json.dumps(reply, ensure_ascii=False, indent=2))
 | `missing_by_server` | 各节点缺包数；键为内部编号，准备后可能出现 |
 | `result_address`、`result_port` | 完成通知目标；不通知时分别为空字符串和 0 |
 | `error` | 暂停等阶段的错误信息，可能缺失或为空 |
+| `reference_period`、`node_ranges`、`node_ranges_omitted` | 逐节点模式的基准周期、各节点 `[起始绝对周期, 周期数]`；超出报文上限时省略范围并标记 |
 
 事件状态依次可能为 `PREPARING`、`PREPARED`、`STORING`、`STORED`、`RELEASING`、`COMPLETED`；异常时可能为 `PAUSED` 或 `CANCELLED`。
 

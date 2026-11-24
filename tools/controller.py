@@ -4,6 +4,7 @@ import argparse
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import os
@@ -23,6 +24,49 @@ REPLAY_TTL_SECONDS = 300
 REPLAY_MAX_ENTRIES = 1024
 DEFAULT_ACQUISITION = 'tianlai'
 COMPLETION_PORT = 19001
+
+
+def normalize_node_ranges(reference_period, configurations, selected_ids,
+                          period_microseconds, integration_per_trace):
+    """Convert per-node second offsets and durations to exact period ranges."""
+    if (type(reference_period) is not int or reference_period < 0 or
+            reference_period >= (1 << 20) * integration_per_trace):
+        raise ValueError('reference_period is outside the acquisition period range')
+    if not isinstance(configurations, dict) or set(configurations) != {
+            str(node_id) for node_id in selected_ids}:
+        raise ValueError('node_ranges must specify every selected server ID')
+
+    def exact_microseconds(value, name):
+        if type(value) not in (int, float):
+            raise ValueError(name + ' must be a JSON number')
+        try:
+            result = Decimal(str(value)) * 1000000
+            if not result.is_finite() or result != result.to_integral_value():
+                raise ValueError(name + ' must resolve to whole microseconds')
+            return int(result)
+        except InvalidOperation:
+            raise ValueError(name + ' must be a finite number')
+
+    result = {}
+    epoch_end = (1 << 20) * integration_per_trace
+    for node_id in selected_ids:
+        settings = configurations[str(node_id)]
+        if not isinstance(settings, dict) or set(settings) != {'offset_seconds', 'duration_seconds'}:
+            raise ValueError('each node range needs offset_seconds and duration_seconds')
+        offset = exact_microseconds(settings['offset_seconds'], 'offset_seconds')
+        duration = exact_microseconds(settings['duration_seconds'], 'duration_seconds')
+        if offset % period_microseconds or duration % period_microseconds:
+            raise ValueError('node range must align with integration periods')
+        if not 100000 <= duration <= MAX_CAPTURE_MICROSECONDS or duration % 100000:
+            raise ValueError('node duration must be 0.1 to 50 seconds in 0.1-second steps')
+        start = reference_period + offset // period_microseconds
+        count = duration // period_microseconds
+        if start < 0 or start + count > epoch_end:
+            raise ValueError('node range exceeds the acquisition period range')
+        if start + count > reference_period:
+            raise ValueError('node range must end at or before reference_period')
+        result[str(node_id)] = [start, count]
+    return result
 
 
 def parse_request(data):
@@ -166,6 +210,10 @@ def _backend_reply(controller, data, peer, cache, generated_request_id=None):
         if str(error) == 'REQUEST_ID_CONFLICT':
             cacheable = False
         reply = dict(status='ERROR', error=str(error)[:350])
+    if 'node_ranges' in reply:
+        # Shared-range fields describe only the first node internally.
+        for field in ('start', 'end_exclusive', 'period_count'):
+            reply.pop(field, None)
     reply.update(version=1, request_id=request_id)
     body = json.dumps(reply, separators=(',', ':')).encode()
     if (len(body) > MAX_CONTROL_BYTES and reply.get('action') in ('START', 'STOP', 'RESTART')
@@ -176,6 +224,10 @@ def _backend_reply(controller, data, peer, cache, generated_request_id=None):
                                      for key, value in reply['nodes'].items()},
                        errors_omitted=True)
         body = json.dumps(compact, separators=(',', ':')).encode()
+    if len(body) > MAX_CONTROL_BYTES and 'node_ranges' in reply:
+        reply.pop('node_ranges')
+        reply['node_ranges_omitted'] = True
+        body = json.dumps(reply, separators=(',', ':')).encode()
     if len(body) > MAX_CONTROL_BYTES:
         body = json.dumps(dict(version=1, request_id=request_id, status='ERROR',
                                error='REPLY_TOO_LARGE'), separators=(',', ':')).encode()
@@ -422,11 +474,40 @@ class Controller:
         event_id = message['event_id']
         if not ID.fullmatch(event_id):
             raise ValueError('invalid event_id')
-        channel_count = None if resume else message.get('channel_count', 384)
+        channel_count = None if resume else 384
         selected_nodes = None
+        node_ranges = None
         if not resume:
-            selected_nodes = self.event_nodes(channel_count, message.get('server_ids'))
-        normalized = None if resume else self.capture_range(message)
+            requested_ids = message.get('server_ids')
+            if 'node_ranges' in message:
+                if not isinstance(message['node_ranges'], dict):
+                    raise ValueError('node_ranges must be an object')
+                if requested_ids is None:
+                    try:
+                        requested_ids = [int(key) for key in message['node_ranges']]
+                    except (TypeError, ValueError):
+                        raise ValueError('node_ranges keys must be server IDs')
+            if requested_ids:
+                if not isinstance(requested_ids, list) or any(type(node_id) is not int for node_id in requested_ids):
+                    raise ValueError('server IDs must be integers')
+                channel_count = 384 if any(node_id >= 11 for node_id in requested_ids) else 288
+            selected_nodes = self.event_nodes(channel_count, requested_ids)
+            if 'node_ranges' in message:
+                if any(key in message for key in ('start', 'duration_ms', 'period_count')):
+                    raise ValueError('node_ranges cannot be combined with a shared range')
+                node_ranges = normalize_node_ranges(
+                    message.get('reference_period'), message['node_ranges'],
+                    [node['server_id'] for node in selected_nodes],
+                    self.period_microseconds, self.integration_per_trace)
+                first_start, first_count = node_ranges[str(selected_nodes[0]['server_id'])]
+                start_obj = dict(trace_period_id=first_start // self.integration_per_trace,
+                                 integration_period_id=first_start % self.integration_per_trace)
+                end = first_start + first_count
+                normalized = (start_obj, first_count,
+                              dict(trace_period_id=end // self.integration_per_trace,
+                                   integration_period_id=end % self.integration_per_trace))
+            else:
+                normalized = self.capture_range(message)
         if not resume and ('result_address' in message or 'result_port' in message):
             raise ValueError('completion endpoint is assigned automatically')
         notify = False if resume else message.get('notify', peer is not None)
@@ -439,7 +520,8 @@ class Controller:
         with self.lock:
             existing = self.events.get(event_id)
             if existing and not resume:
-                if (existing['start'] != normalized[0] or existing['period_count'] != normalized[1] or
+                if (existing.get('node_ranges') != node_ranges or
+                        existing['start'] != normalized[0] or existing['period_count'] != normalized[1] or
                         existing.get('channel_count', 384) != channel_count or
                         existing.get('result_address', '') != result_address or
                         existing.get('result_port', 0) != result_port or
@@ -465,6 +547,9 @@ class Controller:
                     result_address=result_address, result_port=result_port,
                     partial_node_set=len(participant_ids) != expected_count,
                     participating_server_ids=participant_ids)
+                if node_ranges is not None:
+                    self.events[event_id]['node_ranges'] = node_ranges
+                    self.events[event_id]['reference_period'] = message['reference_period']
             self.running = event_id
             try:
                 atomic_json(self.journal / f'{event_id}.json', self.events[event_id])
@@ -481,12 +566,30 @@ class Controller:
             event = self.events[event_id]
             nodes = self.stored_event_nodes(event)
             server_mask = sum(1 << node['server_id'] for node in nodes)
-            states = self.parallel('PREPARE', nodes=nodes, event_id=event_id,
-                                   start=event['start'], period_count=event['period_count'],
-                                   channel_count=event.get('channel_count', 384),
-                                    server_mask=server_mask,
-                                    result_address=event.get('result_address', ''),
-                                    result_port=event.get('result_port', 0))
+            if 'node_ranges' in event and event['status'] == 'PREPARING':
+                with ThreadPoolExecutor(max_workers=len(nodes)) as workers:
+                    snapshots = list(workers.map(self.node_status, nodes))
+                for node, snapshot in zip(nodes, snapshots):
+                    first, count = event['node_ranges'][str(node['server_id'])]
+                    if (not snapshot.get('accept_trigger') or
+                            first < snapshot.get('oldest_period', 0) or
+                            first + count > snapshot.get('settled_end', 0)):
+                        raise ValueError(f"server {node['server_id']}: range not in settled cache")
+            def prepare(node):
+                if 'node_ranges' in event:
+                    absolute, count = event['node_ranges'][str(node['server_id'])]
+                    start = dict(trace_period_id=absolute // self.integration_per_trace,
+                                 integration_period_id=absolute % self.integration_per_trace)
+                else:
+                    start, count = event['start'], event['period_count']
+                return rpc(node, self.acquisition, 'PREPARE', event_id=event_id,
+                           start=start, period_count=count,
+                           channel_count=event.get('channel_count', 384),
+                           server_mask=server_mask,
+                           result_address=event.get('result_address', ''),
+                           result_port=event.get('result_port', 0))
+            with ThreadPoolExecutor(max_workers=len(nodes)) as workers:
+                states = list(workers.map(prepare, nodes))
             missing_by_server = dict(event.get('missing_by_server', {}))
             for index, (node, state) in enumerate(zip(nodes, states)):
                 if state['status'] == 'PREPARING':
@@ -558,6 +661,8 @@ class Controller:
         """Handle backend trigger, query, recovery, and cancellation requests."""
         if type(message.get('version')) is not int or message['version'] != 1:
             raise ValueError('version/acquisition mismatch')
+        if 'channel_count' in message:
+            raise ValueError('channel_count is no longer accepted; use server_ids')
         if message.get('acquisition_id', self.acquisition) != self.acquisition:
             raise ValueError('version/acquisition mismatch')
         if 'acquisition_id' not in message:
@@ -612,8 +717,13 @@ class Controller:
         if command == 'QUERY_STATUS':
             with self.lock:
                 busy = any(e['status'] not in ('COMPLETED', 'CANCELLED') for e in self.events.values())
-            channel_count = message.get('channel_count', 384)
-            nodes = self.event_nodes(channel_count, message.get('server_ids'))
+            requested_ids = message.get('server_ids')
+            if requested_ids and (not isinstance(requested_ids, list) or
+                                  any(type(node_id) is not int for node_id in requested_ids)):
+                raise ValueError('server IDs must be integers')
+            channel_count = (288 if requested_ids and all(node_id < 11 for node_id in requested_ids)
+                             else 384)
+            nodes = self.event_nodes(channel_count, requested_ids)
             with ThreadPoolExecutor(max_workers=len(nodes)) as workers:
                 states = list(workers.map(self.node_status, nodes))
             oldest = max(s.get('oldest_period', 0) for s in states)

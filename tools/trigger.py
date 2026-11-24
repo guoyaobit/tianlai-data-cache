@@ -183,7 +183,9 @@ def capture_request(arguments):
         raise ValueError('duration must contain a whole number of integration periods')
     period_count = duration_ms * 1000 // arguments.period_us
     if arguments.trace is None:
-        status_request = dict(command='QUERY_STATUS', channel_count=arguments.channels)
+        status_request = dict(command='QUERY_STATUS')
+        if arguments.channels == 288:
+            status_request['server_ids'] = list(range(11))
         status = transmit(status_request, arguments)
         if status.get('status') != 'READY' or not status.get('accept_trigger'):
             print_reply(status, 'status', arguments.json)
@@ -206,9 +208,11 @@ def capture_request(arguments):
     print(f'event={event_id} period={absolute_start} start={trace}:{integration} '
           f'duration={arguments.seconds}s channels={arguments.channels}',
           file=sys.stderr)
-    request = dict(command='CAPTURE', event_id=event_id, channel_count=arguments.channels,
+    request = dict(command='CAPTURE', event_id=event_id,
                    start=dict(trace_period_id=trace, integration_period_id=integration),
                    duration_ms=duration_ms, notify=False)
+    if arguments.channels == 288:
+        request['server_ids'] = list(range(11))
     return request
 
 
@@ -247,7 +251,9 @@ def request_from_arguments(arguments):
         if (arguments.action == 'period' and
                 not 1 <= arguments.integration_per_trace <= (1 << 23)):
             raise ValueError('invalid integration periods per trace')
-        request = dict(command='QUERY_STATUS', channel_count=arguments.channels)
+        request = dict(command='QUERY_STATUS')
+        if arguments.channels == 288:
+            request['server_ids'] = list(range(11))
         return request
     if arguments.action == 'capture':
         return capture_request(arguments)
