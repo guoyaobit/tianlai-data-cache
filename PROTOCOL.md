@@ -39,7 +39,7 @@ tltrigger 3 --period 7010000   # 从指定绝对积分周期开始，保存3秒
 tltrigger wait                 # 等待当前未完成事件
 ```
 
-数字命令的单位是秒，支持 0.1～50 秒，步长 0.1 秒，例如 `tltrigger 0.1 --288`；不指定 `--288` 时默认384路。命令自动生成事件编号并选择对应节点。不指定 `--period` 时，自动保存共同缓存中最新、已稳定的数据。
+数字命令的单位是秒，最短一个积分周期、最长 50 秒。时长须为积分周期的整数倍，例如默认每周期 200 微秒时，`tltrigger 0.0006 --288` 保存三个周期。省略 `--288` 时默认 384 路。省略 `--period` 时保存共同缓存中最新的稳定数据。
 
 也可以将以下 JSON 保存为 `trigger.json`，运行 `tltrigger trigger.json`：
 
@@ -83,8 +83,8 @@ tltrigger wait                 # 等待当前未完成事件
 | `command` | 必填，`CAPTURE` | 发起保存 |
 | `server_ids` | 可选 | 内部服务器编号列表；省略时选择所有启用节点 |
 | `start` | 必填 | 起始 trace 与积分周期编号 |
-| `duration_ms` | 与 `period_count` 二选一 | 100～50000 毫秒，100 毫秒的整数倍，且须为整数个积分周期 |
-| `period_count` | 与 `duration_ms` 二选一 | 正整数积分周期数，对应时长须为 0.1～50 秒、0.1 秒的整数倍 |
+| `duration_ms` | 与 `period_count` 二选一 | 1～50000 的整数毫秒数，须为整数个积分周期 |
+| `period_count` | 与 `duration_ms` 二选一 | 正整数积分周期数，所对应时长最多 50 秒 |
 
 触发请求无需填写 `request_id` 或 `event_id`；控制器会生成并在回复中返回。该简化格式需要控制器更新到支持自动生成编号的版本。默认每周期 **200 微秒**，每个 trace 为 **50000 周期**；实际数值以系统配置为准，控制器与缓存节点必须一致。单次最长 50 秒。上例的 3000 毫秒等于 15000 个周期，保存区间为 `[(120,45000), (121,10000))`，不含结束位置。
 
@@ -130,6 +130,24 @@ with socket.create_connection(("172.0.0.142", 18999), timeout=10) as sock:
 
 连接超时不代表触发失败，不要直接重复发送触发。可先查询当前活动事件，但事件如果已经完成而回复中的事件编号也未收到，就无法通过活动事件查询可靠找回结果。如果需要安全重试同一请求，调用方应自行提供唯一的 `request_id` 和 `event_id`，并从同一来源 IP 使用相同编号及完全相同的报文重试。编号使用1～64位 ASCII 字母、数字、下划线或短横线，不同事件不得复用事件编号；控制器的请求重放缓存保留约5分钟。
 
+### 直接填写绝对起止周期
+
+以下完整 JSON 可通过 TCP 提交，或保存为 `capture.json`，再运行 `tltrigger capture.json`。
+
+```json
+{"version":1,"command":"CAPTURE","start_period":7000000,"end_period":7002500,"notify":false}
+```
+
+保存区间为 `[7000000,7002500)`，共 2500 个周期。端点为整数，且结束周期须大于起始周期。使用这两个字段时，省略 `start`、`duration_ms` 和 `period_count`。
+
+用 `server_ids` 选择要保存该区间的服务器。例如只选择 `tianlaistore2`：
+
+```json
+{"version":1,"command":"CAPTURE","server_ids":[1],"start_period":7000000,"end_period":7002500,"notify":false}
+```
+
+内部编号从 0 开始。`[0,1]` 表示前两台服务器保存同一区间，省略该字段时选择默认节点集合。各服务器需要不同区间时，使用下一节的 `node_ranges`。
+
 ### 按缓存服务器设置时间范围
 
 后端提供触发时刻对应的绝对积分周期 `reference_period`。每个服务器单独设置相对该周期的起点偏移 `offset_seconds` 和保存时长 `duration_seconds`，均使用秒，可以为小数。对象键为内部编号：`0` 对应 `tianlaistore1`，`1` 对应 `tianlaistore2`。
@@ -151,9 +169,26 @@ with socket.create_connection(("172.0.0.142", 18999), timeout=10) as sock:
 
 示例只触发两台服务器：第一台保存触发前 2.0～1.5 秒，第二台保存触发前 1.0～0.8 秒。省略 `server_ids` 时，从 `node_ranges` 的键选择服务器；若填写，必须与键完全一致。不能与统一范围的 `start`、`duration_ms` 或 `period_count` 混用。
 
+也可直接填写每台服务器的起止偏移，单位为秒，结束位置不包含在保存区间内。以下写法与上例等效。
+
+```json
+{
+  "version": 1,
+  "command": "CAPTURE",
+  "reference_period": 7010000,
+  "node_ranges": {
+    "0": {"start_offset_seconds": -2.0, "end_offset_seconds": -1.5},
+    "1": {"start_offset_seconds": -1.0, "end_offset_seconds": -0.8}
+  },
+  "notify": false
+}
+```
+
+每台服务器任选一种字段组合。使用 `node_ranges` 时也须省略全局的 `start_period` 和 `end_period`。
+
 触发请求无需填写路数：只选择内部编号 0～10 时按 288 路模式汇总，包含 11～13 时按 384 路模式汇总。完成结果中的 `channel_count` 和 `partial_node_set` 反映该自动选择的模式。只选择前 11 台时，结果按 288 路模式判断完整性。
 
-时长为 0.1～50 秒、步长 0.1 秒；偏移和时长均须对齐积分周期，结束位置不能晚于基准周期。所有区间必须仍在各自节点已稳定的缓存内。控制器接收后异步检查，失败时事件为 `PAUSED`，需查看 `error`；不要将 `PREPARING` 视为已完成。
+逐服务器模式中，保存时长最短为一个积分周期、最长 50 秒，以一个积分周期为步长。默认周期为 200 微秒，可填写 `"duration_seconds": 0.0002` 保存一个周期。偏移也须对齐积分周期，且结束位置不能晚于基准周期。所有区间必须仍在各自节点已稳定的缓存内。控制器接收后异步检查，失败时事件为 `PAUSED`，需查看 `error`；不要将 `PREPARING` 视为已完成。
 
 事件回复中的 `node_ranges` 为各节点的 `[起始绝对周期, 周期数]`。如回复超出报文长度上限，控制器会省略它并标记 `node_ranges_omitted: true`。存储完成时，不同节点范围会在事件结果的 `server_ranges` 中以同样格式记录；如所有节点范围一致，仍使用原有的 `start`、`end_exclusive` 和 `period_count` 字段。
 

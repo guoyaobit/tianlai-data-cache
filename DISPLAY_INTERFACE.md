@@ -10,7 +10,7 @@
 | 仅提交触发 | `tltrigger capture 3 --288 --json` |
 | 启停节点 | `tlcache start 1-3 --json`、`tlcache stop 1-3 --yes --json` |
 
-以上 `3` 是保存 3 秒；`--288` 选择 288 路，省略时选择 384 路。时长范围为 0.1～50 秒，步长 0.1 秒，例如 `tltrigger 0.1 --288 --json`。
+以上 `3` 是保存 3 秒。用 `--288` 选择 288 路，省略时选择 384 路。保存时长以积分周期为步长，最长 50 秒。默认周期为 200 微秒，可用 `tltrigger 0.0002 --288 --json` 保存一个周期。
 
 ## 1. 查看缓存和存储状态
 
@@ -179,7 +179,7 @@ print(json.dumps(reply, ensure_ascii=False, indent=2))
 {"version":1,"command":"CAPTURE","reference_period":7010000,"node_ranges":{"0":{"offset_seconds":-2.0,"duration_seconds":0.5},"1":{"offset_seconds":-1.0,"duration_seconds":0.2}},"notify":false}
 ```
 
-`reference_period` 是后端提供的触发时刻绝对积分周期。`node_ranges` 的键 `0`、`1` 对应 `tianlaistore1`、`tianlaistore2`；起点为基准周期加 `offset_seconds`，`duration_seconds` 是保存时长。结束位置不能晚于基准周期。时长为 0.1～50 秒且以 0.1 秒递增；偏移和时长须对齐积分周期。
+`reference_period` 是后端提供的触发时刻绝对积分周期。`node_ranges` 的键 `0`、`1` 对应 `tianlaistore1`、`tianlaistore2`。将 `offset_seconds` 换算成周期数后加到基准周期，得到保存起点。`duration_seconds` 最短为一个积分周期（默认 0.0002 秒）、最长 50 秒。偏移和时长均须对齐积分周期，保存区间的结束位置不能晚于基准周期。
 
 触发请求不填写路数：只选 1～11 号服务器按 288 路模式汇总，包含 12～14 号时按 384 路模式汇总。
 
@@ -277,10 +277,12 @@ tlcache stop 2 --yes --json
 | `event_id` | 可选；省略时控制器生成；安全重试时应由调用方提供唯一编号 |
 | `server_ids` | 可选的内部节点编号列表；省略时选择所有启用节点，逐节点模式默认采用 `node_ranges` 的键 |
 | `start.trace_period_id`、`start.integration_period_id` | 必填，起始 trace 和 trace 内积分周期 |
-| `duration_ms`、`period_count` | 二选一，时长 0.1～50 秒，步长 0.1 秒，且须为整数个积分周期 |
+| `duration_ms`、`period_count` | 与 `start` 搭配时二选一。分别为整数毫秒数和整数周期数，区间须对齐积分周期且最长 50 秒 |
+| `start_period`、`end_period` | 直接指定绝对起止周期，保存 `[start_period,end_period)`。须同时填写，与其他范围写法互斥 |
 | `notify` | 可选布尔值；`false` 用查询等待；直接 TCP 请求默认主动通知触发连接来源 IP 的 19001 端口 |
 | `reference_period`、`node_ranges` | 可选的逐节点模式：基准绝对周期及节点参数对象；与统一范围字段互斥 |
 | `node_ranges[编号].offset_seconds`、`duration_seconds` | 相对基准周期的起点偏移和保存时长，单位秒 |
+| `node_ranges[编号].start_offset_seconds`、`end_offset_seconds` | 也可直接填写相对基准周期的起止偏移，例如 `-2.0` 和 `-1.5`。单位为秒，结束位置不包含在内 |
 
 `QUERY_EVENT` 请求必须填写 `event_id`；`QUERY_ACTIVE_EVENT` 不需要事件编号。事件回复可能包含：
 

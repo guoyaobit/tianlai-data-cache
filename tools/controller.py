@@ -51,14 +51,21 @@ def normalize_node_ranges(reference_period, configurations, selected_ids,
     epoch_end = (1 << 20) * integration_per_trace
     for node_id in selected_ids:
         settings = configurations[str(node_id)]
-        if not isinstance(settings, dict) or set(settings) != {'offset_seconds', 'duration_seconds'}:
-            raise ValueError('each node range needs offset_seconds and duration_seconds')
-        offset = exact_microseconds(settings['offset_seconds'], 'offset_seconds')
-        duration = exact_microseconds(settings['duration_seconds'], 'duration_seconds')
+        if not isinstance(settings, dict):
+            raise ValueError('each node range must be an object')
+        if set(settings) == {'offset_seconds', 'duration_seconds'}:
+            offset = exact_microseconds(settings['offset_seconds'], 'offset_seconds')
+            duration = exact_microseconds(settings['duration_seconds'], 'duration_seconds')
+        elif set(settings) == {'start_offset_seconds', 'end_offset_seconds'}:
+            offset = exact_microseconds(settings['start_offset_seconds'], 'start_offset_seconds')
+            end_offset = exact_microseconds(settings['end_offset_seconds'], 'end_offset_seconds')
+            duration = end_offset - offset
+        else:
+            raise ValueError('use offset_seconds and duration_seconds, or start_offset_seconds and end_offset_seconds')
         if offset % period_microseconds or duration % period_microseconds:
             raise ValueError('node range must align with integration periods')
-        if not 100000 <= duration <= MAX_CAPTURE_MICROSECONDS or duration % 100000:
-            raise ValueError('node duration must be 0.1 to 50 seconds in 0.1-second steps')
+        if not period_microseconds <= duration <= MAX_CAPTURE_MICROSECONDS:
+            raise ValueError('node duration must be between one integration period and 50 seconds')
         start = reference_period + offset // period_microseconds
         count = duration // period_microseconds
         if start < 0 or start + count > epoch_end:
@@ -443,6 +450,16 @@ class Controller:
 
     def capture_range(self, message):
         """Validate the trigger start and length, then return the period count and exclusive end position."""
+        if 'start_period' in message or 'end_period' in message:
+            if any(field in message for field in ('start', 'period_count', 'duration_ms')):
+                raise ValueError('absolute endpoints cannot be combined with start or duration')
+            first, end = message.get('start_period'), message.get('end_period')
+            if type(first) is not int or type(end) is not int or not 0 <= first < end:
+                raise ValueError('provide integer periods with 0 <= start_period < end_period')
+            trace, integration = divmod(first, self.integration_per_trace)
+            return self.capture_range(dict(
+                start=dict(trace_period_id=trace, integration_period_id=integration),
+                period_count=end - first))
         start = message['start']
         if not isinstance(start, dict):
             raise ValueError('start must be an object')
@@ -454,13 +471,13 @@ class Controller:
             raise ValueError('provide exactly one of period_count or duration_ms')
         if 'duration_ms' in message:
             duration = message['duration_ms']
-            if type(duration) is not int or duration < 100 or duration % 100 or duration * 1000 % self.period_microseconds:
-                raise ValueError('duration_ms must be a multiple of 100 ms and whole integration periods')
+            if (type(duration) is not int or duration <= 0 or
+                    duration * 1000 % self.period_microseconds):
+                raise ValueError('duration_ms must be a positive integer aligned to integration periods')
             count = duration * 1000 // self.period_microseconds
         else:
             count = message['period_count']
         if (type(count) is not int or count < 1 or
-                (count * self.period_microseconds) % 100000 or
                 count * self.period_microseconds > MAX_CAPTURE_MICROSECONDS or
                 trace * self.integration_per_trace + integration + count > (1 << 20) * self.integration_per_trace):
             raise ValueError('invalid trigger range')
@@ -493,7 +510,8 @@ class Controller:
                 channel_count = 384 if any(node_id >= 11 for node_id in requested_ids) else 288
             selected_nodes = self.event_nodes(channel_count, requested_ids)
             if 'node_ranges' in message:
-                if any(key in message for key in ('start', 'duration_ms', 'period_count')):
+                if any(key in message for key in ('start', 'duration_ms', 'period_count',
+                                                  'start_period', 'end_period')):
                     raise ValueError('node_ranges cannot be combined with a shared range')
                 node_ranges = normalize_node_ranges(
                     message.get('reference_period'), message['node_ranges'],

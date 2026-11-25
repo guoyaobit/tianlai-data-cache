@@ -85,7 +85,7 @@ def create_parser():
                         help='print the complete JSON reply')
 
     capture = actions.add_parser('capture', help='save the latest settled data')
-    capture.add_argument('seconds', help='duration in seconds (0.1-50, steps of 0.1)')
+    capture.add_argument('seconds', help='duration in seconds (up to 50, whole integration periods)')
     add_channel_options(capture)
     capture.add_argument('--event-id', help=argparse.SUPPRESS)
     capture.add_argument('--period', dest='start_period', type=int,
@@ -163,11 +163,10 @@ def capture_request(arguments):
         if isinstance(arguments.seconds, bool):
             raise ValueError('invalid seconds')
         seconds = Decimal(str(arguments.seconds))
-        if not seconds.is_finite() or not Decimal('0.1') <= seconds <= MAX_CAPTURE_SECONDS or seconds % Decimal('0.1'):
-            raise ValueError('seconds must be 0.1 to 50 in steps of 0.1')
+        if not seconds.is_finite() or not 0 < seconds <= MAX_CAPTURE_SECONDS:
+            raise ValueError('invalid seconds')
     except (InvalidOperation, ValueError):
-        raise ValueError('seconds must be 0.1 to 50 in steps of 0.1')
-    duration_ms = int(seconds * 1000)
+        raise ValueError('seconds must be greater than 0 and at most 50')
     if (arguments.trace is None) != (arguments.integration is None):
         raise ValueError('--trace and --integration must be used together')
     if arguments.start_period is not None and arguments.trace is not None:
@@ -179,9 +178,12 @@ def capture_request(arguments):
             not 1 <= arguments.integration_per_trace <= (1 << 23)):
         raise ValueError('invalid acquisition timing')
 
-    if duration_ms * 1000 % arguments.period_us:
+    microseconds = seconds * 1000000
+    if microseconds % arguments.period_us:
         raise ValueError('duration must contain a whole number of integration periods')
-    period_count = duration_ms * 1000 // arguments.period_us
+    period_count = int(microseconds // arguments.period_us)
+    if period_count < 1:
+        raise ValueError('duration must be at least one integration period')
     if arguments.trace is None:
         status_request = dict(command='QUERY_STATUS')
         if arguments.channels == 288:
@@ -210,7 +212,7 @@ def capture_request(arguments):
           file=sys.stderr)
     request = dict(command='CAPTURE', event_id=event_id,
                    start=dict(trace_period_id=trace, integration_period_id=integration),
-                   duration_ms=duration_ms, notify=False)
+                   period_count=period_count, notify=False)
     if arguments.channels == 288:
         request['server_ids'] = list(range(11))
     return request
