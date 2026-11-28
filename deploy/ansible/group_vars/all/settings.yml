@@ -4,7 +4,7 @@
 ansible_user: ubuntu
 # Disable scheduled APT updates on Debian-family deployment targets.
 tianlai_disable_apt_auto_updates: true
-# Require this running kernel series on cache nodes during full deployment.
+# Default target kernel series for the optional cache kernel playbook.
 tianlai_cache_kernel_series: '5.15'
 # Install root on target servers.
 tianlai_root: /opt/tianlai-store

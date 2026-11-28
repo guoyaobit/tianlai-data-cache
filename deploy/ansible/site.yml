@@ -92,25 +92,6 @@
       loop: "{{ (groups['controller'] + groups['storage'] + groups['display']) | unique }}"
       run_once: true
 
-- name: Verify the cache kernel before changing network configuration
-  hosts: cache_nodes
-  gather_facts: false
-  any_errors_fatal: true
-  tasks:
-    - name: Read the running kernel release
-      ansible.builtin.command:
-        argv: [uname, -r]
-      register: tianlai_running_kernel
-      changed_when: false
-      check_mode: false
-    - name: Require the configured cache kernel series
-      ansible.builtin.assert:
-        that:
-          - tianlai_running_kernel.stdout.startswith((tianlai_cache_kernel_series | string) ~ '.')
-        fail_msg: >-
-          {{ inventory_hostname }} is running {{ tianlai_running_kernel.stdout }}.
-          Boot Linux {{ tianlai_cache_kernel_series }}.x before running the full deployment.
-
 - name: Configure cache data IPs and jumbo MTU with Netplan
   hosts: "cache_nodes:storage:controller"
   gather_facts: false
