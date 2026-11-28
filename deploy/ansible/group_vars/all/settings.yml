@@ -2,6 +2,8 @@
 # Replace every CHANGE_ME value before deployment.
 # SSH account shared by all target servers.
 ansible_user: ubuntu
+# Global DNS servers for systemd-resolved. An empty list skips DNS setup.
+tianlai_dns_servers: ['223.5.5.5', '223.6.6.6']
 # Disable scheduled APT updates on Debian-family deployment targets.
 tianlai_disable_apt_auto_updates: true
 # Default target kernel series for the optional cache kernel playbook.

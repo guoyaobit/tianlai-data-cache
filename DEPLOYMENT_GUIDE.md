@@ -21,6 +21,10 @@
 
 ## 2. 部署前准备
 
+完整部署为缓存、存储和显控节点配置全局 DNS，默认使用阿里公共 DNS `223.5.5.5` 和 `223.6.6.6`。节点须已启用 `systemd-resolved`，并由它管理 `/etc/resolv.conf`。在 YAML inventory 中可用 `tianlai_dns_servers: ['223.5.5.5', '223.6.6.6']` 覆盖默认列表，填 `[]` 跳过本次设置。现场需解析内部域名时填入现场 DNS。
+
+在 `deploy/ansible` 目录运行 `ansible-playbook -i inventory.yml --ask-become-pass configure_dns.yml` 可单独应用 DNS。应用后用 `resolvectl dns` 查看全局地址，再用 `resolvectl query archive.ubuntu.com` 验证解析。软件更新流程沿用现有 DNS。
+
 需要将缓存节点切换到 Linux 5.15.x 时，进入 `deploy/ansible` 后可单独设置 GRUB 默认启动项，例如先切换一台：
 
 ```bash

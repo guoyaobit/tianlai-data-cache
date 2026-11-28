@@ -1,0 +1,49 @@
+---
+- name: Configure DNS on Tianlai nodes
+  hosts: "cache_nodes:storage:controller:display"
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Configure the system resolver
+      when: tianlai_dns_servers | length > 0
+      block:
+        - name: Validate the DNS server addresses
+          ansible.builtin.command:
+            argv: "{{ ['/usr/bin/python3', '-c', 'import ipaddress, sys; list(map(ipaddress.ip_address, sys.argv[1:]))'] + tianlai_dns_servers }}"
+          changed_when: false
+          check_mode: false
+        - name: Verify that systemd-resolved is active
+          ansible.builtin.command:
+            argv: [systemctl, is-active, systemd-resolved.service]
+          changed_when: false
+          check_mode: false
+        - name: Read the system resolver link
+          ansible.builtin.stat:
+            path: /etc/resolv.conf
+          register: tianlai_resolv_conf
+        - name: Verify that resolv.conf uses systemd-resolved
+          ansible.builtin.assert:
+            that:
+              - tianlai_resolv_conf.stat.lnk_source | default('') in ['/run/systemd/resolve/stub-resolv.conf', '/run/systemd/resolve/resolv.conf']
+            fail_msg: Configure this host to use systemd-resolved before applying the Tianlai DNS settings.
+        - name: Create the resolver drop-in directory
+          ansible.builtin.file:
+            path: /etc/systemd/resolved.conf.d
+            state: directory
+            mode: '0755'
+        - name: Set the global DNS servers
+          ansible.builtin.copy:
+            dest: /etc/systemd/resolved.conf.d/90-tianlai-dns.conf
+            owner: root
+            group: root
+            mode: '0644'
+            content: |
+              [Resolve]
+              DNS=
+              DNS={{ tianlai_dns_servers | join(' ') }}
+          notify: Restart systemd-resolved
+  handlers:
+    - name: Restart systemd-resolved
+      ansible.builtin.systemd:
+        name: systemd-resolved.service
+        state: restarted

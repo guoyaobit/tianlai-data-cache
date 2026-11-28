@@ -92,6 +92,8 @@
       loop: "{{ (groups['controller'] + groups['storage'] + groups['display']) | unique }}"
       run_once: true
 
+- ansible.builtin.import_playbook: configure_dns.yml
+
 - name: Configure cache data IPs and jumbo MTU with Netplan
   hosts: "cache_nodes:storage:controller"
   gather_facts: false
