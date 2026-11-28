@@ -31,11 +31,6 @@
       changed_when: >-
         'Nothing to be done' not in storage_update_build.stdout and
         'is up to date' not in storage_update_build.stdout
-    - name: Update storage receiver configuration
-      ansible.builtin.template:
-        src: templates/storage.yaml.j2
-        dest: "{{ tianlai_root }}/config/storage.yaml"
-        mode: '0640'
     - name: Validate updated storage receiver
       ansible.builtin.command:
         argv:
@@ -69,9 +64,6 @@
             name: tianlai-storage.service
             state: started
           when: storage_was_running
-    - name: Apply safe storage permissions
-      ansible.builtin.include_tasks: tasks/install_permissions.yml
-
 - name: Update cache-node programs
   hosts: cache_nodes
   gather_facts: false
@@ -95,118 +87,11 @@
       ansible.builtin.assert:
         that: cache_deployment_files.results | map(attribute='stat.exists') | min
         fail_msg: Run deploy.sh once before using update_software.sh.
-    - name: Create persistent cache log directory
-      ansible.builtin.file:
-        path: "{{ tianlai_cache_log_file | dirname }}"
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
-    - name: Read deployed cache configuration
-      ansible.builtin.slurp:
-        src: "{{ tianlai_root }}/config/server.yaml"
-      register: deployed_cache_configuration
-    - name: Derive cache data-network values
-      ansible.builtin.include_tasks: tasks/cache_send_facts.yml
-    - name: Require the configured send interface to be deployed
-      ansible.builtin.assert:
-        that:
-          - (deployed_cache_configuration.content | b64decode | from_yaml).sendEthName == tianlai_send_interface
-        fail_msg: "Run the full deployment for {{ inventory_hostname }} to apply the transmit interface change before updating software."
-    - name: Read receive devices from deployed cache configuration
-      ansible.builtin.set_fact:
-        tianlai_service_receive_devices: >-
-          {{ (deployed_cache_configuration.content | b64decode) |
-          regex_findall('(?m)^deviceName[0-9]+:[ \t]+"([0-9A-Fa-f:.]+)"') }}
-    - name: Require all receive devices for cache service update
-      ansible.builtin.assert:
-        that:
-          - tianlai_service_receive_devices | length == (8 if tianlai_server_id | int < 3 else 4)
-          - tianlai_service_receive_devices | unique | list | length == tianlai_service_receive_devices | length
-        fail_msg: The deployed server.yaml does not contain the expected receive PCI devices.
-    - name: Resolve the send interface PCI address during software update
-      ansible.builtin.script:
-        cmd: "files/map_interfaces_to_pci.py {{ tianlai_send_interface }}"
-        executable: /usr/bin/python3
-      register: update_send_device_raw
-      changed_when: false
-    - name: Decode the send interface PCI address during software update
-      ansible.builtin.set_fact:
-        update_send_device_report: "{{ update_send_device_raw.stdout | from_json }}"
-      changed_when: false
-    - name: Require one valid send PCI device during software update
-      ansible.builtin.assert:
-        that:
-          - update_send_device_report.missing_interfaces | length == 0
-          - update_send_device_report.invalid_interfaces | length == 0
-          - update_send_device_report.pci_addresses | length == 1
-        fail_msg: "Cannot resolve send interface {{ tianlai_send_interface }} to one PCI device."
-    - name: Assign dedicated receive and send CPUs during software update
-      ansible.builtin.script:
-        cmd: >-
-          files/assign_receive_cpus.py
-          --reserve-cores-per-node {{ tianlai_receive_reserved_cores_per_numa | int }}
-          --send-pci {{ update_send_device_report.pci_addresses[0] }}
-          --send-core-count 2
-          {{ tianlai_service_receive_devices | join(' ') }}
-        executable: /usr/bin/python3
-      register: update_cpu_assignment_raw
-      changed_when: false
-    - name: Decode dedicated CPUs during software update
-      ansible.builtin.set_fact:
-        tianlai_receive_cpu_ids: "{{ (update_cpu_assignment_raw.stdout | from_json).cpu_ids }}"
-        tianlai_send_cpu_ids: "{{ (update_cpu_assignment_raw.stdout | from_json).send_cpu_ids }}"
-      changed_when: false
-    - name: Require unique dedicated CPUs during software update
-      ansible.builtin.assert:
-        that:
-          - tianlai_receive_cpu_ids | length == tianlai_service_receive_devices | length
-          - tianlai_receive_cpu_ids | unique | list | length == tianlai_receive_cpu_ids | length
-          - tianlai_send_cpu_ids | length == 2
-          - tianlai_send_cpu_ids | unique | list | length == 2
-          - tianlai_send_cpu_ids | intersect(tianlai_receive_cpu_ids) | length == 0
-    - name: Update cache service unit
-      ansible.builtin.template:
-        src: templates/cache.service.j2
-        dest: /etc/systemd/system/tianlai-cache.service
-        mode: '0644'
-      vars:
-        tianlai_receive_devices: "{{ tianlai_service_receive_devices }}"
-    - name: Create cache memory mountpoint during software update
-      ansible.builtin.file:
-        path: /run/tianlai
-        state: directory
-        mode: '0700'
-    - name: Install cache memory mount unit during software update
-      ansible.builtin.template:
-        src: templates/run-tianlai.mount.j2
-        dest: /etc/systemd/system/run-tianlai.mount
-        mode: '0644'
-    - name: Start cache memory mount during software update
-      ansible.builtin.systemd:
-        name: run-tianlai.mount
-        daemon_reload: true
-        enabled: true
-        state: started
     - name: Install cache memory release helper during software update
       ansible.builtin.copy:
         src: files/release_cache_memory.sh
         dest: /usr/local/sbin/tianlai-release-memory
         mode: '0755'
-    - name: Remove obsolete cache memory override
-      ansible.builtin.file:
-        path: /etc/systemd/system/tianlai-cache.service.d/10-memory.conf
-        state: absent
-    - name: Verify updated cache service unit
-      ansible.builtin.command:
-        argv:
-          - systemd-analyze
-          - verify
-          - /etc/systemd/system/tianlai-cache.service
-      changed_when: false
-    - name: Reload updated cache service unit
-      ansible.builtin.systemd:
-        daemon_reload: true
     - name: Check configured ixcap SDK paths
       ansible.builtin.stat:
         path: "{{ item }}"
@@ -256,43 +141,14 @@
         dest: "{{ tianlai_root }}/tools/{{ item }}"
         mode: '0755'
       loop: [cache_status.py, cache_manager.py, durable_json.py, tcp_json.py]
-    - name: Install cache service manager unit during software update
-      ansible.builtin.template:
-        src: templates/cache-manager.service.j2
-        dest: /etc/systemd/system/tianlai-cache-manager.service
-        mode: '0644'
     - name: Restart cache service manager with updated code
-      ansible.builtin.systemd:
-        name: tianlai-cache-manager.service
-        daemon_reload: true
-        enabled: true
-        state: restarted
+      ansible.builtin.command:
+        argv: [systemctl, try-restart, tianlai-cache-manager.service]
     - name: Update receive-NIC ixgbe restore helper
       ansible.builtin.copy:
         src: files/rebind_ixgbe.sh
         dest: /usr/local/sbin/tianlai-rebind-ixgbe
         mode: '0755'
-    - name: Update tlcache on cache nodes
-      ansible.builtin.include_tasks: tasks/install_tlcache.yml
-    - name: Update receive CPU IDs in the deployed cache configuration
-      ansible.builtin.lineinfile:
-        path: "{{ tianlai_root }}/config/server.yaml"
-        regexp: "^cpuId{{ item }}:"
-        line: "cpuId{{ item }}: {{ tianlai_receive_cpu_ids[item] }}  # NUMA-local physical CPU."
-      loop: "{{ range(0, tianlai_receive_cpu_ids | length) | list }}"
-    - name: Update dedicated send CPU IDs in the deployed cache configuration
-      ansible.builtin.lineinfile:
-        path: "{{ tianlai_root }}/config/server.yaml"
-        regexp: "^sendCpuId{{ item }}:"
-        insertafter: "{{ '^sendEthName:' if item == 0 else '^sendCpuId0:' }}"
-        line: "sendCpuId{{ item }}: {{ tianlai_send_cpu_ids[item] }}  # Dedicated physical CPU for storage lane {{ item }}."
-      loop: [0, 1]
-    - name: Enable persistent rotating cache log
-      ansible.builtin.lineinfile:
-        path: "{{ tianlai_root }}/config/server.yaml"
-        regexp: '^logFilePath:'
-        insertafter: '^controlPort:'
-        line: 'logFilePath: {{ tianlai_cache_log_file | to_json }}  # Rotating file; stderr uses journald.'
     - name: Build updated cache program
       ansible.builtin.command:
         argv:
@@ -317,11 +173,9 @@
           - "{{ tianlai_root }}/config/recv.yaml"
           - --check-config
       changed_when: false
-    - name: Stop and disable cache before replacement
+    - name: Stop cache before replacement
       ansible.builtin.systemd:
         name: tianlai-cache.service
-        daemon_reload: true
-        enabled: false
         state: stopped
     - name: Install updated cache program
       ansible.builtin.copy:
@@ -329,30 +183,6 @@
         src: "{{ tianlai_root }}/src/{{ tianlai_profile }}/tianlai-store-{{ tianlai_profile | lower }}"
         dest: "{{ tianlai_root }}/bin/tianlai-store-{{ tianlai_profile | lower }}"
         mode: '0755'
-    - name: Increase cache storage block size
-      ansible.builtin.lineinfile:
-        path: "{{ tianlai_root }}/config/recv.yaml"
-        regexp: '^chunkPeriods:'
-        line: 'chunkPeriods: 128  # Integration periods per storage block (1-128).'
-    - name: Enable reusable cache memory
-      ansible.builtin.lineinfile:
-        path: "{{ tianlai_root }}/config/recv.yaml"
-        regexp: '^sharedMemoryDirectory:'
-        line: 'sharedMemoryDirectory: /run/tianlai  # Reuse payload pages after process restart.'
-    - name: Keep cache disabled and stopped after update
-      ansible.builtin.systemd:
-        name: tianlai-cache.service
-        daemon_reload: true
-        enabled: false
-        state: stopped
-    - name: Restore receive NICs to ixgbe after update
-      ansible.builtin.command:
-        argv: >-
-          {{ ['/usr/local/sbin/tianlai-rebind-ixgbe', 'success'] + tianlai_service_receive_devices }}
-      changed_when: true
-    - name: Apply safe cache permissions
-      ansible.builtin.include_tasks: tasks/install_permissions.yml
-
 - name: Update trigger controller program
   hosts: controller
   gather_facts: false
@@ -428,10 +258,6 @@
         src: "{{ playbook_dir }}/../../DEDISPERSION_BACKEND_GUIDE.md"
         dest: "{{ tianlai_root }}/docs/DEDISPERSION_BACKEND_GUIDE.md"
         mode: '0640'
-    - name: Apply safe controller permissions
-      ansible.builtin.include_tasks: tasks/install_permissions.yml
-    - name: Update tlcache on controller
-      ansible.builtin.include_tasks: tasks/install_tlcache.yml
     - name: Update tltrigger command
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../tools/trigger.py"
@@ -467,12 +293,8 @@
         src: "{{ playbook_dir }}/../../DEDISPERSION_BACKEND_GUIDE.md"
         dest: "{{ tianlai_root }}/docs/DEDISPERSION_BACKEND_GUIDE.md"
         mode: '0640'
-    - name: Update tlcache on display node
-      ansible.builtin.include_tasks: tasks/install_tlcache.yml
     - name: Update tltrigger command
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../tools/trigger.py"
         dest: /usr/local/bin/tltrigger
         mode: '0755'
-    - name: Apply safe display client permissions
-      ansible.builtin.include_tasks: tasks/install_permissions.yml

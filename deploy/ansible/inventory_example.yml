@@ -42,7 +42,7 @@ all:
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.129"
           # Single physical interface and its untagged data-subnet address.
-          tianlai_send_interface: eth0
+          tianlai_send_interface: ens2f0
           tianlai_send_ip: "192.168.210.101"
           # Auto-discovers 8 Intel ixcap PCI devices without Linux netdevs.
           tianlai_receive_devices: auto

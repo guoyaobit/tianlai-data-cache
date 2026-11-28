@@ -146,7 +146,7 @@ tlcache stop all --yes
 
 显控节点使用不同的sudo密码。运行统一部署或更新脚本时，先输入`tianlaiview`的sudo密码，再在Ansible提示中输入其他服务器的sudo密码；两种密码均不写入仓库。
 
-软件更新完成后，缓存节点的`tianlai-cache.service`统一保持禁用和停止，接收网卡恢复到ixgbe驱动；需要开始采集时再执行`tlcache start`。缓存管理服务保持运行，因此状态查询和远程启停仍然可用。
+软件更新保留服务器的应用配置、网络配置、systemd 单元及开机启动设置。缓存服务在替换程序前停止，需恢复采集时执行 `tlcache start`。原本运行中的缓存管理服务会重启以加载新代码。
 此时直接运行`tltrigger`会返回`STOPPED`及各节点状态，而不是TCP超时；启动后预热期间返回`BUSY_OR_WARMING`，全部节点可触发后才返回`READY`。
 
 脚本使用`ubuntu`账户并通过SSH交互认证，不保存密码。部署后在显控节点可执行`tlcache`、`tlcache --watch 2`、`tlcache period`以及缓存服务启停命令。
