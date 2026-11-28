@@ -106,6 +106,13 @@
       ansible.builtin.slurp:
         src: "{{ tianlai_root }}/config/server.yaml"
       register: deployed_cache_configuration
+    - name: Derive cache data-network values
+      ansible.builtin.include_tasks: tasks/cache_send_facts.yml
+    - name: Require the configured send interface to be deployed
+      ansible.builtin.assert:
+        that:
+          - (deployed_cache_configuration.content | b64decode | from_yaml).sendEthName == tianlai_send_interface
+        fail_msg: "Run the full deployment for {{ inventory_hostname }} to apply the transmit interface change before updating software."
     - name: Read receive devices from deployed cache configuration
       ansible.builtin.set_fact:
         tianlai_service_receive_devices: >-

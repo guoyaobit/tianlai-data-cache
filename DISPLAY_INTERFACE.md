@@ -163,7 +163,7 @@ print(json.dumps(reply, ensure_ascii=False, indent=2))
 | 查询当前事件 | `{"version":1,"command":"QUERY_ACTIVE_EVENT"}` |
 | 启动前三台 | `{"version":1,"command":"CACHE_SERVICE","action":"START","server_ids":[0,1,2]}` |
 
-控制器的状态查询不包含每个网口详情；需要该信息时使用第 1 节的 `tlcache --json`。服务启停接口仅接受授权来源，显控节点默认地址为 `172.0.0.61`。
+控制器的状态查询不包含每个网口详情；需要该信息时使用第 1 节的 `tlcache --json`。服务启停接口仅接受授权来源，显控节点默认地址为 `172.0.0.1`。
 
 直接触发 3 秒 288 路数据的正文：
 

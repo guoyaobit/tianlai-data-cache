@@ -70,7 +70,7 @@ assert 'Update cache status tool' in UPDATE
 cache_tool = (ROOT / 'tools/cache_status.py').read_text(encoding='utf-8')
 inventory = (ROOT / 'deploy/ansible/inventory_example.yml').read_text(encoding='utf-8')
 assert 'from tcp_json' not in cache_tool
-assert 'display:' in inventory and 'ansible_host: "172.0.0.61"' in inventory
+assert 'display:' in inventory and 'ansible_host: "172.0.0.1"' in inventory
 assert 'Install display-node management clients' in SITE
 assert 'Update display-node management clients' in UPDATE
 assert 'tianlai-cache-manager.service' in SITE

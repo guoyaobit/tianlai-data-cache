@@ -20,7 +20,7 @@ all:
     tianlai_storage_io_threads: 2
   children:
     cache_nodes:
-      # ens2f0 and 192.168.210.100-113 are derived from server ID during deployment.
+      # The transmit interface is set per host. Data IPs are derived from server ID.
       hosts:
         tianlaistore1:
           # Host IP used by Ansible over SSH.
@@ -42,7 +42,7 @@ all:
           # Cache-node management IP for control commands.
           tianlai_control_ip: "172.0.0.129"
           # Single physical interface and its untagged data-subnet address.
-          tianlai_send_interface: ens2f0
+          tianlai_send_interface: eth0
           tianlai_send_ip: "192.168.210.101"
           # Auto-discovers 8 Intel ixcap PCI devices without Linux netdevs.
           tianlai_receive_devices: auto
@@ -203,4 +203,4 @@ all:
       hosts:
         tianlaiview:
           # Display/control workstation managed over the management network.
-          ansible_host: "172.0.0.61"
+          ansible_host: "172.0.0.1"

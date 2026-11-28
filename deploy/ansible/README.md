@@ -1,6 +1,6 @@
 # Ansible 部署
 
-`site.yml` 在 Debian/Ubuntu 系的systemd主机上部署14台缓存节点、同机运行的存储接收器/控制器及显控节点管理客户端；不部署消色散后端，也不配置交换机、管理网地址、存储服务器100G地址、磁盘阵列或ixcap。它会通过Netplan配置缓存节点`ens2f0`数据地址，并把缓存/存储节点上速率大于1 Gb/s的物理Linux网口设置为MTU 9000；不会修改显控节点网络配置。此脚本尚需在目标环境进行端到端验证。
+`site.yml` 在 Debian/Ubuntu 系的systemd主机上部署14台缓存节点、同机运行的存储接收器/控制器及显控节点管理客户端；不部署消色散后端，也不配置交换机、管理网地址、存储服务器100G地址、磁盘阵列或ixcap。它会通过Netplan配置缓存节点发送口的数据地址，并把缓存/存储节点上速率大于1 Gb/s的物理Linux网口设置为MTU 9000；不会修改显控节点网络配置。此脚本尚需在目标环境进行端到端验证。
 
 ## 前提和清单
 
@@ -8,13 +8,13 @@
 - 生产版缓存程序需要 `ixcap_lib.h` 和 `libixcap.a` 或 `libixcap.so`。部署优先检查清单中的 `tianlai_ixcap_include`、`tianlai_ixcap_lib`，找不到时自动搜索 `/usr/local`、`/usr`、`/opt` 和部署账户主目录。源码和配置会先复制，再执行SDK检查和编译；SDK确实不存在时源码仍保留在 `/opt/tianlai-store/src`，但生产程序无法编译。
 - ixcap尚未安装时，在Ansible master准备三个已解压的SDK文件和许可证TAR包，然后运行 [`deploy/ansible/deploy_ixcap.sh`](deploy_ixcap.sh) 统一安装SDK、MAC许可证和systemd大页服务；无需解压或指定SDK ZIP。详细说明见 [`deploy/ixcap/README.md`](../ixcap/README.md)。
 - 真实地址、链路、网卡 PCI 地址、光模块、驱动、NUMA、交换机 Jumbo Frame 及存储挂载由现场先完成验证。`tianlai_storage_directory` 必须指向目标机已有且正确挂载的存储路径下的目录；脚本只创建目录，不验证其所在磁盘或容量。
-- 清单可使用 YAML 或 INI：复制 `inventory_example.yml` 为 `inventory.yml`，或复制 `inventory_example.ini` 为 `inventory.ini`。两份示例都包含缓存服务器1～14（节点0～13）、同机部署的存储/控制器，以及`172.0.0.61`显控节点；选择一种维护即可。须现场核对SSH地址。`tianlai_receive_devices: auto`以`ens2f0`所在Intel双口万兆卡的PCI厂商/设备ID为基准，排除该发送卡的整个PCI插槽，再选择其他同型号端口；候选端口允许存在Linux网口，也允许尚未加载驱动。节点1～3必须发现8个，固定顺序为`ens4f0、ens4f1、ens5f0、ens5f1、ens1f0、ens1f1、ens3f0、ens3f1`；节点4～11必须发现4个，固定顺序为`ens4f0、ens4f1、ens5f0、ens5f1`。部署会把名称解析成PCI地址，并校验名称集合与自动发现结果完全一致。节点12～14暂时继续按PCI地址排序。也可把`auto`替换为按端口顺序排列的PCI地址列表。缓存节点发送口统一为`ens2f0`，地址根据server ID自动生成，无需逐台填写。`controller`与`storage`组必须使用同一个存储服务器主机名。
+- 清单可使用 YAML 或 INI：复制 `inventory_example.yml` 为 `inventory.yml`，或复制 `inventory_example.ini` 为 `inventory.ini`。两份示例都包含缓存服务器1～14（节点0～13）、同机部署的存储/控制器，以及`172.0.0.1`显控节点；选择一种维护即可。须现场核对SSH地址。`tianlai_receive_devices: auto`以配置的发送口所在Intel双口万兆卡的PCI厂商/设备ID为基准，排除该发送卡的整个PCI插槽，再选择其他同型号端口；候选端口允许存在Linux网口，也允许尚未加载驱动。节点1～3必须发现8个，固定顺序为`ens4f0、ens4f1、ens5f0、ens5f1、ens1f0、ens1f1、ens3f0、ens3f1`；节点4～11必须发现4个，固定顺序为`ens4f0、ens4f1、ens5f0、ens5f1`。部署会把名称解析成PCI地址，并校验名称集合与自动发现结果完全一致。节点12～14暂时继续按PCI地址排序。也可把`auto`替换为按端口顺序排列的PCI地址列表。缓存节点发送口默认是`ens2f0`，`tianlaistore2`使用`eth0`，地址根据server ID自动生成，无需逐台填写。`controller`与`storage`组必须使用同一个存储服务器主机名。
 - 缓存节点单个发送接口/源IP由 server ID 自动生成；清单只需填写存储100G口上的单个无标签IP。存储服务器固定使用 `enp152s0f0np0` 接收14台缓存节点的数据。不配置VLAN，数据接口不设置默认网关；管理网仍使用`tianlai_controller_ip`。
 - 数据网口不要求物理链路处于UP状态。部署会为缓存发送口、存储100G口和已识别的高速数据口设置NetworkManager `ignore-carrier`，因此光纤暂未连接时仍可写入静态IP、MTU和代码。管理网SSH必须可达，否则Ansible无法向该节点传输文件；恢复后可用 `--limit` 单独重跑失败节点。
 - 消色散后端IP不写入部署配置。控制器使用`CAPTURE`触发TCP连接的真实来源IP，存储服务向该IP的固定端口19001发送`CAPTURE_RESULT`，后端持久化后在同一连接回复`ACK_RESULT`；外部请求不填写回调地址或端口。`tltrigger`内部关闭回调并通过`QUERY_EVENT`等待。`tianlai_result_bind_ip`默认使用`0.0.0.0`，由系统路由选择本地源地址。
 - 管理网需放通缓存节点、存储节点和显控节点→控制器TCP 18999、控制器→缓存节点TCP 19000和管理端口19002、存储服务器→后端TCP 19001；实际端口以清单为准。19002只接受控制器IP。
 - 当前规划中状态查询和触发控制统一使用管理网：缓存节点为 `172.0.0.128～141`，控制器/存储服务器为 `172.0.0.142`。触发控制器接受所有能够连接其管理地址的来源，可从任意缓存节点、存储节点或消色散后端发送命令。消色散后端IP不固定，存储数据地址为 `192.168.210.250`，默认落盘根目录为 `/data`。
-- 显控节点`172.0.0.61`作为inventory中的`display`角色由Ansible管理。`deploy.sh`和`update_software.sh`会同时更新控制器及显控节点上的`tlcache`、`tltrigger`；显控节点不参与Netplan业务网配置。
+- 显控节点`172.0.0.1`作为inventory中的`display`角色由Ansible管理。`deploy.sh`和`update_software.sh`会同时更新控制器及显控节点上的`tlcache`、`tltrigger`；显控节点不参与Netplan业务网配置。
 - 显控节点的sudo密码与服务器不同时，`deploy.sh`和`update_software.sh`会先单独提示输入显控节点密码，再由Ansible提示输入其他服务器的密码。密码只保存在当前脚本进程的环境变量中，不写入inventory或命令行。无人值守执行前可自行设置`TIANLAI_DISPLAY_BECOME_PASSWORD`。
 - 如果目标上安装的 ixcap 是共享库，确保运行时动态链接器可找到该库。脚本只检查文件存在，不负责驱动、权限或网卡初始化。
 
@@ -44,7 +44,7 @@ tianlai_disabled_cache_nodes: [tianlaistore5, tianlaistore9]
 
 控制器节点清单和落盘端等待列表都会排除这些主机，并自动启用部分节点模式。至少保留一个缓存节点，名称必须属于`cache_nodes`且不能重复。此模式生成的数据不完整，不得作为288或384路完整结果；恢复生产前必须清空该列表并重新部署存储服务器上的控制器和落盘服务。Ansible仍会尝试部署离线主机，现场可配合`--limit`只更新在线节点及存储服务器。
 
-部署会读取接收PCI设备和`ens2f0`的NUMA节点。每个NUMA默认预留第一个物理核用于后台任务，随后在发送网卡NUMA节点为两个lane分配两个独立物理核，再为接收线程分配不重复的NUMA本地物理核。最终`cpuIdN`和`sendCpuId0/1`写入`server.yaml`；NUMA未知、物理核重复或数量不足时部署停止。后台预留数量由`tianlai_receive_reserved_cores_per_numa`配置。
+部署会读取接收PCI设备和发送网口的NUMA节点。每个NUMA默认预留第一个物理核用于后台任务，随后在发送网卡NUMA节点为两个lane分配两个独立物理核，再为接收线程分配不重复的NUMA本地物理核。最终`cpuIdN`和`sendCpuId0/1`写入`server.yaml`；NUMA未知、物理核重复或数量不足时部署停止。后台预留数量由`tianlai_receive_reserved_cores_per_numa`配置。
 
 首次完整部署完成后，可只更新项目源代码和程序，不修改Netplan、缓存节点YAML、采集任务ID或系统软件包；存储端`storage.yaml`会随落盘程序同步，确保通知地址、监听端口和节点列表保持一致。为保证任意节点启停功能可直接升级，该流程会安装或更新独立的`tianlai-cache-manager.service`单元：
 
@@ -97,7 +97,7 @@ ansible-playbook -i inventory.yml inspect_nics.yml
 | `pci_network_devices` | PCI 网络设备的地址、厂商和设备编号、驱动、NUMA 节点及其系统接口；没有系统接口的设备也会列出。 |
 | `warnings` | 无法读取 IP 或系统设备信息时的提示。 |
 
-现场确认物理接线后，默认由`tianlai_receive_devices: auto`发现接收PCI地址；这些地址不是`ens2f0`一类Linux网口名。现场结构中缓存1～3为5张双口万兆卡、缓存4～14为3张，端口5/6所在卡用于发送；程序通过`ens2f0`的PCI插槽排除整张发送卡。缓存1～3采用8口固定顺序，缓存4～11采用4口固定顺序，缓存12～14暂按PCI地址排序。缓存节点发送口固定为`ens2f0`；server ID 0～13自动映射为`192.168.210.100～113/24`。存储服务器固定使用`enp152s0f0np0`和`192.168.210.250/24`；`inventory.yml`中的`tianlai_storage_ip`必须为有效IPv4地址，即使使用`--limit`，部署也会在写入网络配置前检查该地址。单独执行`inspect_nics.yml`只盘点、不修改；完整执行`site.yml`或`deploy.sh`会先强制停止缓存服务并把接收PCI设备恢复到ixgbe，再生成三类独立配置：`/etc/netplan/98-tianlai-receive.yaml`管理接收PCI对应的Linux网口，设置MTU 9000并启用混杂模式；缓存节点的`/etc/netplan/99-tianlai-send.yaml`管理`ens2f0`，存储服务器的`/etc/netplan/99-tianlai-storage.yaml`管理`enp152s0f0np0`。混杂模式由网络部署命令设置，并由NetworkManager dispatcher在接收网卡重新出现时恢复，不在缓存程序中设置。每个受管接口都显式使用NetworkManager渲染器。两个数据口均使用静态IPv4地址、MTU 9000且不添加默认路由；部署流程不配置或检查IPv6，也不检查其他接口上的`169.254.0.0/16`地址。部署会把现有Netplan YAML文件权限统一收紧为`0600`。配置先经过`netplan generate`，再由`netplan apply`生效，重启后仍然有效。其他1 GbE、回环、虚拟接口和速率未知接口不会修改。
+现场确认物理接线后，默认由`tianlai_receive_devices: auto`发现接收PCI地址；这些地址不是`ens2f0`一类Linux网口名。现场结构中缓存1～3为5张双口万兆卡、缓存4～14为3张，端口5/6所在卡用于发送；程序通过发送网口的PCI插槽排除整张发送卡。缓存1～3采用8口固定顺序，缓存4～11采用4口固定顺序，缓存12～14暂按PCI地址排序。缓存节点发送口默认是`ens2f0`，`tianlaistore2`使用`eth0`；server ID 0～13自动映射为`192.168.210.100～113/24`。存储服务器固定使用`enp152s0f0np0`和`192.168.210.250/24`；`inventory.yml`中的`tianlai_storage_ip`必须为有效IPv4地址，即使使用`--limit`，部署也会在写入网络配置前检查该地址。单独执行`inspect_nics.yml`只盘点、不修改；完整执行`site.yml`或`deploy.sh`会先强制停止缓存服务并把接收PCI设备恢复到ixgbe，再生成三类独立配置：`/etc/netplan/98-tianlai-receive.yaml`管理接收PCI对应的Linux网口，设置MTU 9000并启用混杂模式；缓存节点的`/etc/netplan/99-tianlai-send.yaml`管理配置的发送口，存储服务器的`/etc/netplan/99-tianlai-storage.yaml`管理`enp152s0f0np0`。混杂模式由网络部署命令设置，并由NetworkManager dispatcher在接收网卡重新出现时恢复，不在缓存程序中设置。每个受管接口都显式使用NetworkManager渲染器。两个数据口均使用静态IPv4地址、MTU 9000且不添加默认路由；部署流程不配置或检查IPv6，也不检查其他接口上的`169.254.0.0/16`地址。部署会把现有Netplan YAML文件权限统一收紧为`0600`。配置先经过`netplan generate`，再由`netplan apply`生效，重启后仍然有效。其他1 GbE、回环、虚拟接口和速率未知接口不会修改。
 
 交换机对应端口和链路中间设备也必须支持 MTU 9000，否则大包可能被丢弃。部署后可核对：
 
@@ -167,3 +167,5 @@ tlcache start all
 分别在对应机器执行上述命令，并按[部署与联调手册](../../DEPLOYMENT_GUIDE.md)检查 14 台收包、计数同步、触发、落盘、缺包、通知和真实吞吐。服务启动不等于缓存已 READY，也不表示真实设备验收通过。
 
 每节点不做应用层限速，两个逻辑lane共享一个物理网口。存储服务为14台节点生成28个监听端点：lane 0使用20000～20013，lane 1使用20100～20113。每个端点线程同时负责协议和写盘，默认使用2个ZeroMQ I/O线程，应用可见线程数约32个，libzmq可能另有内部管理线程。修改端口基数时应同时更新节点与存储服务。
+
+已有部署应同步修改正在使用的 inventory，把显控 SSH 地址改为 `172.0.0.1`，把 `tianlaistore2` 的 `tianlai_send_interface` 改为 `eth0`。发送口变更需重新部署对应节点的网络及缓存配置，并更新控制器。

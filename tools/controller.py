@@ -274,7 +274,7 @@ class Controller:
             self.all_nodes.sort(key=lambda node: node['server_id'])
         self.admin_sources = (set(admin_sources) |
                               {node['host'] for node in self.all_nodes} |
-                              {'172.0.0.61', '172.0.0.142'})
+                              {'172.0.0.1', '172.0.0.142'})
         self.allow_partial = allow_partial
         if not allow_partial and {n['server_id'] for n in self.nodes} != set(range(14)):
             raise ValueError('production requires all 14 nodes; use allow_partial only for testing')

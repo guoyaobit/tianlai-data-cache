@@ -131,7 +131,7 @@ tlcache restart 2,5-7
 `tlcache`可在存储服务器、任意缓存节点或显控节点执行状态查询，先显示存储服务状态，再显示缓存节点状态。`UPTIME`显示缓存进程本次启动后的运行时间；`RX_PORTS`显示活跃口数/总口数，`NO_DATA_PORTS`列出无数据端口。`LOSS_PORTS`中的`3:6`表示端口3累计缺6包。`tlcache period`列出各节点的周期范围和共同的已定稿范围；可否触发仍应以`tltrigger`的状态为准。详细状态仍保留在`tlcache --json`中供排障。管理查询端口先于大内存分配启动，因此准备内存期间也能查询，但不会接受触发。
 状态查询会并行读取缓存运行数据和systemd服务状态，并对直接查询快速重试一次，通常在1秒内完成。`STOPPED`表示缓存服务未启动，`STARTING`表示服务正在启动或控制端口尚未就绪，`NO_REPLY`表示运行服务连续未返回完整响应，只有连接或网络不可达时才显示`OFFLINE`。
 
-部署会为每个接收线程分配一个网卡NUMA本地物理核，并在`ens2f0`所在NUMA节点为两个存储lane各分配一个独立发送核。生成的`server.yaml`使用`cpuIdN`和`sendCpuId0/1`记录分配；任何重复或CPU不足都会阻止服务启动或部署继续。
+部署会为每个接收线程分配一个网卡NUMA本地物理核，并在发送网口所在NUMA节点为两个存储lane各分配一个独立发送核。生成的`server.yaml`使用`cpuIdN`和`sendCpuId0/1`记录分配；任何重复或CPU不足都会阻止服务启动或部署继续。
 
 多节点服务启停可在存储服务器、任意缓存节点或显控节点执行。目标支持`all`、逗号和范围；命令经142控制器并行调用各缓存节点上独立运行的root管理服务，不在运行时调用Ansible、SSH或sudo。管理服务只接受142控制器地址，控制器只接受存储节点、缓存节点和显控节点发起的启停命令。停止或重启会先拒绝涉及未完成事件的操作并要求一次确认；自动化可加`--yes`，只有人工确认可以丢弃活动事件时才加`--force`：
 
@@ -142,7 +142,7 @@ tlcache restart 2,5-7
 tlcache stop all --yes
 ```
 
-显控节点`172.0.0.61`也可查询全部节点。它在inventory中属于`display`组，由`deploy.sh`统一安装`tlcache`、`tltrigger`和节点清单，并由`update_software.sh`一并更新；部署不会修改显控节点网卡配置。
+显控节点`172.0.0.1`也可查询全部节点。它在inventory中属于`display`组，由`deploy.sh`统一安装`tlcache`、`tltrigger`和节点清单，并由`update_software.sh`一并更新；部署不会修改显控节点网卡配置。
 
 显控节点使用不同的sudo密码。运行统一部署或更新脚本时，先输入`tianlaiview`的sudo密码，再在Ansible提示中输入其他服务器的sudo密码；两种密码均不写入仓库。
 
@@ -177,7 +177,7 @@ tltrigger 20261112-012345-abc123
 
 命令中断后执行`tltrigger wait`会自动找到当前未完成事件并继续等待，无需填写事件编号；当前无活动事件时返回`NO_ACTIVE_EVENT`。
 
-`tltrigger`由Ansible安装到控制器/存储节点`172.0.0.142`和显控节点`172.0.0.61`的`/usr/local/bin`。运行全量部署或软件更新后即可直接使用，不需要再执行独立分发脚本。消色散后端使用说明见[用户对接文档](PROTOCOL.md)。
+`tltrigger`由Ansible安装到控制器/存储节点`172.0.0.142`和显控节点`172.0.0.1`的`/usr/local/bin`。运行全量部署或软件更新后即可直接使用，不需要再执行独立分发脚本。消色散后端使用说明见[用户对接文档](PROTOCOL.md)。
 
 常见状态：`PREPARING`正在保护、`PREPARED`表示全体已保护、`STORING`正在双lane回传、`STORED`表示全体已持久化、`RELEASING`正在统一释放、`COMPLETED`表示全部完成。检查`missing_by_server`以及每台节点的`lane-0.json`和`lane-1.json`。
 

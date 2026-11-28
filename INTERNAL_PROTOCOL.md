@@ -48,7 +48,7 @@
   "lane": 0,
   "channel_count": 288,
   "server_mask": 15,
-  "result_address": "172.0.0.61",
+  "result_address": "172.0.0.1",
   "result_port": 19001,
   "port_count": 4,
   "ports": [0, 2],

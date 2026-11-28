@@ -47,8 +47,8 @@ assert "tianlai_acquisition_id" not in inventory_ini
 assert 'tianlai_controller_ip: "172.0.0.142"' in inventory_yml
 assert 'tianlai_backend_ip:' not in inventory_yml
 assert 'tianlai_result_bind_ip: "0.0.0.0"' in inventory_yml
-assert 'tianlaiview:' in inventory_yml and 'ansible_host: "172.0.0.61"' in inventory_yml
-assert '[display]' in inventory_ini and 'tianlaiview ansible_host=172.0.0.61' in inventory_ini
+assert 'tianlaiview:' in inventory_yml and 'ansible_host: "172.0.0.1"' in inventory_yml
+assert '[display]' in inventory_ini and 'tianlaiview ansible_host=172.0.0.1' in inventory_ini
 assert "TIANLAI_DISPLAY_BECOME_PASSWORD" in display_vars
 assert "ansible_become_password" in display_vars
 assert "BECOME password for tianlaiview" in deploy_script

@@ -257,7 +257,7 @@
   register: cache_send_interface
   when: "'cache_nodes' in group_names"
 
-- name: Require ens2f0 on every cache node
+- name: Require the configured transmit interface on every cache node
   ansible.builtin.assert:
     that: cache_send_interface.stat.exists
     fail_msg: "Required cache data interface {{ tianlai_send_interface }} does not exist"
