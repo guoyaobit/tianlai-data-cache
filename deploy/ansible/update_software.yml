@@ -1,4 +1,29 @@
 ---
+- name: Update cache status and trigger clients
+  hosts: "cache_nodes:storage:controller:display"
+  gather_facts: false
+  become: true
+  strategy: free
+  tags: [clients]
+  tasks:
+    - name: Copy the updated tlcache program
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/cache_status.py"
+        dest: "{{ tianlai_root }}/tools/cache_status.py"
+        mode: '0755'
+    - name: Update the installed trigger script
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/trigger.py"
+        dest: "{{ tianlai_root }}/tools/trigger.py"
+        mode: '0755'
+      when: group_names | intersect(['storage', 'controller', 'display']) | length > 0
+    - name: Update tltrigger on storage, controller and display nodes
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../tools/trigger.py"
+        dest: /usr/local/bin/tltrigger
+        mode: '0755'
+      when: group_names | intersect(['storage', 'controller', 'display']) | length > 0
+
 - name: Update storage receiver program
   hosts: storage
   gather_facts: false
@@ -140,7 +165,7 @@
         src: "{{ playbook_dir }}/../../tools/{{ item }}"
         dest: "{{ tianlai_root }}/tools/{{ item }}"
         mode: '0755'
-      loop: [cache_status.py, cache_manager.py, durable_json.py, tcp_json.py]
+      loop: [cache_manager.py, durable_json.py, tcp_json.py]
     - name: Restart cache service manager with updated code
       ansible.builtin.command:
         argv: [systemctl, try-restart, tianlai-cache-manager.service]
@@ -210,12 +235,12 @@
           ansible.builtin.copy:
             src: "{{ playbook_dir }}/../../tools/{{ item }}"
             dest: "{{ controller_update_temp.path }}/{{ item }}"
-            mode: "{{ '0755' if item in ['cache_status.py', 'trigger.py'] else '0644' }}"
-          loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py, trigger.py]
+            mode: '0644'
+          loop: [controller.py, durable_json.py, tcp_json.py]
         - name: Check controller Python syntax
           ansible.builtin.command:
             argv: [/usr/bin/python3, -m, py_compile, "{{ controller_update_temp.path }}/{{ item }}"]
-          loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py, trigger.py]
+          loop: [controller.py, durable_json.py, tcp_json.py]
           changed_when: false
         - name: Read controller service state
           ansible.builtin.service_facts:
@@ -235,8 +260,8 @@
                 remote_src: true
                 src: "{{ controller_update_temp.path }}/{{ item }}"
                 dest: "{{ tianlai_root }}/tools/{{ item }}"
-                mode: "{{ '0755' if item in ['cache_status.py', 'trigger.py'] else '0644' }}"
-              loop: [controller.py, durable_json.py, tcp_json.py, cache_status.py, trigger.py]
+                mode: '0644'
+              loop: [controller.py, durable_json.py, tcp_json.py]
           always:
             - name: Restore running controller
               ansible.builtin.systemd:
@@ -258,12 +283,6 @@
         src: "{{ playbook_dir }}/../../DEDISPERSION_BACKEND_GUIDE.md"
         dest: "{{ tianlai_root }}/docs/DEDISPERSION_BACKEND_GUIDE.md"
         mode: '0640'
-    - name: Update tltrigger command
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../tools/trigger.py"
-        dest: /usr/local/bin/tltrigger
-        mode: '0755'
-
 - name: Update display-node management clients
   hosts: display
   gather_facts: false
@@ -277,12 +296,6 @@
       ansible.builtin.assert:
         that: display_deployment.stat.exists
         fail_msg: Run deploy.sh once before using update_software.sh.
-    - name: Update display management tools
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../tools/{{ item }}"
-        dest: "{{ tianlai_root }}/tools/{{ item }}"
-        mode: '0755'
-      loop: [cache_status.py, trigger.py]
     - name: Create display documentation directory
       ansible.builtin.file:
         path: "{{ tianlai_root }}/docs"
@@ -293,8 +306,3 @@
         src: "{{ playbook_dir }}/../../DEDISPERSION_BACKEND_GUIDE.md"
         dest: "{{ tianlai_root }}/docs/DEDISPERSION_BACKEND_GUIDE.md"
         mode: '0640'
-    - name: Update tltrigger command
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../tools/trigger.py"
-        dest: /usr/local/bin/tltrigger
-        mode: '0755'

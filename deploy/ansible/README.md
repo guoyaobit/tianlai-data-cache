@@ -50,6 +50,7 @@ tianlai_disabled_cache_nodes: [tianlaistore5, tianlaistore9]
 
 ```bash
 bash update_software.sh
+bash update_software.sh --tags clients --limit tianlairaid  # Update only the command-line clients
 ```
 
 完整部署默认关闭各节点的 APT 定时刷新和无人值守升级，并停止和禁用已安装的 `apt-daily.timer` 和 `apt-daily-upgrade.timer`。手动运行 APT 或 `update_software.sh` 仍可更新。若要由现场自行管理自动更新，在 inventory 中设 `tianlai_disable_apt_auto_updates: false`（INI 写为 `tianlai_disable_apt_auto_updates=false`）。若此前已应用禁用配置，还需移除服务器上的 `/etc/apt/apt.conf.d/99-tianlai-disable-automatic-updates`，再按现场策略恢复定时器。
