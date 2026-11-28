@@ -27,7 +27,7 @@
 ansible-playbook -i inventory.yml --ask-become-pass configure_cache_kernel.yml --limit tianlaistore3
 ```
 
-该命令选择已安装且具备内核和 initrd 文件的最新 5.15.x 启动项。服务器需在维护窗口重启，然后用 `uname -r` 确认版本。完整部署也会在修改网络前检查运行中的内核。现场使用其他已验证的内核系列时，可在清单覆盖 `tianlai_cache_kernel_series`。
+若 Ubuntu 22.04 缓存节点缺少可用的 5.15 启动项，该命令先通过 APT 安装 `linux-generic`，再检查 GRUB 菜单、内核及 initrd 并设置默认项。原有内核保留。请在维护窗口重启，用 `uname -r` 确认版本。完整部署会在修改网络前检查运行中的内核。其他发行版或内核系列须先自行安装对应内核，可在清单覆盖 `tianlai_cache_kernel_series`。
 
 1. 确认 0～13 号缓存服务器的接收口、PCI 地址、内存、管理网和专用数据发送口；确认存储服务器的管理网地址、高速数据网地址及落盘目录。控制器与落盘服务部署在这台存储服务器上。
 2. 确认中心站和远端的积分周期计数起点一致。前端计数复位、重启或回绕时，停止旧任务并重启缓存重新预热；后续事件继续使用全局唯一的新`event_id`。

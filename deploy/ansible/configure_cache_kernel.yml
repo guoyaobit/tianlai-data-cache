@@ -3,14 +3,46 @@
   hosts: cache_nodes
   gather_facts: false
   become: true
+  serial: 1
   tasks:
     - name: Find the newest installed kernel in the configured GRUB submenu
+      ansible.builtin.script:
+        cmd: "files/select_grub_kernel.py {{ tianlai_cache_kernel_series | quote }}"
+        executable: /usr/bin/python3
+      register: tianlai_grub_probe
+      failed_when: tianlai_grub_probe.rc not in [0, 2]
+      changed_when: false
+      check_mode: false
+
+    - name: Install the Ubuntu 22.04 generic 5.15 kernel when needed
+      when: tianlai_grub_probe.rc == 2
+      block:
+        - name: Identify the target distribution
+          ansible.builtin.setup:
+            gather_subset: ['!all', '!min', distribution]
+        - name: Require Ubuntu 22.04 for automatic 5.15 installation
+          ansible.builtin.assert:
+            that:
+              - ansible_facts.distribution == 'Ubuntu'
+              - ansible_facts.distribution_release == 'jammy'
+              - tianlai_cache_kernel_series | string == '5.15'
+            fail_msg: Automatic kernel installation is supported only for Linux 5.15 on Ubuntu 22.04.
+        - name: Install the generic kernel image and headers
+          ansible.builtin.apt:
+            name: linux-generic
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+            fail_on_autoremove: true
+
+    - name: Select the available GRUB entry after installation
       ansible.builtin.script:
         cmd: "files/select_grub_kernel.py {{ tianlai_cache_kernel_series | quote }}"
         executable: /usr/bin/python3
       register: tianlai_grub_kernel
       changed_when: false
       check_mode: false
+      when: not ansible_check_mode or tianlai_grub_probe.rc == 0
 
     - name: Set the persistent GRUB default
       ansible.builtin.copy:
@@ -21,6 +53,7 @@
         content: |
           GRUB_DEFAULT='{{ tianlai_grub_kernel.stdout | trim }}'
       register: tianlai_grub_default
+      when: not (tianlai_grub_kernel.skipped | default(false))
 
     - name: Regenerate the GRUB boot menu
       ansible.builtin.command:

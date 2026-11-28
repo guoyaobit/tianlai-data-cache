@@ -23,7 +23,8 @@ def main(series):
                 and Path(f"/boot/initrd.img-{release}").is_file()):
             candidates[release] = f"{submenu}>{entry}"
     if not candidates:
-        raise ValueError(f"no installed Linux {series}.x GRUB entry with kernel and initrd")
+        print(f"no installed Linux {series}.x GRUB entry with kernel and initrd", file=sys.stderr)
+        sys.exit(2)
     ordered = subprocess.run(
         ["sort", "-V"], input="\n".join(candidates) + "\n",
         text=True, capture_output=True, check=True).stdout.splitlines()
