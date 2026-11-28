@@ -92,6 +92,25 @@
       loop: "{{ (groups['controller'] + groups['storage'] + groups['display']) | unique }}"
       run_once: true
 
+- name: Verify the cache kernel before changing network configuration
+  hosts: cache_nodes
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Read the running kernel release
+      ansible.builtin.command:
+        argv: [uname, -r]
+      register: tianlai_running_kernel
+      changed_when: false
+      check_mode: false
+    - name: Require the configured cache kernel series
+      ansible.builtin.assert:
+        that:
+          - tianlai_running_kernel.stdout.startswith((tianlai_cache_kernel_series | string) ~ '.')
+        fail_msg: >-
+          {{ inventory_hostname }} is running {{ tianlai_running_kernel.stdout }}.
+          Boot Linux {{ tianlai_cache_kernel_series }}.x before running the full deployment.
+
 - name: Configure cache data IPs and jumbo MTU with Netplan
   hosts: "cache_nodes:storage:controller"
   gather_facts: false
@@ -99,6 +118,47 @@
   tasks:
     - name: Apply Netplan network configuration
       ansible.builtin.include_tasks: tasks/network_config.yml
+
+- name: Disable scheduled APT updates by default
+  hosts: "cache_nodes:storage:controller:display"
+  gather_facts: false
+  become: true
+  strategy: free
+  tasks:
+    - name: Check for APT configuration
+      ansible.builtin.stat:
+        path: /etc/apt/apt.conf.d
+      register: tianlai_apt_config
+      when: tianlai_disable_apt_auto_updates | bool
+    - name: Disable periodic package refresh and unattended upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/99-tianlai-disable-automatic-updates
+        mode: '0644'
+        content: |
+          APT::Periodic::Enable "0";
+          APT::Periodic::Update-Package-Lists "0";
+          APT::Periodic::Unattended-Upgrade "0";
+      when:
+        - tianlai_disable_apt_auto_updates | bool
+        - tianlai_apt_config.stat.isdir | default(false)
+    - name: Find installed APT timers
+      ansible.builtin.command:
+        argv: [systemctl, list-unit-files, --no-legend, --no-pager, apt-daily.timer, apt-daily-upgrade.timer]
+      register: tianlai_apt_timers
+      changed_when: false
+      check_mode: false
+      when:
+        - tianlai_disable_apt_auto_updates | bool
+        - tianlai_apt_config.stat.isdir | default(false)
+    - name: Stop and disable installed APT timers
+      ansible.builtin.systemd:
+        name: "{{ item.split()[0] }}"
+        enabled: false
+        state: stopped
+      loop: "{{ tianlai_apt_timers.stdout_lines | default([]) }}"
+      when:
+        - item.split() | length > 0
+        - item.split()[0] in ['apt-daily.timer', 'apt-daily-upgrade.timer']
 
 - name: Install network diagnostics on all nodes
   hosts: "cache_nodes:storage:controller:display"

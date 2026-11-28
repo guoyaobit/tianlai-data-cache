@@ -52,6 +52,8 @@ tianlai_disabled_cache_nodes: [tianlaistore5, tianlaistore9]
 bash update_software.sh
 ```
 
+完整部署默认关闭各节点的 APT 定时刷新和无人值守升级，并停止和禁用已安装的 `apt-daily.timer` 和 `apt-daily-upgrade.timer`。手动运行 APT 或 `update_software.sh` 仍可更新。若要由现场自行管理自动更新，在 inventory 中设 `tianlai_disable_apt_auto_updates: false`（INI 写为 `tianlai_disable_apt_auto_updates=false`）。若此前已应用禁用配置，还需移除服务器上的 `/etc/apt/apt.conf.d/99-tianlai-disable-automatic-updates`，再按现场策略恢复定时器。
+
 部署默认最多并行处理20台主机；缓存节点各自推进，不等待较慢节点完成同一步骤。每台目标主机默认使用4个编译线程，可在`group_vars/all/settings.yml`中将`tianlai_build_jobs`调整为1～16。现场直接运行`bash deploy.sh`或`bash update_software.sh`即可，不需要设置并发环境变量。
 
 该命令更新并编译缓存程序和C++落盘程序，同时更新Python控制器，以及控制器/显控节点上的`tlcache`、`tltrigger`。存储和控制器保持更新前的运行状态；更新沿用服务器上的应用配置、网络配置、systemd 单元、开机启动设置和已有的 `tlcache` 命令入口。缓存服务在替换期间停止，需要恢复采集时再执行 `tlcache start`。先更新单台缓存服务器可执行 `bash update_software.sh --limit tianlaistore1`；只更新显控节点可使用`--limit display`，只更新存储/控制器可使用 `--limit storage` 或 `--limit controller`。使用INI清单时执行 `TIANLAI_INVENTORY=inventory.ini bash update_software.sh`。

@@ -2,6 +2,10 @@
 # Replace every CHANGE_ME value before deployment.
 # SSH account shared by all target servers.
 ansible_user: ubuntu
+# Disable scheduled APT updates on Debian-family deployment targets.
+tianlai_disable_apt_auto_updates: true
+# Require this running kernel series on cache nodes during full deployment.
+tianlai_cache_kernel_series: '5.15'
 # Install root on target servers.
 tianlai_root: /opt/tianlai-store
 # Persistent rotating cache log.

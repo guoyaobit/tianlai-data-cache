@@ -1,0 +1,28 @@
+---
+- name: Select the default boot kernel on cache nodes
+  hosts: cache_nodes
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Find the newest installed kernel in the configured GRUB submenu
+      ansible.builtin.script:
+        cmd: "files/select_grub_kernel.py {{ tianlai_cache_kernel_series | quote }}"
+        executable: /usr/bin/python3
+      register: tianlai_grub_kernel
+      changed_when: false
+      check_mode: false
+
+    - name: Set the persistent GRUB default
+      ansible.builtin.copy:
+        dest: /etc/default/grub.d/99-tianlai-kernel.cfg
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          GRUB_DEFAULT='{{ tianlai_grub_kernel.stdout | trim }}'
+      register: tianlai_grub_default
+
+    - name: Regenerate the GRUB boot menu
+      ansible.builtin.command:
+        argv: [update-grub]
+      changed_when: tianlai_grub_default.changed
